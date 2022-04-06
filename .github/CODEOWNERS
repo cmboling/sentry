@@ -253,6 +253,7 @@ build-utils/        @getsentry/owners-js-build
 
 ### Growth ###
 
+/src/sentry/notifications/notifications/base.py                             @getsentry/growth
 /src/sentry/notifications/organization_request/abstract_invite_request.py   @getsentry/growth
 /src/sentry/notifications/organization_request/invite_request.py            @getsentry/growth
 /src/sentry/notifications/organization_request/join_request.py              @getsentry/growth
