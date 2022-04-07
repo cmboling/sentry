@@ -1,7 +1,27 @@
+from __future__ import annotations
+
+from typing import Any, Iterable, Mapping
+
+from sentry.models import Team, User
 from sentry.notifications.notifications.base import BaseNotification
 
 
 class DummyNotification(BaseNotification):
+    metrics_key = "dummy"
+    reference = None
+
+    def get_filename(self) -> str:
+        return ""
+
+    def get_subject(self, context: Mapping[str, Any] | None = None) -> str:
+        pass
+
+    def get_type(self) -> str:
+        return ""
+
+    def determine_recipients(self) -> Iterable[Team | User]:
+        return []
+
     def build_attachment_title(self, *args):
         return "My Title"
 
