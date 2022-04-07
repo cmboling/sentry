@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 class DigestNotification(ProjectNotification):
     message_builder = "DigestNotificationMessageBuilder"
-    referrer_base = "digest"
+    metrics_key = "digest"
 
     def __init__(
         self,
@@ -55,9 +55,6 @@ class DigestNotification(ProjectNotification):
 
     def get_filename(self) -> str:
         return "digests/body"
-
-    def get_category(self) -> str:
-        return "digest_email"
 
     def get_type(self) -> str:
         return "notify.digest"

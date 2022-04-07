@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 class AutoSyncNotification(ProjectNotification):
     notification_setting_type = NotificationSettingTypes.DEPLOY
+    metrics_key = "auto_sync"
 
     def determine_recipients(self) -> Iterable[Team | User]:
         return self.organization.get_owners()  # type: ignore
@@ -52,6 +53,3 @@ class AutoSyncNotification(ProjectNotification):
 
     def get_filename(self) -> str:
         return "codeowners-auto-sync-failure"
-
-    def get_category(self) -> str:
-        return "auto-sync"

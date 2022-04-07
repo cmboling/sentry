@@ -12,7 +12,7 @@ from .base import ActivityNotification
 
 
 class NewProcessingIssuesActivityNotification(ActivityNotification):
-    referrer_base = "new-processing-issues-activity"
+    metrics_key = "new_processing_issues_activity"
 
     def __init__(self, activity: Activity) -> None:
         super().__init__(activity)
@@ -54,9 +54,6 @@ class NewProcessingIssuesActivityNotification(ActivityNotification):
 
     def get_filename(self) -> str:
         return "activity/new_processing_issues"
-
-    def get_category(self) -> str:
-        return "new_processing_issues_activity_email"
 
     def get_notification_title(self) -> str:
         project_url = absolute_uri(

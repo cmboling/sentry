@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class UserReportNotification(ProjectNotification):
-    referrer_base = "user-report"
+    metrics_key = "user_report"
 
     def __init__(self, project: Project, report: Mapping[str, Any]) -> None:
         super().__init__(project)
@@ -39,9 +39,6 @@ class UserReportNotification(ProjectNotification):
 
     def get_filename(self) -> str:
         return "activity/new-user-feedback"
-
-    def get_category(self) -> str:
-        return "user_report_email"
 
     def get_type(self) -> str:
         return "notify.user-report"

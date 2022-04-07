@@ -38,7 +38,7 @@ def get_url(organization: Organization, provider_type: str, provider_slug: str) 
 class IntegrationRequestNotification(OrganizationRequestNotification):
     # TODO: switch to a strategy based on the integration write scope
     RoleBasedRecipientStrategyClass = OwnerRecipientStrategy
-    referrer_base = "integration-request"
+    metrics_key = "integration_request"
 
     def __init__(
         self,
@@ -70,9 +70,6 @@ class IntegrationRequestNotification(OrganizationRequestNotification):
 
     def get_filename(self) -> str:
         return "requests/organization-integration"
-
-    def get_category(self) -> str:
-        return "integration_request"
 
     def get_subject(self, context: Mapping[str, Any] | None = None) -> str:
         return f"Your team member requested the {self.provider_name} integration on Sentry"

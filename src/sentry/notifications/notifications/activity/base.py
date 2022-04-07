@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 class ActivityNotification(ProjectNotification, abc.ABC):
     notification_setting_type = NotificationSettingTypes.WORKFLOW
-    metrics_key = "activity"
 
     def __init__(self, activity: Activity) -> None:
         super().__init__(activity.project)

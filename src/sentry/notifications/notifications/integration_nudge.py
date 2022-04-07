@@ -42,7 +42,7 @@ MESSAGE_LIBRARY = [
 
 
 class IntegrationNudgeNotification(BaseNotification):
-    category = "integration_nudge"
+    metrics_key = "integration_nudge"
     filename = "integration-nudge"
     type = "integration.nudge"
 
@@ -97,9 +97,6 @@ class IntegrationNudgeNotification(BaseNotification):
         return ""
 
     def get_filename(self) -> str:
-        return ""
-
-    def get_category(self) -> str:
         return ""
 
     def get_type(self) -> str:

@@ -32,8 +32,8 @@ from .base import ActivityNotification
 
 
 class ReleaseActivityNotification(ActivityNotification):
-    referrer_base = "release-activity"
     notification_setting_type = NotificationSettingTypes.DEPLOY
+    metrics_key = "release_activity"
 
     def __init__(self, activity: Activity) -> None:
         super().__init__(activity)
@@ -142,9 +142,6 @@ class ReleaseActivityNotification(ActivityNotification):
 
     def get_filename(self) -> str:
         return "activity/release"
-
-    def get_category(self) -> str:
-        return "release_activity_email"
 
     def get_message_actions(self, recipient: Team | User) -> Sequence[MessageAction]:
         if self.release:
