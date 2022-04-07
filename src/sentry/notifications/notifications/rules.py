@@ -125,9 +125,6 @@ class AlertRuleNotification(ProjectNotification):
 
         return title_str
 
-    def get_type(self) -> str:
-        return "notify.error"
-
     def send(self) -> None:
         from sentry.notifications.notify import notify
 

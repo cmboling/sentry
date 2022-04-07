@@ -16,9 +16,6 @@ class DummyNotification(BaseNotification):
     def get_subject(self, context: Mapping[str, Any] | None = None) -> str:
         pass
 
-    def get_type(self) -> str:
-        return ""
-
     def determine_recipients(self) -> Iterable[Team | User]:
         return []
 

@@ -99,9 +99,6 @@ class IntegrationNudgeNotification(BaseNotification):
     def get_filename(self) -> str:
         return ""
 
-    def get_type(self) -> str:
-        return ""
-
     def build_notification_footer(self, recipient: Team | User) -> str:
         return ""
 

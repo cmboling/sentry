@@ -40,9 +40,6 @@ class UserReportNotification(ProjectNotification):
     def get_filename(self) -> str:
         return "activity/new-user-feedback"
 
-    def get_type(self) -> str:
-        return "notify.user-report"
-
     def get_subject(self, context: Mapping[str, Any] | None = None) -> str:
         # Explicitly typing to satisfy mypy.
         message = f"{self.group.qualified_short_id} - New Feedback from {self.report['name']}"

@@ -56,9 +56,6 @@ class DigestNotification(ProjectNotification):
     def get_filename(self) -> str:
         return "digests/body"
 
-    def get_type(self) -> str:
-        return "notify.digest"
-
     def get_unsubscribe_key(self) -> tuple[str, int, str | None] | None:
         return "project", self.project.id, "alert_digest"
 
