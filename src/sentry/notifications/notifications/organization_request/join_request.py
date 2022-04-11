@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 @register()
 class JoinRequestNotification(AbstractInviteRequestNotification):
     analytics_event = "join_request.sent"
-    metrics_key = "join-request"
+    metrics_key = "join_request"
 
     def get_filename(self) -> str:
         return "organization-join-request"

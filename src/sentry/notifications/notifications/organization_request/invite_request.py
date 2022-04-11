@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 @register()
 class InviteRequestNotification(AbstractInviteRequestNotification):
     analytics_event = "invite_request.sent"
-    metrics_key = "invite-request"
+    metrics_key = "invite_request"
 
     def get_filename(self) -> str:
         return "organization-invite-request"
