@@ -11,7 +11,7 @@ default_manager = AuditLogEventManager()
 
 # Render functions for AuditLogEvent objects take an AuditLogEntry and
 # return a string of the expected audit log message.
-# Use a lambda function in `default_amanger.add()` if only a single string
+# Use a lambda function in `default_manager.add()` if only a single string
 # with variables is necessary.
 
 
