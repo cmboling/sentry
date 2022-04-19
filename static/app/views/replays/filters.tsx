@@ -9,17 +9,15 @@ import space from 'sentry/styles/space';
 
 function ReplaysFilters() {
   return (
-    <StyledPageFilterBar>
+    <StyledPageFilterBar condensed>
       <ProjectPageFilter />
       <EnvironmentPageFilter />
-      <DatePageFilter />
+      <DatePageFilter alignDropdown="left" />
     </StyledPageFilterBar>
   );
 }
 
 const StyledPageFilterBar = styled(PageFilterBar)`
-  width: max-content;
-  max-width: 100%;
   margin-bottom: ${space(1)};
 `;
 
