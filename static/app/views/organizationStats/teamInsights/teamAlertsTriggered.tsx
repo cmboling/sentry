@@ -4,7 +4,7 @@ import styled from '@emotion/styled';
 import round from 'lodash/round';
 
 import AsyncComponent from 'sentry/components/asyncComponent';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import {BarChart} from 'sentry/components/charts/barChart';
 import {DateTimeObject} from 'sentry/components/charts/utils';
 import Link from 'sentry/components/links/link';
@@ -13,19 +13,18 @@ import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilte
 import PanelTable from 'sentry/components/panels/panelTable';
 import {IconArrow} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Project} from 'sentry/types';
 import {formatPercentage} from 'sentry/utils/formatters';
-import {Color} from 'sentry/utils/theme';
-import {IncidentRule} from 'sentry/views/alerts/incidentRules/types';
+import {ColorOrAlias} from 'sentry/utils/theme';
+import {MetricRule} from 'sentry/views/alerts/rules/metric/types';
 
 import {ProjectBadge, ProjectBadgeContainer} from './styles';
 import {barAxisLabel, convertDayValueObjectToSeries, sortSeriesByDay} from './utils';
 
 type AlertsTriggered = Record<string, number>;
 
-type AlertsTriggeredRule = IncidentRule & {
+type AlertsTriggeredRule = MetricRule & {
   totalThisWeek: number;
   weeklyAvg: number;
 };
@@ -103,7 +102,7 @@ class TeamAlertsTriggered extends AsyncComponent<Props, State> {
     }
 
     return (
-      <SubText color={diff <= 0 ? 'green300' : 'red300'}>
+      <SubText color={diff <= 0 ? 'successText' : 'errorText'}>
         {formatPercentage(Math.abs(diff / weeklyAvg), 0)}
         <PaddedIconArrow direction={diff <= 0 ? 'down' : 'up'} size="xs" />
       </SubText>
@@ -155,13 +154,13 @@ class TeamAlertsTriggered extends AsyncComponent<Props, State> {
             <ButtonsContainer>
               <Button
                 priority="primary"
-                size="small"
+                size="sm"
                 to={`/organizations/${organization.slug}/alerts/rules/`}
               >
                 {t('Create Alert')}
               </Button>
               <Button
-                size="small"
+                size="sm"
                 external
                 to="https://docs.sentry.io/product/alerts/create-alerts/"
               >
@@ -233,7 +232,7 @@ const StyledPanelTable = styled(PanelTable)`
 `;
 
 const AlertNameContainer = styled('div')`
-  ${overflowEllipsis}
+  ${p => p.theme.overflowEllipsis}
 `;
 
 const AlignRight = styled('div')`
@@ -245,7 +244,7 @@ const PaddedIconArrow = styled(IconArrow)`
   margin: 0 ${space(0.5)};
 `;
 
-const SubText = styled('div')<{color: Color}>`
+const SubText = styled('div')<{color: ColorOrAlias}>`
   color: ${p => p.theme[p.color]};
 `;
 

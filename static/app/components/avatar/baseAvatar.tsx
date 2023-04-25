@@ -1,11 +1,11 @@
-import * as React from 'react';
+import {Component} from 'react';
 import styled from '@emotion/styled';
 import classNames from 'classnames';
 import * as qs from 'query-string';
 
 import BackgroundAvatar from 'sentry/components/avatar/backgroundAvatar';
 import LetterAvatar from 'sentry/components/letterAvatar';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {Avatar} from 'sentry/types';
 
 import Gravatar from './gravatar';
@@ -24,7 +24,8 @@ const StyledBaseAvatar = styled('span')<{
 }>`
   flex-shrink: 0;
   border-radius: ${p => (p.round ? '50%' : '3px')};
-  border: ${p => (p.suggested ? `1px dashed ${p.theme.gray400}` : 'none')};
+  border: ${p => (p.suggested ? `2px solid ${p.theme.background}` : 'none')};
+  background-color: ${p => (p.suggested ? p.theme.background : 'none')};
 `;
 
 const defaultProps: DefaultProps = {
@@ -89,7 +90,7 @@ type BaseProps = DefaultProps & {
   /**
    * This is the size of the remote image to request.
    */
-  remoteImageSize?: typeof ALLOWED_SIZES[number];
+  remoteImageSize?: (typeof ALLOWED_SIZES)[number];
   size?: number;
   title?: string;
   /**
@@ -111,7 +112,7 @@ type State = {
   showBackupAvatar: boolean;
 };
 
-class BaseAvatar extends React.Component<Props, State> {
+class BaseAvatar extends Component<Props, State> {
   static defaultProps = defaultProps;
 
   constructor(props: Props) {
@@ -172,7 +173,6 @@ class BaseAvatar extends React.Component<Props, State> {
           round={round}
           remoteSize={DEFAULT_REMOTE_SIZE}
           suggested={suggested}
-          grayscale={suggested}
           {...eventProps}
         />
       );
@@ -185,7 +185,6 @@ class BaseAvatar extends React.Component<Props, State> {
           src={this.buildUploadUrl()}
           {...eventProps}
           suggested={suggested}
-          grayscale={suggested}
         />
       );
     }

@@ -1,12 +1,10 @@
-import * as React from 'react';
-
 import Feature from 'sentry/components/acl/feature';
 import FeatureDisabled from 'sentry/components/acl/featureDisabled';
 import {Hovercard} from 'sentry/components/hovercard';
 import {t} from 'sentry/locale';
 
 type Props = {
-  children: ({hasFeature: boolean}) => React.ReactNode;
+  children: (props: {hasFeature: boolean}) => React.ReactNode;
 };
 
 /**

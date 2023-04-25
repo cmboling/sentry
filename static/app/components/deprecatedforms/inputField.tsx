@@ -1,5 +1,3 @@
-import * as React from 'react';
-
 import FormField from 'sentry/components/deprecatedforms/formField';
 
 type InputFieldProps = FormField['props'] & {
@@ -14,6 +12,11 @@ type InputFieldProps = FormField['props'] & {
   step?: number;
 };
 
+// XXX: This is ONLY used in GenericField. If we can delete that this can go.
+
+/**
+ * @deprecated Do not use this
+ */
 class InputField<
   Props extends InputFieldProps = InputFieldProps,
   State extends FormField['state'] = FormField['state']

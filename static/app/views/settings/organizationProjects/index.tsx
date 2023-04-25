@@ -1,23 +1,23 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import {RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
 import {Location} from 'history';
 
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import Pagination from 'sentry/components/pagination';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
 import Placeholder from 'sentry/components/placeholder';
 import {IconAdd} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Project} from 'sentry/types';
 import {sortProjects} from 'sentry/utils';
 import {decodeScalar} from 'sentry/utils/queryString';
 import routeTitleGen from 'sentry/utils/routeTitle';
 import withOrganization from 'sentry/utils/withOrganization';
 import AsyncView from 'sentry/views/asyncView';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
 import ProjectListItem from 'sentry/views/settings/components/settingsProjectItem';
 
@@ -28,7 +28,7 @@ const ITEMS_PER_PAGE = 50;
 type Props = {
   location: Location;
   organization: Organization;
-} & RouteComponentProps<{orgId: string}, {}>;
+} & RouteComponentProps<{}, {}>;
 
 type ProjectStats = Record<string, Required<Project['stats']>>;
 
@@ -40,13 +40,12 @@ type State = AsyncView['state'] & {
 
 class OrganizationProjects extends AsyncView<Props, State> {
   getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
-    const {orgId} = this.props.params;
-    const {location} = this.props;
+    const {location, organization} = this.props;
     const query = decodeScalar(location.query.query);
     return [
       [
         'projectList',
-        `/organizations/${orgId}/projects/`,
+        `/organizations/${organization.slug}/projects/`,
         {
           query: {
             query,
@@ -56,7 +55,7 @@ class OrganizationProjects extends AsyncView<Props, State> {
       ],
       [
         'projectStats',
-        `/organizations/${orgId}/stats/`,
+        `/organizations/${organization.slug}/stats/`,
         {
           query: {
             since: new Date().getTime() / 1000 - 3600 * 24,
@@ -81,12 +80,12 @@ class OrganizationProjects extends AsyncView<Props, State> {
   renderBody(): React.ReactNode {
     const {projectList, projectListPageLinks, projectStats} = this.state;
     const {organization} = this.props;
-    const canCreateProjects = new Set(organization.access).has('project:admin');
+    const canCreateProjects = organization.access.includes('project:admin');
 
     const action = (
       <Button
         priority="primary"
-        size="small"
+        size="sm"
         disabled={!canCreateProjects}
         title={
           !canCreateProjects
@@ -101,7 +100,7 @@ class OrganizationProjects extends AsyncView<Props, State> {
     );
 
     return (
-      <React.Fragment>
+      <Fragment>
         <SettingsPageHeader title="Projects" action={action} />
         <SearchWrapper>
           {this.renderSearchInput({
@@ -143,7 +142,7 @@ class OrganizationProjects extends AsyncView<Props, State> {
         {projectListPageLinks && (
           <Pagination pageLinks={projectListPageLinks} {...this.props} />
         )}
-      </React.Fragment>
+      </Fragment>
     );
   }
 }

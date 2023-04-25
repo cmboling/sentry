@@ -1,29 +1,37 @@
-import * as React from 'react';
+import {cloneElement, Component} from 'react';
 import styled from '@emotion/styled';
-import {PlatformIcon} from 'platformicons';
 
+import GuideAnchor from 'sentry/components/assistant/guideAnchor';
+import {StacktraceFilenameQuery} from 'sentry/components/events/interfaces/crashContent/exception/useSourceMapDebug';
+import Panel from 'sentry/components/panels/panel';
 import {t} from 'sentry/locale';
 import {Frame, Organization, PlatformType} from 'sentry/types';
 import {Event} from 'sentry/types/event';
-import {StacktraceType} from 'sentry/types/stacktrace';
+import {StackTraceMechanism, StacktraceType} from 'sentry/types/stacktrace';
+import {defined} from 'sentry/utils';
 import withOrganization from 'sentry/utils/withOrganization';
 
-import Line from '../../frame/line';
+import DeprecatedLine from '../../frame/deprecatedLine';
 import {getImageRange, parseAddress, stackTracePlatformIcon} from '../../utils';
 
-const defaultProps = {
-  includeSystemFrames: true,
-  expandFirstFrame: true,
-};
+import StacktracePlatformIcon from './platformIcon';
 
-type DefaultProps = typeof defaultProps;
+type DefaultProps = {
+  expandFirstFrame: boolean;
+  includeSystemFrames: boolean;
+};
 
 type Props = {
   data: StacktraceType;
   event: Event;
   platform: PlatformType;
   className?: string;
+  debugFrames?: StacktraceFilenameQuery[];
+  hideIcon?: boolean;
   isHoverPreviewed?: boolean;
+  maxDepth?: number;
+  mechanism?: StackTraceMechanism | null;
+  meta?: Record<any, any>;
   newestFirst?: boolean;
   organization?: Organization;
 } & Partial<DefaultProps>;
@@ -33,7 +41,7 @@ type State = {
   showingAbsoluteAddresses: boolean;
 };
 
-class Content extends React.Component<Props, State> {
+class Content extends Component<Props, State> {
   static defaultProps: DefaultProps = {
     includeSystemFrames: true,
     expandFirstFrame: true,
@@ -135,6 +143,11 @@ class Content extends React.Component<Props, State> {
       platform,
       includeSystemFrames,
       isHoverPreviewed,
+      maxDepth,
+      meta,
+      debugFrames,
+      hideIcon,
+      mechanism,
     } = this.props;
 
     const {showingAbsoluteAddresses, showCompleteFunctionName} = this.state;
@@ -159,7 +172,7 @@ class Content extends React.Component<Props, State> {
       lastFrameIdx = (data.frames ?? []).length - 1;
     }
 
-    const frames: React.ReactElement[] = [];
+    let frames: React.ReactElement[] = [];
     let nRepeats = 0;
 
     const maxLengthOfAllRelativeAddresses = (data.frames ?? []).reduce(
@@ -206,7 +219,7 @@ class Content extends React.Component<Props, State> {
         const image = this.findImageForAddress(frame.instructionAddr, frame.addrMode);
 
         frames.push(
-          <Line
+          <DeprecatedLine
             key={frameIdx}
             event={event}
             data={frame}
@@ -227,7 +240,11 @@ class Content extends React.Component<Props, State> {
             onFunctionNameToggle={this.handleToggleFunctionName}
             showCompleteFunctionName={showCompleteFunctionName}
             isHoverPreviewed={isHoverPreviewed}
-            isFirst={newestFirst ? frameIdx === lastFrameIdx : frameIdx === 0}
+            isNewestFrame={frameIdx === lastFrameIdx}
+            frameMeta={meta?.frames?.[frameIdx]}
+            registersMeta={meta?.registers}
+            debugFrames={debugFrames}
+            mechanism={mechanism}
           />
         );
       }
@@ -243,9 +260,13 @@ class Content extends React.Component<Props, State> {
 
     if (frames.length > 0 && data.registers) {
       const lastFrame = frames.length - 1;
-      frames[lastFrame] = React.cloneElement(frames[lastFrame], {
+      frames[lastFrame] = cloneElement(frames[lastFrame], {
         registers: data.registers,
       });
+    }
+
+    if (defined(maxDepth)) {
+      frames = frames.slice(-maxDepth);
     }
 
     if (newestFirst) {
@@ -257,13 +278,10 @@ class Content extends React.Component<Props, State> {
 
     return (
       <Wrapper className={className} data-test-id="stack-trace-content">
-        <StyledPlatformIcon
-          platform={platformIcon}
-          size="20px"
-          style={{borderRadius: '3px 0 0 3px'}}
-          data-test-id={`platform-icon-${platformIcon}`}
-        />
-        <StyledList data-test-id="frames">{frames}</StyledList>
+        {!hideIcon && <StacktracePlatformIcon platform={platformIcon} />}
+        <GuideAnchor target="stack_trace">
+          <StyledList data-test-id="frames">{frames}</StyledList>
+        </GuideAnchor>
       </Wrapper>
     );
   }
@@ -271,14 +289,9 @@ class Content extends React.Component<Props, State> {
 
 export default withOrganization(Content);
 
-const Wrapper = styled('div')`
+const Wrapper = styled(Panel)`
   position: relative;
-`;
-
-const StyledPlatformIcon = styled(PlatformIcon)`
-  position: absolute;
-  top: -1px;
-  left: -20px;
+  border-top-left-radius: 0;
 `;
 
 const StyledList = styled('ul')`

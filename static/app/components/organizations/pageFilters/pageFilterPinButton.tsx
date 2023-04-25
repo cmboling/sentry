@@ -1,24 +1,30 @@
 import styled from '@emotion/styled';
 
 import {pinFilter} from 'sentry/actionCreators/pageFilters';
-import Button, {ButtonProps} from 'sentry/components/button';
+import {Button, ButtonProps} from 'sentry/components/button';
 import {IconLock} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
-import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-import {PinnedPageFilter} from 'sentry/types';
+import {Organization, PinnedPageFilter} from 'sentry/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import usePageFilters from 'sentry/utils/usePageFilters';
 
 type Props = {
   filter: PinnedPageFilter;
-  size: Extract<ButtonProps['size'], 'xsmall' | 'zero'>;
+  organization: Organization;
+  size: Extract<ButtonProps['size'], 'xs' | 'zero'>;
   className?: string;
 };
 
-function PageFilterPinButton({filter, size, className}: Props) {
-  const {pinnedFilters} = useLegacyStore(PageFiltersStore);
+function PageFilterPinButton({organization, filter, size, className}: Props) {
+  const {pinnedFilters} = usePageFilters();
   const pinned = pinnedFilters.has(filter);
 
   const onPin = () => {
+    trackAnalytics('page_filters.pin_click', {
+      organization,
+      filter,
+      pin: !pinned,
+    });
     pinFilter(filter, !pinned);
   };
 
@@ -32,20 +38,22 @@ function PageFilterPinButton({filter, size, className}: Props) {
       pinned={pinned}
       borderless={size === 'zero'}
       icon={<IconLock isSolid={pinned} size="xs" />}
-      title={t('Apply filter across pages')}
-    />
+      title={t("Once locked, Sentry will remember this filter's value across pages.")}
+      tooltipProps={{delay: 500}}
+    >
+      {pinned ? t('Locked') : t('Lock')}
+    </PinButton>
   );
 }
 
-const PinButton = styled(Button)<{pinned: boolean; size: 'xsmall' | 'zero'}>`
+const PinButton = styled(Button)<{pinned: boolean; size: 'xs' | 'zero'}>`
   display: block;
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.textColor};
 
   :hover {
-    color: ${p => p.theme.textColor};
+    color: ${p => p.theme.headingColor};
   }
   ${p => p.size === 'zero' && 'background: transparent'};
-  ${p => p.pinned && `&& {color: ${p.theme.active}}`};
 `;
 
 export default PageFilterPinButton;

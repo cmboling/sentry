@@ -9,9 +9,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry.api.base import Endpoint
+from sentry.api.base import Endpoint, region_silo_endpoint
 from sentry.models import Organization, Project, PromptsActivity
-from sentry.utils.compat import zip
 from sentry.utils.prompts import prompt_config
 
 VALID_STATUSES = frozenset(("snoozed", "dismissed"))
@@ -20,7 +19,9 @@ VALID_STATUSES = frozenset(("snoozed", "dismissed"))
 # Endpoint to retrieve multiple PromptsActivity at once
 class PromptsActivitySerializer(serializers.Serializer):
     feature = serializers.CharField(required=True)
-    status = serializers.ChoiceField(choices=zip(VALID_STATUSES, VALID_STATUSES), required=True)
+    status = serializers.ChoiceField(
+        choices=list(zip(VALID_STATUSES, VALID_STATUSES)), required=True
+    )
 
     def validate_feature(self, value):
         if value is None:
@@ -30,6 +31,7 @@ class PromptsActivitySerializer(serializers.Serializer):
         return value
 
 
+@region_silo_endpoint
 class PromptsActivityEndpoint(Endpoint):
     permission_classes = (IsAuthenticated,)
 
@@ -53,7 +55,7 @@ class PromptsActivityEndpoint(Endpoint):
             condition = Q(feature=feature, **filters)
             conditions = condition if conditions is None else (conditions | condition)
 
-        result = PromptsActivity.objects.filter(conditions, user=request.user)
+        result = PromptsActivity.objects.filter(conditions, user_id=request.user.id)
         featuredata = {k.feature: k.data for k in result}
         if len(features) == 1:
             result = result.first()
@@ -101,7 +103,7 @@ class PromptsActivityEndpoint(Endpoint):
         try:
             with transaction.atomic():
                 PromptsActivity.objects.create_or_update(
-                    feature=feature, user=request.user, values={"data": data}, **fields
+                    feature=feature, user_id=request.user.id, values={"data": data}, **fields
                 )
         except IntegrityError:
             pass

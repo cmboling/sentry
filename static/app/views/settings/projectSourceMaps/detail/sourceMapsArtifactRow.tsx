@@ -3,17 +3,17 @@ import styled from '@emotion/styled';
 
 import Access from 'sentry/components/acl/access';
 import {Role} from 'sentry/components/acl/role';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import Confirm from 'sentry/components/confirm';
 import FileSize from 'sentry/components/fileSize';
 import Link from 'sentry/components/links/link';
 import Tag from 'sentry/components/tag';
 import TimeSince from 'sentry/components/timeSince';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {IconClock, IconDelete, IconDownload} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Artifact} from 'sentry/types';
 
 type Props = {
@@ -24,13 +24,13 @@ type Props = {
   orgSlug: string;
 };
 
-const SourceMapsArtifactRow = ({
+function SourceMapsArtifactRow({
   artifact,
   onDelete,
   downloadUrl,
   downloadRole,
   orgSlug,
-}: Props) => {
+}: Props) {
   const {name, size, dateCreated, id, dist} = artifact;
 
   const handleDeleteClick = () => {
@@ -74,7 +74,7 @@ const SourceMapsArtifactRow = ({
                 isHoverable
               >
                 <Button
-                  size="small"
+                  size="sm"
                   icon={<IconDownload size="sm" />}
                   disabled={!hasRole}
                   href={downloadUrl}
@@ -97,7 +97,7 @@ const SourceMapsArtifactRow = ({
                   disabled={!hasAccess}
                 >
                   <Button
-                    size="small"
+                    size="sm"
                     icon={<IconDelete size="sm" />}
                     title={hasAccess ? t('Remove Artifact') : undefined}
                     aria-label={t('Remove Artifact')}
@@ -111,7 +111,7 @@ const SourceMapsArtifactRow = ({
       </ActionsColumn>
     </Fragment>
   );
-};
+}
 
 const NameColumn = styled('div')`
   display: flex;

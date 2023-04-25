@@ -1,7 +1,8 @@
+from functools import cached_property
+
 import responses
 from django.core import mail
 from django.urls import reverse
-from exam import fixture
 
 from sentry.models import (
     InviteStatus,
@@ -12,13 +13,17 @@ from sentry.models import (
 from sentry.testutils import APITestCase
 from sentry.testutils.cases import SlackActivityNotificationTest
 from sentry.testutils.helpers.slack import get_attachment_no_text
+from sentry.testutils.hybrid_cloud import HybridCloudTestMixin
+from sentry.testutils.outbox import outbox_runner
+from sentry.testutils.silo import region_silo_test
 from sentry.utils import json
 
 
+@region_silo_test
 class OrganizationInviteRequestListTest(APITestCase):
     endpoint = "sentry-api-0-organization-invite-request-index"
 
-    @fixture
+    @cached_property
     def org(self):
         return self.create_organization(owner=self.user)
 
@@ -61,7 +66,10 @@ class OrganizationInviteRequestListTest(APITestCase):
         assert resp.data[0]["inviteStatus"] == "requested_to_be_invited"
 
 
-class OrganizationInviteRequestCreateTest(APITestCase, SlackActivityNotificationTest):
+@region_silo_test(stable=True)
+class OrganizationInviteRequestCreateTest(
+    APITestCase, SlackActivityNotificationTest, HybridCloudTestMixin
+):
     endpoint = "sentry-api-0-organization-invite-request-index"
     method = "post"
 
@@ -89,7 +97,8 @@ class OrganizationInviteRequestCreateTest(APITestCase, SlackActivityNotification
 
     def test_simple(self):
         self.login_as(user=self.user)
-        with self.tasks():
+
+        with self.tasks(), outbox_runner():
             response = self.client.post(
                 self.url, {"email": "eric@localhost", "role": "member", "teams": [self.team.slug]}
             )
@@ -111,6 +120,8 @@ class OrganizationInviteRequestCreateTest(APITestCase, SlackActivityNotification
 
         assert len(teams) == 1
         assert teams[0].team_id == self.team.id
+
+        self.assert_org_member_mapping(org_member=member)
 
     def test_higher_role(self):
         self.login_as(user=self.user)
@@ -223,7 +234,7 @@ class OrganizationInviteRequestCreateTest(APITestCase, SlackActivityNotification
         ]
         assert (
             attachment["footer"]
-            == "You are receiving this notification because you're listed as an organization Manager | <http://testserver/settings/account/notifications/approval/?referrer=invite_request-slack-user|Notification Settings>"
+            == "You are receiving this notification because you have the scope member:write | <http://testserver/settings/account/notifications/approval/?referrer=invite_request-slack-user|Notification Settings>"
         )
         member = OrganizationMember.objects.get(email="eric@localhost")
         assert json.loads(attachment["callback_id"]) == {

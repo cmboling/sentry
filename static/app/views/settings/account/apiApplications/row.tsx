@@ -7,12 +7,12 @@ import {
   clearIndicators,
 } from 'sentry/actionCreators/indicator';
 import {Client} from 'sentry/api';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import Link from 'sentry/components/links/link';
 import {PanelItem} from 'sentry/components/panels';
 import {IconDelete} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {ApiApplication} from 'sentry/types';
 import getDynamicText from 'sentry/utils/getDynamicText';
 
@@ -99,14 +99,12 @@ const ApplicationNameWrapper = styled('div')`
 `;
 
 const ApplicationName = styled(Link)`
-  font-size: ${p => p.theme.headerFontSize};
-  font-weight: bold;
-  margin-bottom: ${space(0.5)};
+  margin-bottom: ${space(1)};
 `;
 
 const ClientId = styled('div')`
-  color: ${p => p.theme.gray200};
-  font-size: ${p => p.theme.fontSizeMedium};
+  color: ${p => p.theme.subText};
+  font-size: ${p => p.theme.fontSizeSmall};
 `;
 
 export default Row;

@@ -48,9 +48,10 @@ export default function getConfiguration({
         },
         {
           path: `${pathPrefix}/ownership/`,
-          title: t('Issue Owners'),
-          description: t('Manage issue ownership rules for a project'),
-          badge: () => 'new',
+          title: organization?.features?.includes('streamline-targeting-context')
+            ? t('Ownership Rules')
+            : t('Issue Owners'),
+          description: t('Manage ownership rules for a project'),
         },
         {
           path: `${pathPrefix}/data-forwarding/`,
@@ -67,13 +68,6 @@ export default function getConfiguration({
           description: t(
             "Configure a project's inbound filters (e.g. browsers, messages)"
           ),
-        },
-        {
-          path: `${pathPrefix}/filters-and-sampling/`,
-          title: t('Filters & Sampling'),
-          show: () => !!organization?.features?.includes('filters-and-sampling'),
-          description: t("Manage an organization's inbound data"),
-          badge: () => 'new',
         },
         {
           path: `${pathPrefix}/security-and-privacy/`,

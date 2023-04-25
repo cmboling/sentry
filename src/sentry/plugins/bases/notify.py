@@ -86,7 +86,6 @@ class NotificationPlugin(Plugin):
     def rule_notify(self, event, futures):
         rules = []
         extra = {"event_id": event.event_id, "group_id": event.group_id, "plugin": self.slug}
-        log_event = "dispatched"
         for future in futures:
             rules.append(future.rule)
             extra["rule_id"] = future.rule.id
@@ -100,7 +99,7 @@ class NotificationPlugin(Plugin):
         extra["project_id"] = project.id
         notification = Notification(event=event, rules=rules)
         self.notify(notification)
-        self.logger.info("notification.%s" % log_event, extra=extra)
+        self.logger.info("notification.dispatched", extra=extra)
 
     def notify_users(self, group, event, triggering_rules, fail_silently=False, **kwargs):
         raise NotImplementedError
@@ -113,7 +112,7 @@ class NotificationPlugin(Plugin):
 
         alert_settings = {
             o.user_id: int(o.value)
-            for o in UserOption.objects.filter(project=project, key=user_option)
+            for o in UserOption.objects.filter(project_id=project.id, key=user_option)
         }
 
         disabled = {u for u, v in alert_settings.items() if v == 0}

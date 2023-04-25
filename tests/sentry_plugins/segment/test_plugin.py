@@ -1,5 +1,6 @@
+from functools import cached_property
+
 import responses
-from exam import fixture
 
 from sentry.testutils import PluginTestCase
 from sentry.utils import json
@@ -7,7 +8,7 @@ from sentry_plugins.segment.plugin import SegmentPlugin
 
 
 class SegmentPluginTest(PluginTestCase):
-    @fixture
+    @cached_property
     def plugin(self):
         return SegmentPlugin()
 
@@ -47,6 +48,7 @@ class SegmentPluginTest(PluginTestCase):
                 "environment": "",
                 "eventId": event.event_id,
                 "exceptionType": "ValueError",
+                "level": "warning",
                 "release": "",
                 "transaction": "",
             },

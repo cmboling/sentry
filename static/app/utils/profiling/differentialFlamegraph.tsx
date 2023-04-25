@@ -3,7 +3,9 @@ import {relativeChange} from './units/units';
 import {Flamegraph} from './flamegraph';
 import {FlamegraphFrame} from './flamegraphFrame';
 
-function countFrameOccurences(frames: FlamegraphFrame[]): Map<string, number> {
+function countFrameOccurences(
+  frames: ReadonlyArray<FlamegraphFrame>
+): Map<string, number> {
   const counts = new Map<string, number>();
 
   for (const frame of frames) {
@@ -33,7 +35,7 @@ export class DifferentialFlamegraph extends Flamegraph {
     const differentialFlamegraph = new DifferentialFlamegraph(
       to.profile,
       to.profileIndex,
-      {inverted: from.inverted, leftHeavy: from.leftHeavy}
+      {inverted: from.inverted, sort: from.sort}
     );
 
     const fromCounts = countFrameOccurences(from.frames);

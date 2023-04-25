@@ -1,9 +1,40 @@
+# Copyright © 2011-present, Encode OSS Ltd.
+# Copyright © 2019-present, T. Franzel <tfranzel@gmail.com>, Cashlink Technologies GmbH.
+
+# All rights reserved.
+
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from
+#   this software without specific prior written permission.
+
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
 # type: ignore
 
 import collections
 import inspect
 import typing
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from enum import Enum
 from typing import Any, Literal, Union
 from typing import get_type_hints as _get_type_hints
@@ -77,7 +108,7 @@ def resolve_type_hint(hint) -> Any:
             max_length=len(args),
             min_length=len(args),
         )
-    elif origin is dict or origin is defaultdict or origin is OrderedDict:
+    elif origin is dict or origin is defaultdict:
         schema = build_basic_type(OpenApiTypes.OBJECT)
         if args and args[1] is not typing.Any:
             schema["additionalProperties"] = resolve_type_hint(args[1])
@@ -123,4 +154,4 @@ def resolve_type_hint(hint) -> Any:
     elif isinstance(hint, typing._TypedDictMeta):
         raise UnableToProceedError("Wrong TypedDict class, please use typing_extensions.TypedDict")
     else:
-        raise UnableToProceedError()
+        raise UnableToProceedError(hint)

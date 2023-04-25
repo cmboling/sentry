@@ -12,11 +12,12 @@ from rest_framework.response import Response
 
 from sentry import roles
 from sentry.api import client
+from sentry.api.base import control_silo_endpoint
 from sentry.api.bases.user import UserEndpoint
 from sentry.api.decorators import sudo_required
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models.user import DetailedSelfUserSerializer
-from sentry.api.serializers.rest_framework import ListField
+from sentry.api.serializers.rest_framework import CamelSnakeModelSerializer, ListField
 from sentry.auth.superuser import is_active_superuser
 from sentry.constants import LANGUAGES
 from sentry.models import Organization, OrganizationMember, OrganizationStatus, User, UserOption
@@ -63,7 +64,7 @@ class UserOptionsSerializer(serializers.Serializer):
     )
 
 
-class BaseUserSerializer(serializers.ModelSerializer):
+class BaseUserSerializer(CamelSnakeModelSerializer):
     def validate_username(self, value):
         if User.objects.filter(username__iexact=value).exclude(id=self.instance.id).exists():
             raise serializers.ValidationError("That username is already in use.")
@@ -98,22 +99,20 @@ class UserSerializer(BaseUserSerializer):
 
 
 class SuperuserUserSerializer(BaseUserSerializer):
-    isActive = serializers.BooleanField(source="is_active")
+    is_active = serializers.BooleanField()
 
     class Meta:
         model = User
-        fields = ("name", "username", "isActive")
+        fields = ("name", "username", "is_active")
 
 
 class PrivilegedUserSerializer(SuperuserUserSerializer):
-    isStaff = serializers.BooleanField(source="is_staff")
-    isSuperuser = serializers.BooleanField(source="is_superuser")
+    is_staff = serializers.BooleanField()
+    is_superuser = serializers.BooleanField()
 
     class Meta:
         model = User
-        # no idea wtf is up with django rest framework, but we need is_active
-        # and isActive
-        fields = ("name", "username", "isActive", "isStaff", "isSuperuser")
+        fields = ("name", "username", "is_active", "is_staff", "is_superuser")
 
 
 class DeleteUserSerializer(serializers.Serializer):
@@ -121,6 +120,7 @@ class DeleteUserSerializer(serializers.Serializer):
     hardDelete = serializers.BooleanField(required=False)
 
 
+@control_silo_endpoint
 class UserDetailsEndpoint(UserEndpoint):
     def get(self, request: Request, user) -> Response:
         """
@@ -149,6 +149,17 @@ class UserDetailsEndpoint(UserEndpoint):
         :param string theme: UI theme, either "light", "dark", or "system"
         :auth: required
         """
+        if not request.access.has_permission("users.admin"):
+            if not user.is_superuser and request.data.get("isSuperuser"):
+                return Response(
+                    {"detail": "Missing required permission to add superuser."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            elif not user.is_staff and request.data.get("isStaff"):
+                return Response(
+                    {"detail": "Missing required permission to add admin."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         if request.access.has_permission("users.admin"):
             serializer_cls = PrivilegedUserSerializer
@@ -156,7 +167,7 @@ class UserDetailsEndpoint(UserEndpoint):
             serializer_cls = SuperuserUserSerializer
         else:
             serializer_cls = UserSerializer
-        serializer = serializer_cls(user, data=request.data, partial=True)
+        serializer = serializer_cls(instance=user, data=request.data, partial=True)
 
         serializer_options = UserOptionsSerializer(
             data=request.data.get("options", {}), partial=True

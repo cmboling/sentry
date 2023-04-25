@@ -1,14 +1,21 @@
 import logging
-from typing import Any, Sequence
+from typing import Any, List
 
-from django.db import IntegrityError, models
+from django.db import IntegrityError, models, transaction
 
 from sentry.constants import ObjectStatus
-from sentry.db.models import BoundedPositiveIntegerField, DefaultFieldsModel, EncryptedJsonField
+from sentry.db.models import (
+    BoundedPositiveIntegerField,
+    DefaultFieldsModel,
+    control_silo_only_model,
+)
+from sentry.db.models.fields.jsonfield import JSONField
 from sentry.db.models.manager import BaseManager
+from sentry.db.postgres.roles import in_test_psql_role_override
 from sentry.models.integrations.organization_integration import OrganizationIntegration
-from sentry.models.integrations.project_integration import ProjectIntegration
+from sentry.models.outbox import ControlOutbox, OutboxCategory, OutboxScope
 from sentry.signals import integration_added
+from sentry.types.region import find_regions_for_orgs
 
 logger = logging.getLogger(__name__)
 
@@ -22,22 +29,22 @@ class IntegrationManager(BaseManager):
         )
 
 
+@control_silo_only_model
 class Integration(DefaultFieldsModel):
+    """
+    An integration tied to a particular instance of a third-party provider (a single Slack
+    workspace, a single GH org, etc.), which can be shared by multiple Sentry orgs.
+    """
+
     __include_in_export__ = False
 
-    organizations = models.ManyToManyField(
-        "sentry.Organization", related_name="integrations", through=OrganizationIntegration
-    )
-    projects = models.ManyToManyField(
-        "sentry.Project", related_name="integrations", through=ProjectIntegration
-    )
     provider = models.CharField(max_length=64)
     external_id = models.CharField(max_length=64)
     name = models.CharField(max_length=200)
     # metadata might be used to store things like credentials, but it should NOT
     # be used to store organization-specific information, as the Integration
     # instance is shared among multiple organizations
-    metadata = EncryptedJsonField(default=dict)
+    metadata = JSONField(default=dict)
     status = BoundedPositiveIntegerField(
         default=ObjectStatus.VISIBLE, choices=ObjectStatus.as_choices(), null=True
     )
@@ -54,14 +61,30 @@ class Integration(DefaultFieldsModel):
 
         return integrations.get(self.provider)
 
+    def delete(self, *args, **kwds):
+        with transaction.atomic(), in_test_psql_role_override("postgres"):
+            for outbox in Integration.outboxes_for_update(self.id):
+                outbox.save()
+            return super().delete(*args, **kwds)
+
+    @staticmethod
+    def outboxes_for_update(identifier: int) -> List[ControlOutbox]:
+        org_ids: List[int] = OrganizationIntegration.objects.filter(
+            integration_id=identifier
+        ).values_list("organization_id", flat=True)
+        return [
+            ControlOutbox(
+                shard_scope=OutboxScope.INTEGRATION_SCOPE,
+                shard_identifier=identifier,
+                object_identifier=identifier,
+                category=OutboxCategory.INTEGRATION_UPDATE,
+                region_name=region_name,
+            )
+            for region_name in find_regions_for_orgs(org_ids)
+        ]
+
     def get_installation(self, organization_id: int, **kwargs: Any) -> Any:
         return self.get_provider().get_installation(self, organization_id, **kwargs)
-
-    def get_installations(self, **kwargs: Any) -> Sequence[Any]:
-        return [
-            self.get_provider().get_installation(self, organization.id, **kwargs)
-            for organization in self.organizations.all()
-        ]
 
     def has_feature(self, feature):
         return feature in self.get_provider().features

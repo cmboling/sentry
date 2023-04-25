@@ -3,17 +3,19 @@ from django.db.models import Q
 from django.urls import reverse
 
 from sentry import roles
-from sentry.db.models import FlexibleForeignKey, Model, sane_repr
-from sentry.utils.http import absolute_uri
+from sentry.db.models import FlexibleForeignKey, Model, region_silo_only_model, sane_repr
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
+from sentry.services.hybrid_cloud.user import user_service
 
 
+@region_silo_only_model
 class OrganizationAccessRequest(Model):
     __include_in_export__ = True
 
     team = FlexibleForeignKey("sentry.Team")
     member = FlexibleForeignKey("sentry.OrganizationMember")
     # access request from a different user than the member
-    requester = FlexibleForeignKey(settings.AUTH_USER_MODEL, null=True)
+    requester_id = HybridCloudForeignKey(settings.AUTH_USER_MODEL, on_delete="CASCADE", null=True)
 
     class Meta:
         app_label = "sentry"
@@ -26,16 +28,16 @@ class OrganizationAccessRequest(Model):
         from sentry.models import OrganizationMember
         from sentry.utils.email import MessageBuilder
 
+        organization = self.team.organization
         user = self.member.user
         email = user.email
-        organization = self.team.organization
 
         context = {
             "email": email,
             "name": user.get_display_name(),
             "organization": organization,
             "team": self.team,
-            "url": absolute_uri(
+            "url": organization.absolute_url(
                 reverse(
                     "sentry-organization-teams",
                     kwargs={"organization_slug": organization.slug},
@@ -43,8 +45,9 @@ class OrganizationAccessRequest(Model):
             ),
         }
 
-        if self.requester:
-            context.update({"requester": self.requester.get_display_name()})
+        if self.requester_id:
+            requester = user_service.get_user(user_id=self.requester_id)
+            context.update({"requester": requester.get_display_name()})
 
         msg = MessageBuilder(
             subject="Sentry Access Request",

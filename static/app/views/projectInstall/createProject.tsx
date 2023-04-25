@@ -1,47 +1,46 @@
-import * as React from 'react';
-import {browserHistory, withRouter, WithRouterProps} from 'react-router';
+import {Component, Fragment} from 'react';
+import {browserHistory, WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
 import {PlatformIcon} from 'platformicons';
 
 import {openCreateTeamModal} from 'sentry/actionCreators/modal';
-import ProjectActions from 'sentry/actions/projectActions';
-import Alert from 'sentry/components/alert';
-import Button from 'sentry/components/button';
-import TeamSelector from 'sentry/components/forms/teamSelector';
-import PageHeading from 'sentry/components/pageHeading';
+import {Alert} from 'sentry/components/alert';
+import {Button} from 'sentry/components/button';
+import Input from 'sentry/components/input';
+import * as Layout from 'sentry/components/layouts/thirds';
+import ExternalLink from 'sentry/components/links/externalLink';
 import PlatformPicker from 'sentry/components/platformPicker';
+import TeamSelector from 'sentry/components/teamSelector';
 import categoryList from 'sentry/data/platformCategories';
 import {IconAdd} from 'sentry/icons';
-import {t} from 'sentry/locale';
-import {inputStyles} from 'sentry/styles/input';
-import space from 'sentry/styles/space';
-import {Organization, Project, Team} from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import {t, tct} from 'sentry/locale';
+import ProjectsStore from 'sentry/stores/projectsStore';
+import {space} from 'sentry/styles/space';
+import {Organization, Team} from 'sentry/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import getPlatformName from 'sentry/utils/getPlatformName';
+import withRouteAnalytics, {
+  WithRouteAnalyticsProps,
+} from 'sentry/utils/routeAnalytics/withRouteAnalytics';
 import slugify from 'sentry/utils/slugify';
 import withApi from 'sentry/utils/withApi';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 import withOrganization from 'sentry/utils/withOrganization';
+// eslint-disable-next-line no-restricted-imports
+import withSentryRouter from 'sentry/utils/withSentryRouter';
 import withTeams from 'sentry/utils/withTeams';
 import IssueAlertOptions from 'sentry/views/projectInstall/issueAlertOptions';
 
 const getCategoryName = (category?: string) =>
   categoryList.find(({id}) => id === category)?.id;
 
-type RuleEventData = {
-  eventKey: string;
-  eventName: string;
-  organization_id: string;
-  project_id: string;
-  rule_type: string;
-  custom_rule_id?: string;
-};
-
-type Props = WithRouterProps & {
-  api: any;
-  organization: Organization;
-  teams: Team[];
-};
+type Props = WithRouterProps &
+  WithRouteAnalyticsProps & {
+    api: any;
+    organization: Organization;
+    teams: Team[];
+  };
 
 type PlatformName = React.ComponentProps<typeof PlatformIcon>['platform'];
 type IssueAlertFragment = Parameters<
@@ -57,7 +56,7 @@ type State = {
   team: string;
 };
 
-class CreateProject extends React.Component<Props, State> {
+class CreateProject extends Component<Props, State> {
   constructor(props: Props, context) {
     super(props, context);
 
@@ -78,6 +77,13 @@ class CreateProject extends React.Component<Props, State> {
     };
   }
 
+  componentDidMount() {
+    this.props.setEventNames(
+      'project_creation_page.viewed',
+      'Project Create: Creation page viewed'
+    );
+  }
+
   get defaultCategory() {
     const {query} = this.props.location;
     return getCategoryName(query.category);
@@ -91,23 +97,24 @@ class CreateProject extends React.Component<Props, State> {
       <CreateProjectForm onSubmit={this.createProject}>
         <div>
           <FormLabel>{t('Project name')}</FormLabel>
-          <ProjectNameInput>
-            <StyledPlatformIcon platform={platform ?? ''} />
-            <input
+          <ProjectNameInputWrap>
+            <StyledPlatformIcon platform={platform ?? ''} size={20} />
+            <ProjectNameInput
               type="text"
               name="name"
-              placeholder={t('Project name')}
+              placeholder={t('project-name')}
               autoComplete="off"
               value={projectName}
               onChange={e => this.setState({projectName: slugify(e.target.value)})}
             />
-          </ProjectNameInput>
+          </ProjectNameInputWrap>
         </div>
         <div>
           <FormLabel>{t('Team')}</FormLabel>
           <TeamSelectInput>
             <TeamSelector
               name="select-team"
+              menuPlacement="auto"
               clearable={false}
               value={team}
               placeholder={t('Select a Team')}
@@ -117,7 +124,6 @@ class CreateProject extends React.Component<Props, State> {
             <Button
               borderless
               data-test-id="create-team"
-              type="button"
               icon={<IconAdd isCircled />}
               onClick={() =>
                 openCreateTeamModal({
@@ -132,6 +138,7 @@ class CreateProject extends React.Component<Props, State> {
         </div>
         <div>
           <Button
+            type="submit"
             data-test-id="create-project"
             priority="primary"
             disabled={!this.canSubmitForm}
@@ -143,10 +150,12 @@ class CreateProject extends React.Component<Props, State> {
     );
 
     return (
-      <React.Fragment>
-        <PageHeading withMargins>{t('Give your project a name')}</PageHeading>
+      <Fragment>
+        <Layout.Title withMargins>
+          {t('3. Name your project and assign it a team')}
+        </Layout.Title>
         {createProjectForm}
-      </React.Fragment>
+      </Fragment>
     );
   }
 
@@ -214,17 +223,26 @@ class CreateProject extends React.Component<Props, State> {
         );
         ruleId = ruleData.id;
       }
-      this.trackIssueAlertOptionSelectedEvent(
-        projectData,
-        defaultRules,
-        shouldCreateCustomRule,
-        ruleId
-      );
+      trackAnalytics('project_creation_page.created', {
+        organization,
+        issue_alert: defaultRules
+          ? 'Default'
+          : shouldCreateCustomRule
+          ? 'Custom'
+          : 'No Rule',
+        project_id: projectData.id,
+        rule_id: ruleId || '',
+      });
 
-      ProjectActions.createSuccess(projectData);
+      ProjectsStore.onCreateSuccess(projectData, organization.slug);
+
       const platformKey = platform || 'other';
-      const nextUrl = `/${organization.slug}/${projectData.slug}/getting-started/${platformKey}/`;
-      browserHistory.push(nextUrl);
+
+      browserHistory.push(
+        normalizeUrl(
+          `/${organization.slug}/${projectData.slug}/getting-started/${platformKey}/`
+        )
+      );
     } catch (err) {
       this.setState({
         inFlight: false,
@@ -245,63 +263,50 @@ class CreateProject extends React.Component<Props, State> {
     }
   };
 
-  trackIssueAlertOptionSelectedEvent(
-    projectData: Project,
-    isDefaultRules: boolean | undefined,
-    shouldCreateCustomRule: boolean | undefined,
-    ruleId: string | undefined
-  ) {
-    const {organization} = this.props;
-
-    let data: RuleEventData = {
-      eventKey: 'new_project.alert_rule_selected',
-      eventName: 'New Project Alert Rule Selected',
-      organization_id: organization.id,
-      project_id: projectData.id,
-      rule_type: isDefaultRules
-        ? 'Default'
-        : shouldCreateCustomRule
-        ? 'Custom'
-        : 'No Rule',
-    };
-
-    if (ruleId !== undefined) {
-      data = {...data, custom_rule_id: ruleId};
+  setPlatform = (platformKey: PlatformName | null) => {
+    if (!platformKey) {
+      this.setState({platform: null, projectName: ''});
+      return;
     }
 
-    trackAnalyticsEvent(data);
-  }
+    this.setState(({projectName, platform}) => {
+      // Avoid replacing project name when the user already modified it
+      const userModifiedName = projectName && projectName !== platform;
+      const newName = userModifiedName ? projectName : platformKey;
 
-  setPlatform = (platformId: PlatformName | null) =>
-    this.setState(({projectName, platform}: State) => ({
-      platform: platformId,
-      projectName:
-        !projectName || (platform && getPlatformName(platform) === projectName)
-          ? getPlatformName(platformId) || ''
-          : projectName,
-    }));
+      return {
+        platform: platformKey,
+        projectName: slugify(newName),
+      };
+    });
+  };
 
   render() {
     const {platform, error} = this.state;
 
     return (
-      <React.Fragment>
+      <Fragment>
         {error && <Alert type="error">{error}</Alert>}
 
         <div data-test-id="onboarding-info">
-          <PageHeading withMargins>{t('Create a new Project')}</PageHeading>
+          <Layout.Title withMargins>{t('Create a new project in 3 steps')}</Layout.Title>
           <HelpText>
-            {t(
-              `Projects allow you to scope error and transaction events to a specific
-               application in your organization. For example, you might have separate
-               projects for your API server and frontend client.`
+            {tct(
+              'Set up a separate project for each part of your application (for example, your API server and frontend client), to quickly pinpoint which part of your application errors are coming from. [link: Read the docs].',
+              {
+                link: (
+                  <ExternalLink href="https://docs.sentry.io/product/sentry-basics/integrate-frontend/create-new-project/" />
+                ),
+              }
             )}
           </HelpText>
-          <PageHeading withMargins>{t('Choose a platform')}</PageHeading>
+          <Layout.Title withMargins>{t('1. Choose your platform')}</Layout.Title>
           <PlatformPicker
             platform={platform}
             defaultCategory={this.defaultCategory}
-            setPlatform={this.setPlatform}
+            setPlatform={selectedPlatform =>
+              this.setPlatform(selectedPlatform?.id ?? null)
+            }
             organization={this.props.organization}
             showOther
           />
@@ -312,13 +317,15 @@ class CreateProject extends React.Component<Props, State> {
           />
           {this.renderProjectForm()}
         </div>
-      </React.Fragment>
+      </Fragment>
     );
   }
 }
 
 // TODO(davidenwang): change to functional component and replace withTeams with useTeams
-export default withApi(withRouter(withOrganization(withTeams(CreateProject))));
+export default withRouteAnalytics(
+  withApi(withSentryRouter(withOrganization(withTeams(CreateProject))))
+);
 export {CreateProject};
 
 const CreateProjectForm = styled('form')`
@@ -336,26 +343,24 @@ const FormLabel = styled('div')`
   margin-bottom: ${space(1)};
 `;
 
-const StyledPlatformIcon = styled(PlatformIcon)`
-  margin-right: ${space(1)};
+const ProjectNameInputWrap = styled('div')`
+  position: relative;
 `;
 
-const ProjectNameInput = styled('div')`
-  ${p => inputStyles(p)};
-  padding: 5px 10px;
-  display: flex;
-  align-items: center;
+const ProjectNameInput = styled(Input)`
+  padding-left: calc(${p => p.theme.formPadding.md.paddingLeft}px * 1.5 + 20px);
+`;
 
-  input {
-    background: ${p => p.theme.background};
-    border: 0;
-    outline: 0;
-    flex: 1;
-  }
+const StyledPlatformIcon = styled(PlatformIcon)`
+  position: absolute;
+  top: 50%;
+  left: ${p => p.theme.formPadding.md.paddingLeft}px;
+  transform: translateY(-50%);
 `;
 
 const TeamSelectInput = styled('div')`
   display: grid;
+  gap: ${space(1)};
   grid-template-columns: 1fr min-content;
   align-items: center;
 `;

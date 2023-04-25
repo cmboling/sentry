@@ -1,4 +1,3 @@
-import * as React from 'react';
 import styled from '@emotion/styled';
 
 import AutoSelectText from 'sentry/components/autoSelectText';
@@ -41,7 +40,7 @@ const StyledShortId = styled('div')`
   justify-content: flex-end;
 `;
 
-const StyledAutoSelectText = styled(AutoSelectText)`
+export const StyledAutoSelectText = styled(AutoSelectText)`
   min-width: 0;
 
   a & {

@@ -2,8 +2,8 @@ from unittest.mock import patch
 
 from django.core import mail
 
-from sentry.app import locks
 from sentry.exceptions import InvalidIdentity, PluginError
+from sentry.locks import locks
 from sentry.models import (
     Commit,
     Deploy,
@@ -15,14 +15,12 @@ from sentry.models import (
 )
 from sentry.tasks.commits import fetch_commits, handle_invalid_identity
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 from social_auth.models import UserSocialAuth
 
 
 class FetchCommitsTest(TestCase):
-    def test_simple(self):
-        self.login_as(user=self.user)
-        org = self.create_organization(owner=self.user, name="baz")
-
+    def _test_simple_action(self, user, org):
         repo = Repository.objects.create(name="example", provider="dummy", organization_id=org.id)
         release = Release.objects.create(organization_id=org.id, version="abcabcabc")
 
@@ -42,7 +40,7 @@ class FetchCommitsTest(TestCase):
             with patch.object(Deploy, "notify_if_ready") as mock_notify_if_ready:
                 fetch_commits(
                     release_id=release2.id,
-                    user_id=self.user.id,
+                    user_id=user.id,
                     refs=refs,
                     previous_release_id=release.id,
                 )
@@ -72,6 +70,19 @@ class FetchCommitsTest(TestCase):
         assert latest_repo_release_environment.release_id == release2.id
         assert latest_repo_release_environment.commit_id == commit_list[0].id
 
+    def test_simple(self):
+        self.login_as(user=self.user)
+        org = self.create_organization(owner=self.user, name="baz")
+        self._test_simple_action(user=self.user, org=org)
+
+    def test_simple_owner_from_team(self):
+        user = self.create_user()
+        self.login_as(user=user)
+        org = self.create_organization(name="baz")
+        owner_team = self.create_team(organization=org, org_role="owner")
+        self.create_member(organization=org, user=user, teams=[owner_team])
+        self._test_simple_action(user=user, org=org)
+
     def test_release_locked(self):
         self.login_as(user=self.user)
         org = self.create_organization(owner=self.user, name="baz")
@@ -86,7 +97,7 @@ class FetchCommitsTest(TestCase):
         refs = [{"repository": repo.name, "commit": "b" * 40}]
         new_release = Release.objects.create(organization_id=org.id, version="12345678")
 
-        lock = locks.get(Release.get_lock_key(org.id, new_release.id), duration=10)
+        lock = locks.get(Release.get_lock_key(org.id, new_release.id), duration=10, name="release")
         lock.acquire()
 
         with self.tasks():
@@ -273,6 +284,7 @@ class FetchCommitsTest(TestCase):
         assert "Repository not found" in msg.body
 
 
+@control_silo_test
 class HandleInvalidIdentityTest(TestCase):
     def test_simple(self):
         usa = UserSocialAuth.objects.create(user=self.user, provider="dummy")

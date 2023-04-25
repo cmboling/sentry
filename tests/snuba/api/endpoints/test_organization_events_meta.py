@@ -1,14 +1,22 @@
 from unittest import mock
 
+import pytest
 from django.urls import reverse
+from django.utils import timezone
 from pytz import utc
 from rest_framework.exceptions import ParseError
 
+from sentry.issues.grouptype import ProfileFileIOGroupType
 from sentry.testutils import APITestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
+from tests.sentry.issues.test_utils import SearchIssueTestMixin
+
+pytestmark = pytest.mark.sentry_metrics
 
 
-class OrganizationEventsMetaEndpoint(APITestCase, SnubaTestCase):
+@region_silo_test
+class OrganizationEventsMetaEndpoint(APITestCase, SnubaTestCase, SearchIssueTestMixin):
     def setUp(self):
         super().setUp()
         self.min_ago = before_now(minutes=1)
@@ -104,6 +112,32 @@ class OrganizationEventsMetaEndpoint(APITestCase, SnubaTestCase):
         assert response.status_code == 200, response.content
         assert response.data["count"] == 1
 
+    def test_generic_event(self):
+        """Test that the issuePlatform dataset returns data for a generic issue's short ID"""
+        _, _, group_info = self.store_search_issue(
+            self.project.id,
+            self.user.id,
+            [f"{ProfileFileIOGroupType.type_id}-group1"],
+            "prod",
+            before_now(hours=1).replace(tzinfo=timezone.utc),
+        )
+        url = reverse(
+            "sentry-api-0-organization-events-meta",
+            kwargs={"organization_slug": self.project.organization.slug},
+        )
+        with self.feature(self.features):
+            response = self.client.get(
+                url,
+                {
+                    "query": f"issue:{group_info.group.qualified_short_id}",
+                    "dataset": "issuePlatform",
+                },
+                format="json",
+            )
+
+        assert response.status_code == 200, response.content
+        assert response.data["count"] == 1
+
     def test_transaction_event_with_last_seen(self):
         data = {
             "event_id": "a" * 32,
@@ -137,10 +171,8 @@ class OrganizationEventsMetaEndpoint(APITestCase, SnubaTestCase):
                 )
         assert response.status_code == 400
 
-    @mock.patch("sentry.snuba.discover.raw_query")
-    @mock.patch("sentry.search.events.builder.raw_snql_query")
-    def test_handling_snuba_errors(self, mock_query, mock_snql_query):
-        mock_query.side_effect = ParseError("test")
+    @mock.patch("sentry.search.events.builder.discover.raw_snql_query")
+    def test_handling_snuba_errors(self, mock_snql_query):
         mock_snql_query.side_effect = ParseError("test")
         with self.feature(self.features):
             response = self.client.get(self.url, format="json")
@@ -181,12 +213,7 @@ class OrganizationEventsMetaEndpoint(APITestCase, SnubaTestCase):
             assert len(mock_quantize.mock_calls) == 2
 
 
-class OrganizationEventsMetaEndpointWithSnql(OrganizationEventsMetaEndpoint):
-    def setUp(self):
-        super().setUp()
-        self.features["organizations:discover-use-snql"] = True
-
-
+@region_silo_test
 class OrganizationEventsRelatedIssuesEndpoint(APITestCase, SnubaTestCase):
     def setUp(self):
         super().setUp()

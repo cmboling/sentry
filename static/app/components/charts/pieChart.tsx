@@ -1,9 +1,8 @@
-import * as React from 'react';
-import {withTheme} from '@emotion/react';
+import {Component, createRef} from 'react';
+import {Theme, withTheme} from '@emotion/react';
 import type {PieSeriesOption} from 'echarts';
 
 import {ReactEchartsRef, Series} from 'sentry/types/echarts';
-import type {Theme} from 'sentry/utils/theme';
 
 import Legend from './components/legend';
 import PieSeries from './series/pieSeries';
@@ -19,7 +18,7 @@ type Props = Omit<ChartProps, 'series'> & {
   selectOnRender?: boolean;
 };
 
-class PieChart extends React.Component<Props> {
+class PieChart extends Component<Props> {
   componentDidMount() {
     const {selectOnRender} = this.props;
 
@@ -39,7 +38,7 @@ class PieChart extends React.Component<Props> {
   highlightTimeout: number | undefined = undefined;
   isInitialSelected = true;
   selected = 0;
-  chart = React.createRef<ReactEchartsRef>();
+  chart = createRef<ReactEchartsRef>();
 
   // Select a series to highlight (e.g. shows details of series)
   // This is the same event as when you hover over a series in the chart
@@ -151,7 +150,7 @@ class PieChart extends React.Component<Props> {
               '<div class="tooltip-series">',
               `<div><span class="tooltip-label">${data.marker}<strong>${data.name}</strong></span> ${data.percent}%</div>`,
               '</div>',
-              `<div class="tooltip-date">${data.value}</div>`,
+              `<div class="tooltip-footer">${data.value}</div>`,
               '</div>',
               '<div class="tooltip-arrow"></div>',
             ].join('');

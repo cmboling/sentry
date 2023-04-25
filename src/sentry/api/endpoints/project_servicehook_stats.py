@@ -1,15 +1,14 @@
-from collections import OrderedDict
-
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import tsdb
-from sentry.api.base import StatsMixin
+from sentry.api.base import StatsMixin, region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.models import ServiceHook
 
 
+@region_silo_endpoint
 class ProjectServiceHookStatsEndpoint(ProjectEndpoint, StatsMixin):
     def get(self, request: Request, project, hook_id) -> Response:
         try:
@@ -19,9 +18,14 @@ class ProjectServiceHookStatsEndpoint(ProjectEndpoint, StatsMixin):
 
         stat_args = self._parse_args(request)
 
-        stats = OrderedDict()
+        stats = {}
         for model, name in ((tsdb.models.servicehook_fired, "total"),):
-            result = tsdb.get_range(model=model, keys=[hook.id], **stat_args)[hook.id]
+            result = tsdb.get_range(
+                model=model,
+                keys=[hook.id],
+                **stat_args,
+                tenant_ids={"organization_id": project.organization_id},
+            )[hook.id]
             for ts, count in result:
                 stats.setdefault(int(ts), {})[name] = count
 

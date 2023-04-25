@@ -1,13 +1,16 @@
+from functools import cached_property
+
 from django.utils import timezone
-from exam import fixture
 
 from sentry.models import ApiApplication, ApiGrant, ApiToken
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 from sentry.utils import json
 
 
+@control_silo_test
 class OAuthTokenTest(TestCase):
-    @fixture
+    @cached_property
     def path(self):
         return "/oauth/token/"
 
@@ -35,8 +38,9 @@ class OAuthTokenTest(TestCase):
         assert json.loads(resp.content) == {"error": "unsupported_grant_type"}
 
 
+@control_silo_test
 class OAuthTokenCodeTest(TestCase):
-    @fixture
+    @cached_property
     def path(self):
         return "/oauth/token/"
 
@@ -139,8 +143,9 @@ class OAuthTokenCodeTest(TestCase):
         assert data["user"]["id"] == str(token.user_id)
 
 
+@control_silo_test
 class OAuthTokenRefreshTokenTest(TestCase):
-    @fixture
+    @cached_property
     def path(self):
         return "/oauth/token/"
 

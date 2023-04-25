@@ -1,4 +1,3 @@
-import re
 import zipfile
 from io import BytesIO
 from unittest.mock import patch
@@ -10,12 +9,18 @@ from django.urls import reverse
 from sentry import eventstore
 from sentry.models import File, ProjectDebugFile
 from sentry.testutils import RelayStoreHelper, TransactionTestCase
+from sentry.testutils.factories import get_fixture_path
 from sentry.testutils.helpers.datetime import before_now, iso_format
-from tests.symbolicator import get_fixture_path, insta_snapshot_stacktrace_data
+from tests.symbolicator import insta_snapshot_native_stacktrace_data, redact_location
 
 # IMPORTANT:
-# For these tests to run, write `symbolicator.enabled: true` into your
-# `~/.sentry/config.yml` and run `sentry devservices up`
+#
+# This test suite requires Symbolicator in order to run correctly.
+# Set `symbolicator.enabled: true` in your `~/.sentry/config.yml` and run `sentry devservices up`
+#
+# If you are using a local instance of Symbolicator, you need to
+# either change `system.url-prefix` option override inside `initialize` fixture to `system.internal-url-prefix`,
+# or add `127.0.0.1 host.docker.internal` entry to your `/etc/hosts`
 
 
 REAL_RESOLVING_EVENT_DATA = {
@@ -59,18 +64,14 @@ REAL_RESOLVING_EVENT_DATA = {
 
 
 class SymbolicatorResolvingIntegrationTest(RelayStoreHelper, TransactionTestCase):
-    # For these tests to run, write `symbolicator.enabled: true` into your
-    # `~/.sentry/config.yml` and run `sentry devservices up`
-
     @pytest.fixture(autouse=True)
     def initialize(self, live_server):
         self.project.update_option("sentry:builtin_symbol_sources", [])
-        new_prefix = live_server.url
 
         with patch("sentry.auth.system.is_internal_ip", return_value=True), self.options(
-            {"system.url-prefix": new_prefix}
+            {"system.url-prefix": live_server.url}
         ):
-            # Run test case:
+            # Run test case
             yield
 
     def get_event(self, event_id):
@@ -89,7 +90,7 @@ class SymbolicatorResolvingIntegrationTest(RelayStoreHelper, TransactionTestCase
 
         out = BytesIO()
         f = zipfile.ZipFile(out, "w")
-        f.write(get_fixture_path("hello.dsym"), "dSYM/hello")
+        f.write(get_fixture_path("native", "hello.dsym"), "dSYM/hello")
         f.close()
 
         response = self.client.post(
@@ -104,18 +105,21 @@ class SymbolicatorResolvingIntegrationTest(RelayStoreHelper, TransactionTestCase
         assert response.status_code == 201, response.content
         assert len(response.data) == 1
 
-        with self.feature({"organizations:images-loaded-v2": False}):
-            event = self.post_and_retrieve_event(REAL_RESOLVING_EVENT_DATA)
-
+        event = self.post_and_retrieve_event(REAL_RESOLVING_EVENT_DATA)
         assert event.data["culprit"] == "main"
-        insta_snapshot_stacktrace_data(self, event.data)
+
+        candidates = event.data["debug_meta"]["images"][0]["candidates"]
+        redact_location(candidates)
+        event.data["debug_meta"]["images"][0]["candidates"] = candidates
+
+        insta_snapshot_native_stacktrace_data(self, event.data)
 
     def test_debug_id_resolving(self):
         file = File.objects.create(
             name="crash.pdb", type="default", headers={"Content-Type": "text/x-breakpad"}
         )
 
-        path = get_fixture_path("windows.sym")
+        path = get_fixture_path("native", "windows.sym")
         with open(path, "rb") as f:
             file.putfile(f)
 
@@ -164,18 +168,21 @@ class SymbolicatorResolvingIntegrationTest(RelayStoreHelper, TransactionTestCase
             "timestamp": iso_format(before_now(seconds=1)),
         }
 
-        with self.feature({"organizations:images-loaded-v2": False}):
-            event = self.post_and_retrieve_event(event_data)
+        event = self.post_and_retrieve_event(event_data)
         assert event.data["culprit"] == "main"
-        insta_snapshot_stacktrace_data(self, event.data)
+
+        candidates = event.data["debug_meta"]["images"][0]["candidates"]
+        redact_location(candidates)
+        event.data["debug_meta"]["images"][0]["candidates"] = candidates
+
+        insta_snapshot_native_stacktrace_data(self, event.data)
 
     def test_missing_dsym(self):
         self.login_as(user=self.user)
 
-        with self.feature({"organizations:images-loaded-v2": False}):
-            event = self.post_and_retrieve_event(REAL_RESOLVING_EVENT_DATA)
+        event = self.post_and_retrieve_event(REAL_RESOLVING_EVENT_DATA)
         assert event.data["culprit"] == "unknown"
-        insta_snapshot_stacktrace_data(self, event.data)
+        insta_snapshot_native_stacktrace_data(self, event.data)
 
     def test_missing_debug_images(self):
         self.login_as(user=self.user)
@@ -183,10 +190,9 @@ class SymbolicatorResolvingIntegrationTest(RelayStoreHelper, TransactionTestCase
         payload = dict(project=self.project.id, **REAL_RESOLVING_EVENT_DATA)
         del payload["debug_meta"]
 
-        with self.feature({"organizations:images-loaded-v2": False}):
-            event = self.post_and_retrieve_event(payload)
+        event = self.post_and_retrieve_event(payload)
         assert event.data["culprit"] == "unknown"
-        insta_snapshot_stacktrace_data(self, event.data)
+        insta_snapshot_native_stacktrace_data(self, event.data)
 
     def test_resolving_with_candidates_sentry_source(self):
         # Checks the candidates with a sentry source URI for location
@@ -194,7 +200,7 @@ class SymbolicatorResolvingIntegrationTest(RelayStoreHelper, TransactionTestCase
             name="crash.pdb", type="default", headers={"Content-Type": "text/x-breakpad"}
         )
 
-        path = get_fixture_path("windows.sym")
+        path = get_fixture_path("native", "windows.sym")
         with open(path, "rb") as f:
             file.putfile(f)
 
@@ -239,26 +245,9 @@ class SymbolicatorResolvingIntegrationTest(RelayStoreHelper, TransactionTestCase
             "timestamp": iso_format(before_now(seconds=1)),
         }
 
-        with self.feature("organizations:images-loaded-v2"):
-            event = self.post_and_retrieve_event(event_data)
+        event = self.post_and_retrieve_event(event_data)
         assert event.data["culprit"] == "main"
 
         candidates = event.data["debug_meta"]["images"][0]["candidates"]
         redact_location(candidates)
         self.insta_snapshot(candidates)
-
-
-def redact_location(candidates):
-    """Redacts the sentry location URI to be independent of the specific ID.
-
-    This modifies the data passed in, returns None.
-    """
-    location_re = re.compile("^sentry://project_debug_file/[0-9]+$")
-    for candidate in candidates:
-        try:
-            location = candidate["location"]
-        except KeyError:
-            continue
-        else:
-            if location_re.search(location):
-                candidate["location"] = "sentry://project_debug_file/x"

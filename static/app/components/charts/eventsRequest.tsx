@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {PureComponent} from 'react';
 import isEqual from 'lodash/isEqual';
 import omitBy from 'lodash/omitBy';
 
@@ -21,7 +21,13 @@ import {
 } from 'sentry/types';
 import {Series, SeriesDataUnit} from 'sentry/types/echarts';
 import {defined} from 'sentry/utils';
-import {stripEquationPrefix} from 'sentry/utils/discover/fields';
+import {DURATION_UNITS, SIZE_UNITS} from 'sentry/utils/discover/fieldRenderers';
+import {
+  AggregationOutputType,
+  getAggregateAlias,
+  stripEquationPrefix,
+} from 'sentry/utils/discover/fields';
+import {DiscoverDatasets} from 'sentry/utils/discover/types';
 import {QueryBatching} from 'sentry/utils/performance/contexts/genericQueryBatcher';
 
 export type TimeSeriesData = {
@@ -34,7 +40,9 @@ export type TimeSeriesData = {
   timeframe?: {end: number; start: number};
   // timeseries data
   timeseriesData?: Series[];
+  timeseriesResultsTypes?: Record<string, AggregationOutputType>;
   timeseriesTotals?: {count: number};
+  yAxis?: string | string[];
 };
 
 type LoadingStatus = {
@@ -124,9 +132,17 @@ type EventsRequestPartialProps = {
    */
   confirmedQuery?: boolean;
   /**
-   * Name used for display current series data set tooltip
+   * Name used for display current series dataset tooltip
    */
   currentSeriesNames?: string[];
+  /**
+   * Optional callback to further process raw events request response data
+   */
+  dataLoadedCallback?: (any: EventsStats | MultiSeriesEventsStats | null) => void;
+  /**
+   * Specify the dataset to query from. Defaults to discover.
+   */
+  dataset?: DiscoverDatasets;
   /**
    * List of environments to query
    */
@@ -140,11 +156,11 @@ type EventsRequestPartialProps = {
    */
   field?: string[];
   /**
-   * Allows overridding the pathname.
+   * Allows overriding the pathname.
    */
   generatePathname?: (org: OrganizationSummary) => string;
   /**
-   * Hide error toast (used for pages which also query eventsV2). Stops error appearing as a toast.
+   * Hide error toast (used for pages which also query discover). Stops error appearing as a toast.
    */
   hideError?: boolean;
   /**
@@ -231,7 +247,7 @@ const propNamesToIgnore = [
 const omitIgnoredProps = (props: EventsRequestProps) =>
   omitBy(props, (_value, key) => propNamesToIgnore.includes(key));
 
-class EventsRequest extends React.PureComponent<EventsRequestProps, EventsRequestState> {
+class EventsRequest extends PureComponent<EventsRequestProps, EventsRequestState> {
   static defaultProps: DefaultProps = {
     period: undefined,
     start: null,
@@ -326,17 +342,20 @@ class EventsRequest extends React.PureComponent<EventsRequestProps, EventsReques
       timeseriesData,
       fetchedWithPrevious: props.includePrevious,
     });
+    if (props.dataLoadedCallback) {
+      props.dataLoadedCallback(timeseriesData);
+    }
   };
 
   /**
-   * Retrieves data set for the current period (since data can potentially
+   * Retrieves dataset for the current period (since data can potentially
    * contain previous period's data), as well as the previous period if
    * possible.
    *
    * Returns `null` if data does not exist
    */
   getData = (
-    data: EventsStatsData
+    data: EventsStatsData = []
   ): {current: EventsStatsData; previous: EventsStatsData | null} => {
     const {fetchedWithPrevious} = this.state;
     const {period, includePrevious} = this.props;
@@ -404,13 +423,24 @@ class EventsRequest extends React.PureComponent<EventsRequestProps, EventsReques
   /**
    * Transforms query response into timeseries data to be used in a chart
    */
-  transformTimeseriesData(data: EventsStatsData, seriesName?: string): Series[] {
+  transformTimeseriesData(
+    data: EventsStatsData,
+    meta: EventsStats['meta'],
+    seriesName?: string
+  ): Series[] {
+    let scale = 1;
+    if (seriesName) {
+      const unit = meta?.units?.[getAggregateAlias(seriesName)];
+      // Scale series values to milliseconds or bytes depending on units from meta
+      scale = (unit && (DURATION_UNITS[unit] ?? SIZE_UNITS[unit])) ?? 1;
+    }
+
     return [
       {
         seriesName: seriesName || 'Current',
         data: data.map(([timestamp, countsForTimestamp]) => ({
           name: timestamp * 1000,
-          value: countsForTimestamp.reduce((acc, {count}) => acc + count, 0),
+          value: countsForTimestamp.reduce((acc, {count}) => acc + count, 0) * scale,
         })),
       },
     ];
@@ -435,7 +465,7 @@ class EventsRequest extends React.PureComponent<EventsRequestProps, EventsReques
   }
 
   processData(response: EventsStats, seriesIndex: number = 0, seriesName?: string) {
-    const {data, isMetricsData, totals} = response;
+    const {data, isMetricsData, totals, meta} = response;
     const {
       includeTransformedData,
       includeTimeAggregation,
@@ -448,6 +478,7 @@ class EventsRequest extends React.PureComponent<EventsRequestProps, EventsReques
     const transformedData = includeTransformedData
       ? this.transformTimeseriesData(
           current,
+          meta,
           seriesName ?? currentSeriesNames?.[seriesIndex]
         )
       : [];
@@ -479,7 +510,8 @@ class EventsRequest extends React.PureComponent<EventsRequestProps, EventsReques
               end: response.end * 1000,
             }
         : undefined;
-    return {
+
+    const processedData = {
       data: transformedData,
       comparisonData: transformedComparisonData,
       allData: data,
@@ -491,11 +523,13 @@ class EventsRequest extends React.PureComponent<EventsRequestProps, EventsReques
       timeAggregatedData,
       timeframe,
     };
+
+    return processedData;
   }
 
   render() {
     const {children, showLoading, ...props} = this.props;
-    const {topEvents} = this.props;
+    const {topEvents, yAxis} = this.props;
     const {timeseriesData, reloading, errored, errorMessage} = this.state;
     // Is "loading" if data is null
     const loading = this.props.loading || timeseriesData === null;
@@ -540,6 +574,13 @@ class EventsRequest extends React.PureComponent<EventsRequestProps, EventsReques
           }
         )
         .sort((a, b) => a[0] - b[0]);
+      const timeseriesResultsTypes: Record<string, AggregationOutputType> = {};
+      Object.keys(timeseriesData).forEach(key => {
+        const fieldsMeta = timeseriesData[key].meta?.fields[getAggregateAlias(key)];
+        if (fieldsMeta) {
+          timeseriesResultsTypes[key] = fieldsMeta;
+        }
+      });
       const results: Series[] = sortedTimeseriesData.map(item => {
         return item[1];
       });
@@ -560,11 +601,18 @@ class EventsRequest extends React.PureComponent<EventsRequestProps, EventsReques
         timeframe,
         previousTimeseriesData,
         seriesAdditionalInfo,
+        timeseriesResultsTypes,
         // sometimes we want to reference props that were given to EventsRequest
         ...props,
       });
     }
     if (timeseriesData) {
+      const yAxisKey = yAxis && (typeof yAxis === 'string' ? yAxis : yAxis[0]);
+      const yAxisFieldType =
+        yAxisKey && timeseriesData.meta?.fields[getAggregateAlias(yAxisKey)];
+      const timeseriesResultsTypes = yAxisFieldType
+        ? {[yAxisKey]: yAxisFieldType}
+        : undefined;
       const {
         data: transformedTimeseriesData,
         comparisonData: transformedComparisonTimeseriesData,
@@ -601,6 +649,7 @@ class EventsRequest extends React.PureComponent<EventsRequestProps, EventsReques
           : previousTimeseriesData,
         timeAggregatedData,
         timeframe,
+        timeseriesResultsTypes,
         // sometimes we want to reference props that were given to EventsRequest
         ...props,
       });

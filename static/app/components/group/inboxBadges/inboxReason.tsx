@@ -1,22 +1,15 @@
-import * as React from 'react';
+import {Fragment} from 'react';
+import {Theme} from '@emotion/react';
 import styled from '@emotion/styled';
 
 import DateTime from 'sentry/components/dateTime';
 import Tag from 'sentry/components/tag';
-import TimeSince, {getRelativeDate} from 'sentry/components/timeSince';
+import TimeSince from 'sentry/components/timeSince';
 import {t, tct} from 'sentry/locale';
-import {InboxDetails} from 'sentry/types';
+import {GroupInboxReason, InboxDetails} from 'sentry/types';
 import {getDuration} from 'sentry/utils/formatters';
 import getDynamicText from 'sentry/utils/getDynamicText';
-import {Theme} from 'sentry/utils/theme';
-
-const GroupInboxReason = {
-  NEW: 0,
-  UNIGNORED: 1,
-  REGRESSION: 2,
-  MANUAL: 3,
-  REPROCESSED: 4,
-};
+import useOrganization from 'sentry/utils/useOrganization';
 
 type Props = {
   inbox: InboxDetails;
@@ -28,9 +21,12 @@ type Props = {
 const EVENT_ROUND_LIMIT = 1000;
 
 function InboxReason({inbox, fontSize = 'sm', showDateAdded}: Props) {
+  const organization = useOrganization();
   const {reason, reason_details: reasonDetails, date_added: dateAdded} = inbox;
   const relativeDateAdded = getDynamicText({
-    value: dateAdded && getRelativeDate(dateAdded, 'ago', true),
+    value: dateAdded && (
+      <TimeSince date={dateAdded} disabledAbsoluteTooltip unitStyle="short" />
+    ),
     fixed: '3s ago',
   });
 
@@ -95,21 +91,19 @@ function InboxReason({inbox, fontSize = 'sm', showDateAdded}: Props) {
     tooltipDescription?: string | React.ReactNode;
     tooltipText?: string;
   } {
+    const hasEscalatingIssues = organization.features.includes('escalating-issues-ui');
     switch (reason) {
       case GroupInboxReason.UNIGNORED:
         return {
           tagType: 'default',
           reasonBadgeText: t('Unignored'),
           tooltipText:
-            dateAdded &&
-            t('Unignored %(relative)s', {
-              relative: relativeDateAdded,
-            }),
+            dateAdded && t('Unignored %(relative)s', {relative: relativeDateAdded}),
           tooltipDescription: getTooltipDescription(),
         };
       case GroupInboxReason.REGRESSION:
         return {
-          tagType: 'error',
+          tagType: hasEscalatingIssues ? 'highlight' : 'error',
           reasonBadgeText: t('Regression'),
           tooltipText:
             dateAdded &&
@@ -139,6 +133,16 @@ function InboxReason({inbox, fontSize = 'sm', showDateAdded}: Props) {
               relative: relativeDateAdded,
             }),
         };
+      case GroupInboxReason.ESCALATING:
+        return {
+          tagType: 'error',
+          reasonBadgeText: t('Escalating'),
+          tooltipText:
+            dateAdded &&
+            t('Escalating %(relative)s', {
+              relative: relativeDateAdded,
+            }),
+        };
       case GroupInboxReason.NEW:
       default:
         return {
@@ -155,13 +159,16 @@ function InboxReason({inbox, fontSize = 'sm', showDateAdded}: Props) {
 
   const {tooltipText, tooltipDescription, reasonBadgeText, tagType} = getReasonDetails();
 
+  const disabledMarkReviewed = organization.features.includes('remove-mark-reviewed');
   const tooltip = (tooltipText || tooltipDescription) && (
     <TooltipWrapper>
       {tooltipText && <div>{tooltipText}</div>}
       {tooltipDescription && (
         <TooltipDescription>{tooltipDescription}</TooltipDescription>
       )}
-      <TooltipDescription>Mark Reviewed to remove this label</TooltipDescription>
+      {disabledMarkReviewed ? null : (
+        <TooltipDescription>{t('Mark Reviewed to remove this label')}</TooltipDescription>
+      )}
     </TooltipWrapper>
   );
 
@@ -169,10 +176,15 @@ function InboxReason({inbox, fontSize = 'sm', showDateAdded}: Props) {
     <StyledTag type={tagType} tooltipText={tooltip} fontSize={fontSize}>
       {reasonBadgeText}
       {showDateAdded && dateAdded && (
-        <React.Fragment>
+        <Fragment>
           <Separator type={tagType ?? 'default'}>{' | '}</Separator>
-          <TimeSince date={dateAdded} suffix="" extraShort disabledAbsoluteTooltip />
-        </React.Fragment>
+          <TimeSince
+            date={dateAdded}
+            suffix=""
+            unitStyle="extraShort"
+            disabledAbsoluteTooltip
+          />
+        </Fragment>
       )}
     </StyledTag>
   );

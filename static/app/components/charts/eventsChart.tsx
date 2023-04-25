@@ -1,9 +1,10 @@
 import * as React from 'react';
 import {InjectedRouter} from 'react-router';
-import {withTheme} from '@emotion/react';
+import {Theme, withTheme} from '@emotion/react';
 import type {
   EChartsOption,
   LegendComponentOption,
+  LineSeriesOption,
   XAXisComponentOption,
   YAXisComponentOption,
 } from 'echarts';
@@ -30,15 +31,21 @@ import {t} from 'sentry/locale';
 import {DateString, OrganizationSummary} from 'sentry/types';
 import {Series} from 'sentry/types/echarts';
 import {defined} from 'sentry/utils';
-import {axisLabelFormatter, tooltipFormatter} from 'sentry/utils/discover/charts';
+import {
+  axisLabelFormatter,
+  axisLabelFormatterUsingAggregateOutputType,
+  tooltipFormatter,
+} from 'sentry/utils/discover/charts';
 import {TableDataWithTitle} from 'sentry/utils/discover/discoverQuery';
 import {
   aggregateMultiPlotType,
+  aggregateOutputType,
+  AggregationOutputType,
   getEquation,
   isEquation,
 } from 'sentry/utils/discover/fields';
+import {DiscoverDatasets} from 'sentry/utils/discover/types';
 import {decodeList} from 'sentry/utils/queryString';
-import {Theme} from 'sentry/utils/theme';
 
 import EventsGeoRequest from './eventsGeoRequest';
 import EventsRequest from './eventsRequest';
@@ -60,6 +67,7 @@ type ChartProps = {
   timeseriesData: Series[];
   yAxis: string;
   zoomRenderProps: ZoomRenderProps;
+  additionalSeries?: LineSeriesOption[];
   chartComponent?: ChartComponent;
   chartOptions?: Omit<EChartsOption, 'xAxis' | 'yAxis'> & {
     xAxis?: XAXisComponentOption;
@@ -88,6 +96,7 @@ type ChartProps = {
   showDaily?: boolean;
   showLegend?: boolean;
   timeframe?: {end: number; start: number};
+  timeseriesResultsTypes?: Record<string, AggregationOutputType>;
   topEvents?: number;
 };
 
@@ -119,7 +128,8 @@ class Chart extends React.Component<ChartProps, State> {
       isEqual(this.props.timeseriesData, nextProps.timeseriesData) &&
       isEqual(this.props.releaseSeries, nextProps.releaseSeries) &&
       isEqual(this.props.previousTimeseriesData, nextProps.previousTimeseriesData) &&
-      isEqual(this.props.tableData, nextProps.tableData)
+      isEqual(this.props.tableData, nextProps.tableData) &&
+      isEqual(this.props.additionalSeries, nextProps.additionalSeries)
     ) {
       return false;
     }
@@ -194,6 +204,8 @@ class Chart extends React.Component<ChartProps, State> {
       topEvents,
       tableData,
       fromDiscover,
+      timeseriesResultsTypes,
+      additionalSeries,
       ...props
     } = this.props;
     const {seriesSelection} = this.state;
@@ -219,6 +231,7 @@ class Chart extends React.Component<ChartProps, State> {
     const data = [
       ...(currentSeriesNames.length > 0 ? currentSeriesNames : [t('Current')]),
       ...(previousSeriesNames.length > 0 ? previousSeriesNames : [t('Previous')]),
+      ...(additionalSeries ? additionalSeries.map(series => series.name as string) : []),
     ];
 
     const releasesLegend = t('Releases');
@@ -291,7 +304,19 @@ class Chart extends React.Component<ChartProps, State> {
       tooltip: {
         trigger: 'axis' as const,
         truncate: 80,
-        valueFormatter: (value: number) => tooltipFormatter(value, yAxis),
+        valueFormatter: (value: number, label?: string) => {
+          const aggregateName = label
+            ?.replace(/^previous /, '')
+            .split(':')
+            .pop()
+            ?.trim();
+          if (aggregateName) {
+            return timeseriesResultsTypes
+              ? tooltipFormatter(value, timeseriesResultsTypes[aggregateName])
+              : tooltipFormatter(value, aggregateOutputType(aggregateName));
+          }
+          return tooltipFormatter(value, 'number');
+        },
       },
       xAxis: timeframe
         ? {
@@ -302,7 +327,17 @@ class Chart extends React.Component<ChartProps, State> {
       yAxis: {
         axisLabel: {
           color: theme.chartLabel,
-          formatter: (value: number) => axisLabelFormatter(value, yAxis),
+          formatter: (value: number) => {
+            if (timeseriesResultsTypes) {
+              // Check to see if all series output types are the same. If not, then default to number.
+              const outputType =
+                new Set(Object.values(timeseriesResultsTypes)).size === 1
+                  ? timeseriesResultsTypes[yAxis]
+                  : 'number';
+              return axisLabelFormatterUsingAggregateOutputType(value, outputType);
+            }
+            return axisLabelFormatter(value, aggregateOutputType(yAxis));
+          },
         },
       },
       ...(chartOptionsProp ?? {}),
@@ -319,6 +354,7 @@ class Chart extends React.Component<ChartProps, State> {
         series={series}
         previousPeriod={previousSeries ? previousSeries : undefined}
         height={height}
+        additionalSeries={additionalSeries}
       />
     );
   }
@@ -354,6 +390,7 @@ export type EventsChartProps = {
    * The aggregate/metric to plot.
    */
   yAxis: string | string[];
+  additionalSeries?: LineSeriesOption[];
   /**
    * Markup for optional chart header
    */
@@ -367,6 +404,10 @@ export type EventsChartProps = {
    * Name of the series
    */
   currentSeriesName?: string;
+  /**
+   * Specifies the dataset to query from. Defaults to discover.
+   */
+  dataset?: DiscoverDatasets;
   /**
    * Don't show the previous period's data. Will automatically disable
    * when start/end are used.
@@ -389,6 +430,10 @@ export type EventsChartProps = {
    */
   interval?: string;
   /**
+   * Whether or not the request for processed baseline data has been resolved/terminated
+   */
+  loadingAdditionalSeries?: boolean;
+  /**
    * Order condition when showing topEvents
    */
   orderby?: string;
@@ -406,6 +451,7 @@ export type EventsChartProps = {
    */
   referrer?: string;
   releaseQueryExtra?: Query;
+  reloadingAdditionalSeries?: boolean;
   /**
    * Override the interval calculation and show daily results.
    */
@@ -451,6 +497,7 @@ type ChartDataProps = {
   tableData?: TableDataWithTitle[];
   timeframe?: {end: number; start: number};
   timeseriesData?: Series[];
+  timeseriesResultsTypes?: Record<string, AggregationOutputType>;
   topEvents?: number;
 };
 
@@ -503,6 +550,10 @@ class EventsChart extends React.Component<EventsChartProps> {
       height,
       withoutZerofill,
       fromDiscover,
+      additionalSeries,
+      loadingAdditionalSeries,
+      reloadingAdditionalSeries,
+      dataset,
       ...props
     } = this.props;
 
@@ -536,6 +587,7 @@ class EventsChart extends React.Component<EventsChartProps> {
       previousTimeseriesData,
       timeframe,
       tableData,
+      timeseriesResultsTypes,
     }: ChartDataProps) => {
       if (errored) {
         return (
@@ -549,17 +601,17 @@ class EventsChart extends React.Component<EventsChartProps> {
       return (
         <TransitionChart
           loading={loading}
-          reloading={reloading}
+          reloading={reloading || !!reloadingAdditionalSeries}
           height={height ? `${height}px` : undefined}
         >
-          <TransparentLoadingMask visible={reloading} />
+          <TransparentLoadingMask visible={reloading || !!reloadingAdditionalSeries} />
 
           {React.isValidElement(chartHeader) && chartHeader}
 
           <ThemedChart
             zoomRenderProps={zoomRenderProps}
-            loading={loading}
-            reloading={reloading}
+            loading={loading || !!loadingAdditionalSeries}
+            reloading={reloading || !!reloadingAdditionalSeries}
             showLegend={showLegend}
             minutesThresholdToDisplaySeconds={minutesThresholdToDisplaySeconds}
             releaseSeries={releaseSeries || []}
@@ -568,6 +620,7 @@ class EventsChart extends React.Component<EventsChartProps> {
             currentSeriesNames={currentSeriesNames}
             previousSeriesNames={previousSeriesNames}
             seriesTransformer={seriesTransformer}
+            additionalSeries={additionalSeries}
             previousSeriesTransformer={previousSeriesTransformer}
             stacked={this.isStacked()}
             yAxis={yAxisArray[0]}
@@ -582,6 +635,7 @@ class EventsChart extends React.Component<EventsChartProps> {
             topEvents={topEvents}
             tableData={tableData ?? []}
             fromDiscover={fromDiscover}
+            timeseriesResultsTypes={timeseriesResultsTypes}
           />
         </TransitionChart>
       );
@@ -631,6 +685,7 @@ class EventsChart extends React.Component<EventsChartProps> {
                 end={end}
                 environments={environments}
                 referrer={props.referrer}
+                dataset={dataset}
               >
                 {({errored, loading, reloading, tableData}) =>
                   chartImplementation({
@@ -667,6 +722,7 @@ class EventsChart extends React.Component<EventsChartProps> {
               partial
               // Cannot do interpolation when stacking series
               withoutZerofill={withoutZerofill && !this.isStacked()}
+              dataset={dataset}
             >
               {eventData => {
                 return chartImplementation({

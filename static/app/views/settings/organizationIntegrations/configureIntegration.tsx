@@ -2,8 +2,12 @@ import {Fragment} from 'react';
 import {RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
 
-import Alert from 'sentry/components/alert';
-import Button from 'sentry/components/button';
+import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
+import {Client} from 'sentry/api';
+import Access from 'sentry/components/acl/access';
+import {Alert} from 'sentry/components/alert';
+import {Button} from 'sentry/components/button';
+import Confirm from 'sentry/components/confirm';
 import Form from 'sentry/components/forms/form';
 import JsonForm from 'sentry/components/forms/jsonForm';
 import List from 'sentry/components/list';
@@ -11,29 +15,37 @@ import ListItem from 'sentry/components/list/listItem';
 import NavTabs from 'sentry/components/navTabs';
 import {IconAdd, IconArrow} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {IntegrationProvider, IntegrationWithConfig, Organization} from 'sentry/types';
+import {
+  IntegrationProvider,
+  IntegrationWithConfig,
+  Organization,
+  PluginWithProjectList,
+} from 'sentry/types';
 import {trackIntegrationAnalytics} from 'sentry/utils/integrationUtil';
 import {singleLineRenderer} from 'sentry/utils/marked';
+import withApi from 'sentry/utils/withApi';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 import withOrganization from 'sentry/utils/withOrganization';
 import AsyncView from 'sentry/views/asyncView';
-import AddIntegration from 'sentry/views/organizationIntegrations/addIntegration';
-import IntegrationAlertRules from 'sentry/views/organizationIntegrations/integrationAlertRules';
-import IntegrationCodeMappings from 'sentry/views/organizationIntegrations/integrationCodeMappings';
-import IntegrationExternalTeamMappings from 'sentry/views/organizationIntegrations/integrationExternalTeamMappings';
-import IntegrationExternalUserMappings from 'sentry/views/organizationIntegrations/integrationExternalUserMappings';
-import IntegrationItem from 'sentry/views/organizationIntegrations/integrationItem';
-import IntegrationMainSettings from 'sentry/views/organizationIntegrations/integrationMainSettings';
-import IntegrationRepos from 'sentry/views/organizationIntegrations/integrationRepos';
-import IntegrationServerlessFunctions from 'sentry/views/organizationIntegrations/integrationServerlessFunctions';
 import BreadcrumbTitle from 'sentry/views/settings/components/settingsBreadcrumb/breadcrumbTitle';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
 
+import AddIntegration from './addIntegration';
+import IntegrationAlertRules from './integrationAlertRules';
+import IntegrationCodeMappings from './integrationCodeMappings';
+import IntegrationExternalTeamMappings from './integrationExternalTeamMappings';
+import IntegrationExternalUserMappings from './integrationExternalUserMappings';
+import IntegrationItem from './integrationItem';
+import IntegrationMainSettings from './integrationMainSettings';
+import IntegrationRepos from './integrationRepos';
+import IntegrationServerlessFunctions from './integrationServerlessFunctions';
+
 type RouteParams = {
   integrationId: string;
-  orgId: string;
   providerKey: string;
 };
 type Props = RouteComponentProps<RouteParams, {}> & {
+  api: Client;
   organization: Organization;
 };
 
@@ -42,15 +54,22 @@ type Tab = 'repos' | 'codeMappings' | 'userMappings' | 'teamMappings' | 'setting
 type State = AsyncView['state'] & {
   config: {providers: IntegrationProvider[]};
   integration: IntegrationWithConfig;
+  plugins: PluginWithProjectList[] | null;
   tab?: Tab;
 };
+
 class ConfigureIntegration extends AsyncView<Props, State> {
   getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
-    const {orgId, integrationId} = this.props.params;
+    const {organization} = this.props;
+    const {integrationId} = this.props.params;
 
     return [
-      ['config', `/organizations/${orgId}/config/integrations/`],
-      ['integration', `/organizations/${orgId}/integrations/${integrationId}/`],
+      ['config', `/organizations/${organization.slug}/config/integrations/`],
+      [
+        'integration',
+        `/organizations/${organization.slug}/integrations/${integrationId}/`,
+      ],
+      ['plugins', `/organizations/${organization.slug}/plugins/configs/`],
     ];
   }
 
@@ -59,13 +78,16 @@ class ConfigureIntegration extends AsyncView<Props, State> {
       location,
       router,
       organization,
-      params: {orgId, providerKey},
+      params: {providerKey},
     } = this.props;
-    // This page should not be accessible by members
-    if (!organization.access.includes('org:integrations')) {
-      router.push({
-        pathname: `/settings/${orgId}/integrations/${providerKey}/`,
-      });
+    // This page should not be accessible by members (unless its github or gitlab)
+    const allowMemberConfiguration = ['github', 'gitlab'].includes(providerKey);
+    if (!allowMemberConfiguration && !organization.access.includes('org:integrations')) {
+      router.push(
+        normalizeUrl({
+          pathname: `/settings/${organization.slug}/integrations/${providerKey}/`,
+        })
+      );
     }
     const value =
       (['codeMappings', 'userMappings', 'teamMappings'] as const).find(
@@ -126,8 +148,37 @@ class ConfigureIntegration extends AsyncView<Props, State> {
     this.setState(this.getDefaultState(), this.fetchData);
   };
 
+  handleJiraMigration = async () => {
+    try {
+      const {
+        organization,
+        params: {integrationId},
+      } = this.props;
+
+      await this.api.requestPromise(
+        `/organizations/${organization.slug}/integrations/${integrationId}/issues/`,
+        {
+          method: 'PUT',
+          data: {},
+        }
+      );
+      this.setState(
+        {
+          plugins: (this.state.plugins || []).filter(({id}) => id === 'jira'),
+        },
+        () => addSuccessMessage(t('Migration in progress.'))
+      );
+    } catch (error) {
+      addErrorMessage(t('Something went wrong! Please try again.'));
+    }
+  };
   getAction = (provider: IntegrationProvider | undefined) => {
-    const {integration} = this.state;
+    const {integration, plugins} = this.state;
+    const shouldMigrateJiraPlugin =
+      provider &&
+      ['jira', 'jira_server'].includes(provider.key) &&
+      (plugins || []).find(({id}) => id === 'jira');
+
     const action =
       provider && provider.key === 'pagerduty' ? (
         <AddIntegration
@@ -139,7 +190,7 @@ class ConfigureIntegration extends AsyncView<Props, State> {
           {onClick => (
             <Button
               priority="primary"
-              size="small"
+              size="sm"
               icon={<IconAdd size="xs" isCircled />}
               onClick={() => onClick()}
             >
@@ -147,6 +198,41 @@ class ConfigureIntegration extends AsyncView<Props, State> {
             </Button>
           )}
         </AddIntegration>
+      ) : shouldMigrateJiraPlugin ? (
+        <Access access={['org:integrations']}>
+          {({hasAccess}) => (
+            <Confirm
+              disabled={!hasAccess}
+              header="Migrate Linked Issues from Jira Plugins"
+              renderMessage={() => (
+                <Fragment>
+                  <p>
+                    {t(
+                      'This will automatically associate all the Linked Issues of your Jira Plugins to this integration.'
+                    )}
+                  </p>
+                  <p>
+                    {t(
+                      'If the Jira Plugins had the option checked to automatically create a Jira ticket for every new Sentry issue checked, you will need to create alert rules to recreate this behavior. Jira Server does not have this feature.'
+                    )}
+                  </p>
+                  <p>
+                    {t(
+                      'Once the migration is complete, your Jira Plugins will be disabled.'
+                    )}
+                  </p>
+                </Fragment>
+              )}
+              onConfirm={() => {
+                this.handleJiraMigration();
+              }}
+            >
+              <Button priority="primary" size="md" disabled={!hasAccess}>
+                {t('Migrate Plugin')}
+              </Button>
+            </Confirm>
+          )}
+        </Access>
       ) : null;
 
     return action;
@@ -154,7 +240,7 @@ class ConfigureIntegration extends AsyncView<Props, State> {
 
   // TODO(Steve): Refactor components into separate tabs and use more generic tab logic
   renderMainTab(provider: IntegrationProvider) {
-    const {orgId} = this.props.params;
+    const {organization} = this.props;
     const {integration} = this.state;
 
     const instructions =
@@ -162,8 +248,6 @@ class ConfigureIntegration extends AsyncView<Props, State> {
 
     return (
       <Fragment>
-        <BreadcrumbTitle routes={this.props.routes} title={integration.provider.name} />
-
         {integration.configOrganization.length > 0 && (
           <Form
             hideFooter
@@ -171,7 +255,7 @@ class ConfigureIntegration extends AsyncView<Props, State> {
             allowUndo
             apiMethod="POST"
             initialData={integration.configData || {}}
-            apiEndpoint={`/organizations/${orgId}/integrations/${integration.id}/`}
+            apiEndpoint={`/organizations/${organization.slug}/integrations/${integration.id}/`}
           >
             <JsonForm
               fields={integration.configOrganization}
@@ -234,6 +318,10 @@ class ConfigureIntegration extends AsyncView<Props, State> {
       <Fragment>
         {header}
         {this.renderMainContent(provider)}
+        <BreadcrumbTitle
+          routes={this.props.routes}
+          title={t('Configure %s', integration.provider.name)}
+        />
       </Fragment>
     );
   }
@@ -300,7 +388,7 @@ class ConfigureIntegration extends AsyncView<Props, State> {
   }
 }
 
-export default withOrganization(ConfigureIntegration);
+export default withOrganization(withApi(ConfigureIntegration));
 
 const CapitalizedLink = styled('a')`
   text-transform: capitalize;

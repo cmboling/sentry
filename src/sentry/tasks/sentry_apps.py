@@ -1,14 +1,25 @@
+from __future__ import annotations
+
 import logging
+from typing import Any, Mapping
 
-from celery.task import current
+# XXX(mdtro): backwards compatible imports for celery 4.4.7, remove after upgrade to 5.2.7
+import celery
+
+from sentry.tasks.sentry_functions import send_sentry_function_webhook
+
+if celery.version_info >= (5, 2):
+    from celery import current_task
+else:
+    from celery.task import current as current_task
+
 from django.urls import reverse
-from requests.exceptions import ConnectionError, RequestException, Timeout
+from requests.exceptions import RequestException
 
-from sentry import analytics
+from sentry import analytics, features
 from sentry.api.serializers import AppPlatformEvent, serialize
 from sentry.constants import SentryAppInstallationStatus
-from sentry.eventstore.models import Event
-from sentry.http import safe_urlopen
+from sentry.eventstore.models import Event, GroupEvent
 from sentry.models import (
     Activity,
     Group,
@@ -16,17 +27,17 @@ from sentry.models import (
     Project,
     SentryApp,
     SentryAppInstallation,
+    SentryFunction,
     ServiceHook,
     ServiceHookProject,
     User,
 )
-from sentry.models.integrations.sentry_app import VALID_EVENTS, track_response_code
+from sentry.models.integrations.sentry_app import VALID_EVENTS
 from sentry.shared_integrations.exceptions import ApiHostError, ApiTimeoutError, ClientError
 from sentry.tasks.base import instrumented_task, retry
 from sentry.utils import metrics
-from sentry.utils.compat import filter
 from sentry.utils.http import absolute_uri
-from sentry.utils.sentryappwebhookrequests import SentryAppWebhookRequestsBuffer
+from sentry.utils.sentry_apps import send_and_save_webhook_request
 
 logger = logging.getLogger("sentry.tasks.sentry_apps")
 
@@ -38,7 +49,7 @@ TASK_OPTIONS = {
 
 RETRY_OPTIONS = {
     "on": (RequestException, ApiHostError, ApiTimeoutError),
-    "ignore": (ClientError),
+    "ignore": (ClientError,),
 }
 
 # We call some models by a different name, publicly, than their class name.
@@ -78,8 +89,12 @@ def _webhook_event_data(event, group_id, project_id):
 @instrumented_task(name="sentry.tasks.sentry_apps.send_alert_event", **TASK_OPTIONS)
 @retry(**RETRY_OPTIONS)
 def send_alert_event(
-    event, rule, sentry_app_id, additional_payload_key=None, additional_payload=None
-):
+    event: Event,
+    rule: str,
+    sentry_app_id: int,
+    additional_payload_key: str | None = None,
+    additional_payload: Mapping[str, Any] | None = None,
+) -> None:
     """
     When an incident alert is triggered, send incident data to the SentryApp's webhook.
     :param event: The `Event` for which to build a payload.
@@ -108,7 +123,7 @@ def send_alert_event(
 
     try:
         install = SentryAppInstallation.objects.get(
-            organization=organization.id,
+            organization_id=organization.id,
             sentry_app=sentry_app,
             status=SentryAppInstallationStatus.INSTALLED,
         )
@@ -127,19 +142,17 @@ def send_alert_event(
     request_data = AppPlatformEvent(
         resource="event_alert", action="triggered", install=install, data=data
     )
-    try:
-        send_and_save_webhook_request(sentry_app, request_data)
-    except Exception as e:
-        raise e
-    else:
-        # On success, record analytic event for Alert Rule UI Component
-        if request_data.data.get("issue_alert"):
-            analytics.record(
-                "alert_rule_ui_component_webhook.sent",
-                organization_id=organization.id,
-                sentry_app_id=sentry_app_id,
-                event=f"{request_data.resource}.{request_data.action}",
-            )
+
+    send_and_save_webhook_request(sentry_app, request_data)
+
+    # On success, record analytic event for Alert Rule UI Component
+    if request_data.data.get("issue_alert"):
+        analytics.record(
+            "alert_rule_ui_component_webhook.sent",
+            organization_id=organization.id,
+            sentry_app_id=sentry_app_id,
+            event=f"{request_data.resource}.{request_data.action}",
+        )
 
 
 def _process_resource_change(action, sender, instance_id, retryer=None, *args, **kwargs):
@@ -158,9 +171,9 @@ def _process_resource_change(action, sender, instance_id, retryer=None, *args, *
         # Looks up the human name for the model. Defaults to the model name.
         name = RESOURCE_RENAMES.get(model.__name__, model.__name__.lower())
 
-    # By default, use Celery's `current` but allow a value to be passed for the
+    # By default, use Celery's `current_task` but allow a value to be passed for the
     # bound Task.
-    retryer = retryer or current
+    retryer = retryer or current_task
 
     # We may run into a race condition where this task executes before the
     # transaction that creates the Group has committed.
@@ -185,7 +198,7 @@ def _process_resource_change(action, sender, instance_id, retryer=None, *args, *
 
     org = None
 
-    if isinstance(instance, Group) or isinstance(instance, Event):
+    if isinstance(instance, (Group, Event, GroupEvent)):
         org = Organization.objects.get_from_cache(
             id=Project.objects.get_from_cache(id=instance.project_id).organization_id
         )
@@ -199,13 +212,25 @@ def _process_resource_change(action, sender, instance_id, retryer=None, *args, *
 
     for installation in installations:
         data = {}
-        if isinstance(instance, Event):
+        if isinstance(instance, Event) or isinstance(instance, GroupEvent):
             data[name] = _webhook_event_data(instance, instance.group_id, instance.project_id)
         else:
             data[name] = serialize(instance)
 
         # Trigger a new task for each webhook
         send_resource_change_webhook.delay(installation_id=installation.id, event=event, data=data)
+
+    if features.has("organizations:sentry-functions", org):
+        data = {}
+        if not isinstance(instance, Event) and not isinstance(instance, GroupEvent):
+            data[name] = serialize(instance)
+            event_type = event.split(".")[0]
+            # not sending error webhooks as of yet, can be added later
+            for fn in SentryFunction.objects.get_sentry_functions(org, event_type):
+                if event_type == "issue":
+                    send_sentry_function_webhook.delay(
+                        fn.external_id, event, data["issue"]["id"], data
+                    )
 
 
 @instrumented_task("sentry.tasks.process_resource_change_bound", bind=True, **TASK_OPTIONS)
@@ -344,7 +369,10 @@ def notify_sentry_app(event, futures):
             }
 
         send_alert_event.delay(
-            event=event, rule=f.rule.label, sentry_app_id=f.kwargs["sentry_app"].id, **extra_kwargs
+            event=event,
+            rule=f.rule.label,
+            sentry_app_id=f.kwargs["sentry_app"].id,
+            **extra_kwargs,
         )
 
 
@@ -396,76 +424,3 @@ def send_webhooks(installation, event, **kwargs):
             request_data,
             servicehook.sentry_app.webhook_url,
         )
-
-
-def ignore_unpublished_app_errors(func):
-    def wrapper(sentry_app, app_platform_event, url=None):
-        try:
-            return func(sentry_app, app_platform_event, url)
-        except Exception:
-            if sentry_app.is_published:
-                raise
-            else:
-                return
-
-    return wrapper
-
-
-@ignore_unpublished_app_errors
-def send_and_save_webhook_request(sentry_app, app_platform_event, url=None):
-    """
-    Notify a SentryApp's webhook about an incident and log response on redis.
-
-    :param sentry_app: The SentryApp to notify via a webhook.
-    :param app_platform_event: Incident data. See AppPlatformEvent.
-    :param url: The URL to hit for this webhook if it is different from `sentry_app.webhook_url`.
-    :return: Webhook response
-    """
-    buffer = SentryAppWebhookRequestsBuffer(sentry_app)
-
-    org_id = app_platform_event.install.organization_id
-    event = f"{app_platform_event.resource}.{app_platform_event.action}"
-    slug = sentry_app.slug_for_metrics
-    url = url or sentry_app.webhook_url
-    try:
-        resp = safe_urlopen(
-            url=url, data=app_platform_event.body, headers=app_platform_event.headers, timeout=5
-        )
-    except (Timeout, ConnectionError) as e:
-        error_type = e.__class__.__name__.lower()
-        logger.info(
-            "send_and_save_webhook_request.timeout",
-            extra={
-                "error_type": error_type,
-                "organization_id": org_id,
-                "integration_slug": sentry_app.slug,
-            },
-        )
-        track_response_code(error_type, slug, event)
-        # Response code of 0 represents timeout
-        buffer.add_request(response_code=0, org_id=org_id, event=event, url=url)
-        # Re-raise the exception because some of these tasks might retry on the exception
-        raise
-
-    else:
-        track_response_code(resp.status_code, slug, event)
-        buffer.add_request(
-            response_code=resp.status_code,
-            org_id=org_id,
-            event=event,
-            url=url,
-            error_id=resp.headers.get("Sentry-Hook-Error"),
-            project_id=resp.headers.get("Sentry-Hook-Project"),
-        )
-
-        if resp.status_code == 503:
-            raise ApiHostError.from_request(resp.request)
-
-        elif resp.status_code == 504:
-            raise ApiTimeoutError.from_request(resp.request)
-
-        if 400 <= resp.status_code < 500:
-            raise ClientError(resp.status_code, url, response=resp)
-
-        resp.raise_for_status()
-        return resp

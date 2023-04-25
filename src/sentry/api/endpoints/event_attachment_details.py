@@ -5,6 +5,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import eventstore, features, roles
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint, ProjectPermission
 from sentry.api.serializers import serialize
 from sentry.auth.superuser import is_active_superuser
@@ -32,19 +33,17 @@ class EventAttachmentDetailsPermission(ProjectPermission):
         )
 
         try:
-            current_role = (
-                OrganizationMember.objects.filter(organization=organization, user=request.user)
-                .values_list("role", flat=True)
-                .get()
-            )
+            om = OrganizationMember.objects.get(organization=organization, user_id=request.user.id)
         except OrganizationMember.DoesNotExist:
             return False
 
         required_role = roles.get(required_role)
-        current_role = roles.get(current_role)
-        return current_role.priority >= required_role.priority
+        return any(
+            role.priority >= required_role.priority for role in om.get_all_org_roles_sorted()
+        )
 
 
+@region_silo_endpoint
 class EventAttachmentDetailsEndpoint(ProjectEndpoint):
     permission_classes = (EventAttachmentDetailsPermission,)
 

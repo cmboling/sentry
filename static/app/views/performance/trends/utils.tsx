@@ -4,11 +4,11 @@ import moment from 'moment';
 
 import {getInterval} from 'sentry/components/charts/utils';
 import {t} from 'sentry/locale';
-import {Project} from 'sentry/types';
+import {Organization, Project} from 'sentry/types';
 import {Series, SeriesDataUnit} from 'sentry/types/echarts';
 import EventView from 'sentry/utils/discover/eventView';
 import {
-  AggregationKey,
+  AggregationKeyWithAlias,
   Field,
   generateFieldAsString,
   Sort,
@@ -201,7 +201,12 @@ export function generateTrendFunctionAsString(
 ): string {
   return generateFieldAsString({
     kind: 'function',
-    function: [trendFunction as AggregationKey, trendParameter, undefined, undefined],
+    function: [
+      trendFunction as AggregationKeyWithAlias,
+      trendParameter,
+      undefined,
+      undefined,
+    ],
   });
 }
 
@@ -230,6 +235,7 @@ export function modifyTrendView(
   location: Location,
   trendsType: TrendChangeType,
   projects: Project[],
+  organization: Organization,
   isProjectOnly?: boolean
 ) {
   const trendFunction = getCurrentTrendFunction(location);
@@ -256,7 +262,17 @@ export function modifyTrendView(
       trendParameter.column
     );
   }
-  trendView.query = getLimitTransactionItems(trendView.query);
+
+  if (!organization.features.includes('performance-new-trends')) {
+    trendView.query = getLimitTransactionItems(trendView.query);
+  } else {
+    const query = new MutableSearch(trendView.query);
+    // remove metrics-incompatible filters
+    if (query.hasFilter('transaction.duration')) {
+      query.removeFilter('transaction.duration');
+    }
+    trendView.query = query.formatString();
+  }
 
   trendView.interval = getQueryInterval(location, trendView);
 

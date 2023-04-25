@@ -1,4 +1,4 @@
-import {browserHistory, withRouter, WithRouterProps} from 'react-router';
+import {browserHistory} from 'react-router';
 import {useTheme} from '@emotion/react';
 
 import ChartZoom from 'sentry/components/charts/chartZoom';
@@ -16,9 +16,12 @@ import {t} from 'sentry/locale';
 import {DateString, OrganizationSummary} from 'sentry/types';
 import {Series} from 'sentry/types/echarts';
 import {axisLabelFormatter, tooltipFormatter} from 'sentry/utils/discover/charts';
-import {WebVital} from 'sentry/utils/discover/fields';
+import {aggregateOutputType} from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
 import getDynamicText from 'sentry/utils/getDynamicText';
 import useApi from 'sentry/utils/useApi';
+import {useLocation} from 'sentry/utils/useLocation';
+import useRouter from 'sentry/utils/useRouter';
 
 import {replaceSeriesName, transformEventStatsSmoothed} from '../trends/utils';
 import {ViewProps} from '../types';
@@ -26,31 +29,31 @@ import {ViewProps} from '../types';
 import {
   getMaxOfSeries,
   getVitalChartDefinitions,
+  getVitalChartTitle,
   vitalNameFromLocation,
   VitalState,
   vitalStateColors,
 } from './utils';
 
-type Props = WithRouterProps &
-  Omit<ViewProps, 'start' | 'end'> & {
-    end: DateString | null;
-    interval: string;
-    organization: OrganizationSummary;
-    start: DateString | null;
-  };
+type Props = Omit<ViewProps, 'start' | 'end'> & {
+  end: DateString | null;
+  interval: string;
+  organization: OrganizationSummary;
+  start: DateString | null;
+};
 
 function VitalChart({
   project,
   environment,
-  location,
   organization,
   query,
   statsPeriod,
-  router,
   start,
   end,
   interval,
 }: Props) {
+  const location = useLocation();
+  const router = useRouter();
   const api = useApi();
   const theme = useTheme();
 
@@ -86,11 +89,11 @@ function VitalChart({
     <Panel>
       <ChartContainer>
         <HeaderTitleLegend>
-          {t('Duration p75')}
+          {getVitalChartTitle(vitalName)}
           <QuestionTooltip
             size="sm"
             position="top"
-            title={t(`The durations shown should fall under the vital threshold.`)}
+            title={t('The durations shown should fall under the vital threshold.')}
           />
         </HeaderTitleLegend>
         <ChartZoom router={router} period={statsPeriod} start={start} end={end} utc={utc}>
@@ -179,7 +182,7 @@ function VitalChart({
   );
 }
 
-export default withRouter(VitalChart);
+export default VitalChart;
 
 export type _VitalChartProps = {
   field: string;
@@ -224,11 +227,11 @@ export function _VitalChart(props: _VitalChartProps) {
     utc,
     vitalFields,
   } = props;
+  const theme = useTheme();
 
   if (!_results || !vitalFields) {
     return null;
   }
-  const theme = useTheme();
 
   const chartOptions: Omit<LineChartProps, 'series'> = {
     grid,
@@ -240,7 +243,7 @@ export function _VitalChart(props: _VitalChartProps) {
       valueFormatter: (value: number, seriesName?: string) => {
         return tooltipFormatter(
           value,
-          vitalFields[0] === WebVital.CLS ? seriesName : yAxis
+          aggregateOutputType(vitalFields[0] === WebVital.CLS ? seriesName : yAxis)
         );
       },
     },
@@ -252,7 +255,8 @@ export function _VitalChart(props: _VitalChartProps) {
       axisLabel: {
         color: theme.chartLabel,
         showMaxLabel: false,
-        formatter: (value: number) => axisLabelFormatter(value, yAxis),
+        formatter: (value: number) =>
+          axisLabelFormatter(value, aggregateOutputType(yAxis)),
       },
     },
     utc,

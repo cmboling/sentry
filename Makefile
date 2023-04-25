@@ -1,5 +1,11 @@
+.PHONY: all
+all: develop
+
 PIP := python -m pip --disable-pip-version-check
 WEBPACK := yarn build-acceptance
+
+freeze-requirements:
+	@python3 -S -m tools.freeze_requirements
 
 bootstrap \
 develop \
@@ -10,7 +16,6 @@ drop-db \
 create-db \
 apply-migrations \
 reset-db \
-setup-apple-m1 \
 setup-git \
 node-version-check \
 install-js-dev \
@@ -45,7 +50,8 @@ build-api-docs: build-deprecated-docs build-spectacular-docs
 	yarn deref-api-docs
 
 watch-api-docs:
-	@ts-node api-docs/watch.ts
+	@cd api-docs/ && yarn install
+	@cd api-docs/ && ts-node ./watch.ts
 
 diff-api-docs:
 	@echo "--> diffing local api docs against sentry-api-schema/openapi-derefed.json"
@@ -88,7 +94,7 @@ fetch-release-registry:
 
 run-acceptance:
 	@echo "--> Running acceptance tests"
-	pytest tests/acceptance --cov . --cov-report="xml:.artifacts/acceptance.coverage.xml" --junit-xml=".artifacts/acceptance.junit.xml"
+	pytest tests/acceptance --cov . --cov-report="xml:.artifacts/acceptance.coverage.xml"
 	@echo ""
 
 test-cli:
@@ -118,20 +124,31 @@ test-js-ci: node-version-check
 	@yarn run test-ci
 	@echo ""
 
-test-python:
-	@echo "--> Running Python tests"
-	# This gets called by getsentry
-	pytest tests/integration tests/sentry
-
 test-python-ci:
-	make build-platform-assets
 	@echo "--> Running CI Python tests"
-	pytest tests/integration tests/sentry --cov . --cov-report="xml:.artifacts/python.coverage.xml" --junit-xml=".artifacts/python.junit.xml" || exit 1
+	pytest tests/integration tests/sentry \
+		--ignore tests/sentry/eventstream/kafka \
+		--ignore tests/sentry/post_process_forwarder \
+		--ignore tests/sentry/snuba \
+		--ignore tests/sentry/search/events \
+		--ignore tests/sentry/ingest/ingest_consumer/test_ingest_consumer_kafka.py \
+		--ignore tests/sentry/region_to_control/test_region_to_control_kafka.py \
+		--cov . --cov-report="xml:.artifacts/python.coverage.xml"
 	@echo ""
 
 test-snuba:
 	@echo "--> Running snuba tests"
-	pytest tests/snuba tests/sentry/eventstream/kafka tests/sentry/snuba/test_discover.py tests/sentry/search/events -vv --cov . --cov-report="xml:.artifacts/snuba.coverage.xml" --junit-xml=".artifacts/snuba.junit.xml"
+	pytest tests/snuba \
+		tests/sentry/eventstream/kafka \
+		tests/sentry/post_process_forwarder \
+		tests/sentry/snuba \
+		tests/sentry/search/events \
+		-vv --cov . --cov-report="xml:.artifacts/snuba.coverage.xml"
+	@echo ""
+
+test-tools:
+	@echo "--> Running tools tests"
+	pytest -c /dev/null --confcutdir tests/tools tests/tools -vv --cov=tools --cov=tests/tools --cov-report="xml:.artifacts/tools.coverage.xml"
 	@echo ""
 
 backend-typing:
@@ -139,14 +156,16 @@ backend-typing:
 	mypy --strict --warn-unreachable --config-file mypy.ini
 	@echo ""
 
+# JavaScript relay tests are meant to be run within Symbolicator test suite, as they are parametrized to verify both processing pipelines during migration process.
 test-symbolicator:
 	@echo "--> Running symbolicator tests"
-	pytest tests/symbolicator -vv --cov . --cov-report="xml:.artifacts/symbolicator.coverage.xml" --junit-xml=".artifacts/symbolicator.junit.xml"
+	pytest tests/symbolicator -vv --cov . --cov-report="xml:.artifacts/symbolicator.coverage.xml"
+	pytest tests/relay_integration/lang/javascript/ -vv -m symbolicator
 	@echo ""
 
 test-chartcuterie:
 	@echo "--> Running chartcuterie tests"
-	pytest tests/chartcuterie -vv --cov . --cov-report="xml:.artifacts/chartcuterie.coverage.xml" --junit-xml=".artifacts/chartcuterie.junit.xml"
+	pytest tests/chartcuterie -vv --cov . --cov-report="xml:.artifacts/chartcuterie.coverage.xml"
 	@echo ""
 
 test-acceptance: node-version-check
@@ -156,17 +175,20 @@ test-acceptance: node-version-check
 
 test-plugins:
 	@echo "--> Running plugin tests"
-	pytest tests/sentry_plugins -vv --cov . --cov-report="xml:.artifacts/plugins.coverage.xml" --junit-xml=".artifacts/plugins.junit.xml" || exit 1
+	pytest tests/sentry_plugins -vv --cov . --cov-report="xml:.artifacts/plugins.coverage.xml"
 	@echo ""
 
 test-relay-integration:
 	@echo "--> Running Relay integration tests"
-	pytest tests/relay_integration -vv --cov . --cov-report="xml:.artifacts/relay.coverage.xml" --junit-xml=".artifacts/relay.junit.xml"
+	pytest \
+		tests/relay_integration \
+		tests/sentry/ingest/ingest_consumer/test_ingest_consumer_kafka.py \
+		-vv --cov . --cov-report="xml:.artifacts/relay.coverage.xml"
 	@echo ""
 
 test-api-docs: build-api-docs
 	yarn run validate-api-examples
-	pytest tests/apidocs/endpoints
+	pytest tests/apidocs
 	@echo ""
 
 review-python-snapshots:

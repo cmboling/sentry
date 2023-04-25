@@ -4,6 +4,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import NoProjects, OrganizationEventsV2EndpointBase
 from sentry.snuba import discover
 
@@ -38,6 +39,7 @@ class HistogramSerializer(serializers.Serializer):
         return fields
 
 
+@region_silo_endpoint
 class OrganizationEventsHistogramEndpoint(OrganizationEventsV2EndpointBase):
     def has_feature(self, organization, request):
         return features.has("organizations:performance-view", organization, actor=request.user)
@@ -51,13 +53,24 @@ class OrganizationEventsHistogramEndpoint(OrganizationEventsV2EndpointBase):
         except NoProjects:
             return Response({})
 
+        use_metrics = features.has(
+            "organizations:performance-use-metrics", organization=organization, actor=request.user
+        )
+        use_metrics_layer = features.has(
+            "organizations:use-metrics-layer", organization=organization, actor=request.user
+        )
+        dataset = self.get_dataset(request) if use_metrics else discover
+        metrics_enhanced = dataset != discover
+
+        sentry_sdk.set_tag("performance.metrics_enhanced", metrics_enhanced)
+
         with sentry_sdk.start_span(op="discover.endpoint", description="histogram"):
             serializer = HistogramSerializer(data=request.GET)
             if serializer.is_valid():
                 data = serializer.validated_data
 
                 with self.handle_query_errors():
-                    results = discover.histogram_query(
+                    results = dataset.histogram_query(
                         data["field"],
                         data.get("query"),
                         params,
@@ -67,9 +80,7 @@ class OrganizationEventsHistogramEndpoint(OrganizationEventsV2EndpointBase):
                         max_value=data.get("max"),
                         data_filter=data.get("dataFilter"),
                         referrer="api.organization-events-histogram",
-                        use_snql=features.has(
-                            "organizations:performance-use-snql", organization, actor=request.user
-                        ),
+                        use_metrics_layer=use_metrics_layer,
                     )
 
                 return Response(results)

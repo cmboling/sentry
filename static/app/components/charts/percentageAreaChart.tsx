@@ -1,8 +1,9 @@
-import * as React from 'react';
+import {Component} from 'react';
 import type {LineSeriesOption} from 'echarts';
 import moment from 'moment';
 
 import {Series, SeriesDataUnit} from 'sentry/types/echarts';
+import toArray from 'sentry/utils/toArray';
 
 import AreaSeries from './series/areaSeries';
 import BaseChart from './baseChart';
@@ -29,7 +30,7 @@ type Props = Omit<ChartProps, 'series'> &
  *
  * See https://exceljet.net/chart-type/100-stacked-bar-chart
  */
-export default class PercentageAreaChart extends React.Component<Props> {
+export default class PercentageAreaChart extends Component<Props> {
   static defaultProps: DefaultProps = {
     // TODO(billyvg): Move these into BaseChart? or get rid completely
     getDataItemName: ({name}) => name,
@@ -70,7 +71,7 @@ export default class PercentageAreaChart extends React.Component<Props> {
         tooltip={{
           formatter: seriesParams => {
             // `seriesParams` can be an array or an object :/
-            const series = Array.isArray(seriesParams) ? seriesParams : [seriesParams];
+            const series = toArray(seriesParams);
 
             // Filter series that have 0 counts
             const date =
@@ -90,12 +91,11 @@ export default class PercentageAreaChart extends React.Component<Props> {
                 )
                 .join(''),
               '</div>',
-              `<div class="tooltip-date">${date}</div>`,
+              `<div class="tooltip-footer">${date}</div>`,
               '<div class="tooltip-arrow"></div>',
             ].join('');
           },
         }}
-        xAxis={{boundaryGap: true}}
         yAxis={{
           min: 0,
           max: 100,

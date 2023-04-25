@@ -5,11 +5,13 @@ import sentry_sdk
 from django.db import transaction
 from rest_framework.request import Request
 from rest_framework.response import Response
+from snuba_sdk import Request as SnubaRequest
 from snuba_sdk.conditions import Condition, Op
 from snuba_sdk.orderby import Direction, OrderBy
 from snuba_sdk.query import Column, Entity, Function, Query
 
 from sentry import eventstore, features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import GroupEndpoint
 from sentry.api.serializers import EventSerializer, serialize
 from sentry.grouping.variants import ComponentVariant
@@ -17,6 +19,7 @@ from sentry.models import Group, GroupHash
 from sentry.utils import snuba
 
 
+@region_silo_endpoint
 class GroupHashesSplitEndpoint(GroupEndpoint):
     def get(self, request: Request, group) -> Response:
         """
@@ -136,7 +139,7 @@ def _split_group(group: Group, hash: str, hierarchical_hashes: Optional[Sequence
 
 def _get_full_hierarchical_hashes(group: Group, hash: str) -> Optional[Sequence[str]]:
     query = (
-        Query("events", Entity("events"))
+        Query(Entity("events"))
         .set_select(
             [
                 Column("hierarchical_hashes"),
@@ -157,7 +160,13 @@ def _get_full_hierarchical_hashes(group: Group, hash: str) -> Optional[Sequence[
         )
     )
 
-    data = snuba.raw_snql_query(query, referrer="group_split.get_full_hierarchical_hashes")["data"]
+    request = SnubaRequest(
+        dataset="events",
+        app_id="grouping",
+        query=query,
+        tenant_ids={"organization_id": group.project.organization_id},
+    )
+    data = snuba.raw_snql_query(request, "group_split.get_full_hierarchical_hashes")["data"]
     if not data:
         return None
 
@@ -311,7 +320,7 @@ def _render_trees(group: Group, user):
     # the road.
 
     query = (
-        Query("events", Entity("events"))
+        Query(Entity("events"))
         .set_select(
             [
                 Function("count", [], "event_count"),
@@ -381,8 +390,13 @@ def _render_trees(group: Group, user):
     )
 
     rv = []
-
-    for row in snuba.raw_snql_query(query, referrer="api.group_split.render_grouping_tree")["data"]:
+    request = SnubaRequest(
+        dataset="events",
+        app_id="grouping",
+        query=query,
+        tenant_ids={"organization_id": group.project.organization_id},
+    )
+    for row in snuba.raw_snql_query(request, "api.group_split.render_grouping_tree")["data"]:
         if len(row["hash_slice"]) == 0:
             hash = row["primary_hash"]
             parent_hash = child_hash = None

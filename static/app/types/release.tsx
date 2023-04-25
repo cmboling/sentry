@@ -20,7 +20,7 @@ export type SourceMapsArchive = {
 export type Artifact = {
   dateCreated: string;
   dist: string | null;
-  headers: {'Content-Type': string};
+  headers: {'Content-Type': string} | {};
   id: string;
   name: string;
   sha1: string;
@@ -44,27 +44,26 @@ export type VersionInfo = {
   version: {raw: string};
 };
 
-export type BaseRelease = {
+export interface BaseRelease {
   dateCreated: string;
   dateReleased: string;
+  id: string;
   ref: string;
   shortVersion: string;
   status: ReleaseStatus;
   url: string;
   version: string;
-};
+}
 
-export type Release = BaseRelease &
-  ReleaseData & {
-    projects: ReleaseProject[];
-  };
+export interface Release extends BaseRelease, ReleaseData {
+  projects: ReleaseProject[];
+}
 
-export type ReleaseWithHealth = BaseRelease &
-  ReleaseData & {
-    projects: Required<ReleaseProject>[];
-  };
+export interface ReleaseWithHealth extends BaseRelease, ReleaseData {
+  projects: Required<ReleaseProject>[];
+}
 
-type ReleaseData = {
+interface ReleaseData {
   authors: User[];
   commitCount: number;
   currentProjectMeta: {
@@ -84,7 +83,7 @@ type ReleaseData = {
   newGroups: number;
   versionInfo: VersionInfo;
   adoptionStages?: Record<
-    'string',
+    string,
     {
       adopted: string | null;
       stage: string | null;
@@ -94,7 +93,8 @@ type ReleaseData = {
   lastCommit?: Commit;
   lastDeploy?: Deploy;
   owner?: any;
-};
+  userAgent?: string;
+}
 
 export type CurrentRelease = {
   environment: string;
@@ -120,6 +120,7 @@ export type ReleaseProject = {
 };
 
 export type ReleaseMeta = {
+  bundleId: string | null;
   commitCount: number;
   commitFilesChanged: number;
   deployCount: number;
@@ -170,7 +171,6 @@ export enum ReleaseComparisonChartType {
   ERROR_COUNT = 'errorCount',
   TRANSACTION_COUNT = 'transactionCount',
   FAILURE_RATE = 'failureRate',
-  SESSION_DURATION = 'sessionDuration',
 }
 
 export enum HealthStatsPeriodOption {

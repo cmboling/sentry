@@ -2,11 +2,13 @@ from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationAuthProviderPermission, OrganizationEndpoint
 from sentry.api.serializers import serialize
 from sentry.models import AuthProvider
 
 
+@region_silo_endpoint
 class OrganizationAuthProviderDetailsEndpoint(OrganizationEndpoint):
     permission_classes = (OrganizationAuthProviderPermission,)
 
@@ -20,13 +22,10 @@ class OrganizationAuthProviderDetailsEndpoint(OrganizationEndpoint):
         :auth: required
         """
         try:
-            auth_provider = AuthProvider.objects.get(organization=organization)
+            auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         except AuthProvider.DoesNotExist:
             # This is a valid state where org does not have an auth provider
             # configured, make sure we respond with a 20x
             return Response(status=status.HTTP_204_NO_CONTENT)
-
-        # cache organization so that we don't need to query for org when serializing
-        auth_provider.set_cached_field_value("organization", organization)
 
         return Response(serialize(auth_provider, request.user))

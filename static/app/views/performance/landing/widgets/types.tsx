@@ -22,23 +22,27 @@ export enum GenericPerformanceWidgetDataType {
   vitals = 'vitals',
   line_list = 'line_list',
   trends = 'trends',
+  stacked_area = 'stacked_area',
 }
 
 export type PerformanceWidgetProps = {
-  ContainerActions: React.FC<{isLoading: boolean}>;
+  ContainerActions: React.ComponentType<{isLoading: boolean}> | null;
   chartDefinition: ChartDefinition;
   chartHeight: number;
 
   chartSetting: PerformanceWidgetSetting;
   eventView: EventView;
   fields: string[];
-  location: Location;
 
   organization: Organization;
   title: string;
   titleTooltip: string;
 
+  InteractiveTitle?: React.ComponentType<{isLoading: boolean}> | null;
+
   chartColor?: string;
+
+  withStaticFilters?: boolean;
 };
 
 export interface WidgetDataResult {
@@ -53,7 +57,7 @@ export interface WidgetDataConstraint {
 export type QueryChildren = {
   children: (props: any) => React.ReactNode; // TODO(k-fish): Fix any type.
 };
-export type QueryFC<T extends WidgetDataConstraint> = React.FC<
+export type QueryFC<T extends WidgetDataConstraint> = React.ComponentType<
   QueryChildren & {
     eventView: EventView;
     orgSlug: string;
@@ -91,7 +95,7 @@ export type Queries<T extends WidgetDataConstraint> = Record<
 >;
 
 type Visualization<T> = {
-  component: React.FC<{
+  component: React.ComponentType<{
     widgetData: T;
     grid?: React.ComponentProps<typeof BaseChart>['grid'];
     height?: number;
@@ -107,11 +111,13 @@ type Visualization<T> = {
 
 type Visualizations<T extends WidgetDataConstraint> = Readonly<Visualization<T>[]>; // Readonly because of index being used for React key.
 
-type HeaderActions<T> = React.FC<{
+type HeaderActions<T> = React.ComponentType<{
   widgetData: T;
 }>;
 
-type Subtitle<T> = React.FC<{
+type InteractiveTitle<T> = React.ComponentType<{widgetData: T}>;
+
+type Subtitle<T> = React.ComponentType<{
   widgetData: T;
 }>;
 
@@ -133,10 +139,10 @@ export type GenericPerformanceWidgetProps<T extends WidgetDataConstraint> = {
   // Header;
   title: string;
   titleTooltip: string;
-  EmptyComponent?: React.FC<{height?: number}>;
+  EmptyComponent?: React.ComponentType<{height?: number}>;
 
   HeaderActions?: HeaderActions<T>;
-  // Components
+  InteractiveTitle?: InteractiveTitle<T> | null;
   Subtitle?: Subtitle<T>;
 };
 

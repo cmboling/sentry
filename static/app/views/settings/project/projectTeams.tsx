@@ -1,4 +1,3 @@
-import * as React from 'react';
 import {RouteComponentProps} from 'react-router';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
@@ -7,9 +6,10 @@ import {addErrorMessage} from 'sentry/actionCreators/indicator';
 import {openCreateTeamModal} from 'sentry/actionCreators/modal';
 import {addTeamToProject, removeTeamFromProject} from 'sentry/actionCreators/projects';
 import Link from 'sentry/components/links/link';
-import Tooltip from 'sentry/components/tooltip';
-import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {Tooltip} from 'sentry/components/tooltip';
+import {t, tct} from 'sentry/locale';
+import TeamStore from 'sentry/stores/teamStore';
+import {space} from 'sentry/styles/space';
 import {Organization, Project, Team} from 'sentry/types';
 import routeTitleGen from 'sentry/utils/routeTitle';
 import AsyncView from 'sentry/views/asyncView';
@@ -19,7 +19,7 @@ import TeamSelect from 'sentry/views/settings/components/teamSelect';
 type Props = {
   organization: Organization;
   project: Project;
-} & RouteComponentProps<{orgId: string; projectId: string}, {}>;
+} & RouteComponentProps<{projectId: string}, {}>;
 
 type State = {
   projectTeams: null | Team[];
@@ -27,8 +27,8 @@ type State = {
 
 class ProjectTeams extends AsyncView<Props, State> {
   getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
-    const {orgId, projectId} = this.props.params;
-    return [['projectTeams', `/projects/${orgId}/${projectId}/teams/`]];
+    const {organization, project} = this.props;
+    return [['projectTeams', `/projects/${organization.slug}/${project.slug}/teams/`]];
   }
 
   getTitle() {
@@ -37,10 +37,11 @@ class ProjectTeams extends AsyncView<Props, State> {
   }
 
   canCreateTeam = () => {
-    const {organization} = this.props;
-    const access = new Set(organization.access);
+    const access = this.props.organization.access;
     return (
-      access.has('org:write') && access.has('team:write') && access.has('project:write')
+      access.includes('org:write') &&
+      access.includes('team:write') &&
+      access.includes('project:write')
     );
   };
 
@@ -49,9 +50,9 @@ class ProjectTeams extends AsyncView<Props, State> {
       return;
     }
 
-    const {orgId, projectId} = this.props.params;
+    const {organization, project} = this.props;
 
-    removeTeamFromProject(this.api, orgId, projectId, teamSlug)
+    removeTeamFromProject(this.api, organization.slug, project.slug, teamSlug)
       .then(() => this.handleRemovedTeam(teamSlug))
       .catch(() => {
         addErrorMessage(t('Could not remove the %s team', teamSlug));
@@ -73,13 +74,21 @@ class ProjectTeams extends AsyncView<Props, State> {
     }));
   };
 
-  handleAdd = (team: Team) => {
+  handleAdd = (teamSlug: string) => {
     if (this.state.loading) {
       return;
     }
-    const {orgId, projectId} = this.props.params;
 
-    addTeamToProject(this.api, orgId, projectId, team).then(
+    const team = TeamStore.getBySlug(teamSlug);
+    if (!team) {
+      addErrorMessage(tct('Unable to find "[teamSlug]"', {teamSlug}));
+      this.setState({error: true});
+      return;
+    }
+
+    const {organization, project} = this.props;
+
+    addTeamToProject(this.api, organization.slug, project.slug, team).then(
       () => {
         this.handleAddedTeam(team);
       },
@@ -93,14 +102,14 @@ class ProjectTeams extends AsyncView<Props, State> {
   };
 
   handleCreateTeam = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+
     const {project, organization} = this.props;
 
     if (!this.canCreateTeam()) {
       return;
     }
-
-    e.stopPropagation();
-    e.preventDefault();
 
     openCreateTeamModal({
       project,
@@ -115,15 +124,13 @@ class ProjectTeams extends AsyncView<Props, State> {
   };
 
   renderBody() {
-    const {params, organization} = this.props;
+    const {project, organization} = this.props;
 
     const canCreateTeam = this.canCreateTeam();
     const hasAccess = organization.access.includes('project:write');
     const confirmRemove = t(
-      'This is the last team with access to this project. Removing it will mean ' +
-        'only organization owners and managers will be able to access the project pages. Are ' +
-        'you sure you want to remove this team from the project %s?',
-      params.projectId
+      'This is the last team with access to this project. Removing it will mean only organization owners and managers will be able to access the project pages. Are you sure you want to remove this team from the project %s?',
+      project.slug
     );
     const {projectTeams} = this.state;
 
@@ -136,7 +143,7 @@ class ProjectTeams extends AsyncView<Props, State> {
           position="top"
         >
           <StyledCreateTeamLink
-            to=""
+            to="#create-team"
             disabled={!canCreateTeam}
             onClick={this.handleCreateTeam}
           >
@@ -148,15 +155,16 @@ class ProjectTeams extends AsyncView<Props, State> {
 
     return (
       <div>
-        <SettingsPageHeader title={t('%s Teams', params.projectId)} />
+        <SettingsPageHeader title={t('Project Teams for %s', project.slug)} />
         <TeamSelect
+          disabled={!hasAccess}
+          enforceIdpProvisioned={false}
           organization={organization}
+          menuHeader={menuHeader}
           selectedTeams={projectTeams ?? []}
           onAddTeam={this.handleAdd}
           onRemoveTeam={this.handleRemove}
-          menuHeader={menuHeader}
           confirmLastTeamRemoveMessage={confirmRemove}
-          disabled={!hasAccess}
         />
       </div>
     );

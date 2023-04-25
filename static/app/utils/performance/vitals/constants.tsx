@@ -1,5 +1,6 @@
 import {t} from 'sentry/locale';
-import {measurementType, MobileVital, WebVital} from 'sentry/utils/discover/fields';
+import {measurementType} from 'sentry/utils/discover/fields';
+import {MobileVital, WebVital} from 'sentry/utils/fields';
 import {Vital} from 'sentry/utils/performance/vitals/types';
 
 export const WEB_VITAL_DETAILS: Record<WebVital, Vital> = {
@@ -164,7 +165,26 @@ export const MOBILE_VITAL_DETAILS: Record<MobileVital, Vital> = {
     ),
     type: measurementType(MobileVital.StallPercentage),
   },
+  [MobileVital.TimeToFullDisplay]: {
+    slug: 'time_to_full_display',
+    name: t('Time To Full Display'),
+    acronym: 'TTFD',
+    description: t(
+      'The time between application launch and complete display of all resources and views.'
+    ),
+    type: measurementType(MobileVital.TimeToFullDisplay),
+  },
+  [MobileVital.TimeToInitialDisplay]: {
+    slug: 'time_to_initial_display',
+    name: t('Time To Initial Display'),
+    acronym: 'TTID',
+    description: t('The time it takes for an application to produce its first frame.'),
+    poorThreshold: 2000,
+    type: measurementType(MobileVital.TimeToInitialDisplay),
+  },
 };
+
+export const VITAL_DETAILS = Object.assign({}, WEB_VITAL_DETAILS, MOBILE_VITAL_DETAILS);
 
 export enum Browser {
   CHROME = 'Chrome',

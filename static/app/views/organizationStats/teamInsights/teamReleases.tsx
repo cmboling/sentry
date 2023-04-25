@@ -1,12 +1,12 @@
 import {ComponentType, Fragment} from 'react';
-import {css, withTheme} from '@emotion/react';
+import {css, Theme, withTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 import isEqual from 'lodash/isEqual';
 import round from 'lodash/round';
 import moment from 'moment';
 
 import AsyncComponent from 'sentry/components/asyncComponent';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import {BarChart} from 'sentry/components/charts/barChart';
 import MarkLine from 'sentry/components/charts/components/markLine';
 import {DateTimeObject} from 'sentry/components/charts/utils';
@@ -16,9 +16,10 @@ import PanelTable from 'sentry/components/panels/panelTable';
 import Placeholder from 'sentry/components/placeholder';
 import {IconArrow} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Project} from 'sentry/types';
-import {Color, Theme} from 'sentry/utils/theme';
+import {ColorOrAlias} from 'sentry/utils/theme';
+import toArray from 'sentry/utils/toArray';
 
 import {ProjectBadge, ProjectBadgeContainer} from './styles';
 import {barAxisLabel, groupByTrend, sortSeriesByDay} from './utils';
@@ -163,7 +164,7 @@ class TeamReleases extends AsyncComponent<Props, State> {
     }
 
     return (
-      <SubText color={trend >= 0 ? 'green300' : 'red300'}>
+      <SubText color={trend >= 0 ? 'successText' : 'errorText'}>
         {`${round(Math.abs(trend), 3)}`}
         <PaddedIconArrow direction={trend >= 0 ? 'up' : 'down'} size="xs" />
       </SubText>
@@ -225,9 +226,7 @@ class TeamReleases extends AsyncComponent<Props, State> {
             tooltip={{
               formatter: seriesParams => {
                 // `seriesParams` can be an array or an object :/
-                const [series] = Array.isArray(seriesParams)
-                  ? seriesParams
-                  : [seriesParams];
+                const [series] = toArray(seriesParams);
 
                 const dateFormat = 'MMM D';
                 const startDate = moment(series.data[0]).format(dateFormat);
@@ -237,7 +236,7 @@ class TeamReleases extends AsyncComponent<Props, State> {
                   `<div><span class="tooltip-label">${series.marker} <strong>${series.seriesName}</strong></span> ${series.data[1]}</div>`,
                   `<div><span class="tooltip-label"><strong>Last ${period} Average</strong></span> ${totalPeriodAverage}</div>`,
                   '</div>',
-                  `<div class="tooltip-date">${startDate} - ${endDate}</div>`,
+                  `<div class="tooltip-footer">${startDate} - ${endDate}</div>`,
                   '<div class="tooltip-arrow"></div>',
                 ].join('');
               },
@@ -249,7 +248,7 @@ class TeamReleases extends AsyncComponent<Props, State> {
           emptyMessage={t('No releases were setup for this team’s projects')}
           emptyAction={
             <Button
-              size="small"
+              size="sm"
               external
               href="https://docs.sentry.io/product/releases/setup/"
             >
@@ -341,6 +340,6 @@ const PaddedIconArrow = styled(IconArrow)`
   margin: 0 ${space(0.5)};
 `;
 
-const SubText = styled('div')<{color: Color}>`
+const SubText = styled('div')<{color: ColorOrAlias}>`
   color: ${p => p.theme[p.color]};
 `;

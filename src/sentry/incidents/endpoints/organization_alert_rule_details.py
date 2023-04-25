@@ -2,6 +2,7 @@ from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import region_silo_endpoint
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models.alert_rule import DetailedAlertRuleSerializer
 from sentry.auth.superuser import is_active_superuser
@@ -12,6 +13,7 @@ from sentry.models import OrganizationMemberTeam, SentryAppComponent, SentryAppI
 from sentry.models.actor import ACTOR_TYPES
 
 
+@region_silo_endpoint
 class OrganizationAlertRuleDetailsEndpoint(OrganizationAlertRuleEndpoint):
     def get(self, request: Request, organization, alert_rule) -> Response:
         """
@@ -60,7 +62,12 @@ class OrganizationAlertRuleDetailsEndpoint(OrganizationAlertRuleEndpoint):
 
     def put(self, request: Request, organization, alert_rule) -> Response:
         serializer = DrfAlertRuleSerializer(
-            context={"organization": organization, "access": request.access, "user": request.user},
+            context={
+                "organization": organization,
+                "access": request.access,
+                "user": request.user,
+                "ip_address": request.META.get("REMOTE_ADDR"),
+            },
             instance=alert_rule,
             data=request.data,
         )
@@ -91,7 +98,9 @@ class OrganizationAlertRuleDetailsEndpoint(OrganizationAlertRuleEndpoint):
                 status=403,
             )
         try:
-            delete_alert_rule(alert_rule)
+            delete_alert_rule(
+                alert_rule, user=request.user, ip_address=request.META.get("REMOTE_ADDR")
+            )
             return Response(status=status.HTTP_204_NO_CONTENT)
         except AlreadyDeletedError:
             return Response(

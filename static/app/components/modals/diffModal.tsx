@@ -1,4 +1,3 @@
-import * as React from 'react';
 import {css} from '@emotion/react';
 
 import {ModalRenderProps} from 'sentry/actionCreators/modal';
@@ -6,12 +5,14 @@ import IssueDiff from 'sentry/components/issueDiff';
 
 type Props = ModalRenderProps & React.ComponentProps<typeof IssueDiff>;
 
-const DiffModal = ({className, Body, CloseButton, ...props}: Props) => (
-  <Body>
-    <CloseButton />
-    <IssueDiff className={className} {...props} />
-  </Body>
-);
+function DiffModal({className, Body, CloseButton, ...props}: Props) {
+  return (
+    <Body>
+      <CloseButton />
+      <IssueDiff className={className} {...props} />
+    </Body>
+  );
+}
 
 const modalCss = css`
   position: absolute;
@@ -24,7 +25,6 @@ const modalCss = css`
   width: auto;
 
   [role='document'] {
-    overflow: scroll;
     height: 100%;
     display: flex;
     flex: 1;

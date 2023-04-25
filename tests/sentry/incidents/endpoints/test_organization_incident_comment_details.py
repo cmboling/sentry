@@ -1,10 +1,13 @@
-from exam import fixture
+from functools import cached_property
 
 from sentry.incidents.models import IncidentActivity, IncidentActivityType
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import exempt_from_silo_limits, region_silo_test
 
 
-class BaseIncidentCommentDetailsTest:
+@region_silo_test(stable=True)
+class BaseIncidentCommentDetailsTest(APITestCase):
+    method = "put"
     endpoint = "sentry-api-0-organization-incident-comment-details"
 
     def setUp(self):
@@ -12,36 +15,36 @@ class BaseIncidentCommentDetailsTest:
             user=self.user, organization=self.organization, role="owner", teams=[self.team]
         )
         self.login_as(self.user)
-        self.activity = self.create_incident_comment(self.incident, user=self.user)
+        self.activity = self.create_incident_comment(self.incident, user_id=self.user.id)
         self.detected_activity = self.create_incident_activity(
-            self.incident, user=self.user, type=IncidentActivityType.CREATED.value
+            self.incident, user_id=self.user.id, type=IncidentActivityType.CREATED.value
         )
 
         user2 = self.create_user()
         self.user2_activity = self.create_incident_comment(
-            incident=self.incident, user=user2, comment="hello from another user"
+            incident=self.incident, user_id=user2.id, comment="hello from another user"
         )
 
-    @fixture
+    @cached_property
     def organization(self):
         return self.create_organization()
 
-    @fixture
+    @cached_property
     def project(self):
         return self.create_project(organization=self.organization)
 
-    @fixture
+    @cached_property
     def user(self):
         return self.create_user()
 
-    @fixture
+    @cached_property
     def incident(self):
         return self.create_incident()
 
     def test_not_found(self):
         comment = "hello"
         with self.feature("organizations:incidents"):
-            self.get_valid_response(
+            self.get_error_response(
                 self.organization.slug,
                 self.incident.identifier,
                 123,
@@ -52,7 +55,7 @@ class BaseIncidentCommentDetailsTest:
     def test_non_comment_type(self):
         comment = "hello"
         with self.feature("organizations:incidents"):
-            self.get_valid_response(
+            self.get_error_response(
                 self.organization.slug,
                 self.incident.identifier,
                 self.detected_activity.id,
@@ -61,13 +64,14 @@ class BaseIncidentCommentDetailsTest:
             )
 
 
-class OrganizationIncidentCommentUpdateEndpointTest(BaseIncidentCommentDetailsTest, APITestCase):
+@region_silo_test(stable=True)
+class OrganizationIncidentCommentUpdateEndpointTest(BaseIncidentCommentDetailsTest):
     method = "put"
 
     def test_simple(self):
         comment = "hello"
         with self.feature("organizations:incidents"):
-            self.get_valid_response(
+            self.get_success_response(
                 self.organization.slug,
                 self.incident.identifier,
                 self.activity.id,
@@ -76,12 +80,12 @@ class OrganizationIncidentCommentUpdateEndpointTest(BaseIncidentCommentDetailsTe
             )
         activity = IncidentActivity.objects.get(id=self.activity.id)
         assert activity.type == IncidentActivityType.COMMENT.value
-        assert activity.user == self.user
+        assert activity.user_id == self.user.id
         assert activity.comment == comment
 
     def test_cannot_edit_others_comment(self):
         with self.feature("organizations:incidents"):
-            self.get_valid_response(
+            self.get_error_response(
                 self.organization.slug,
                 self.incident.identifier,
                 self.user2_activity.id,
@@ -91,12 +95,13 @@ class OrganizationIncidentCommentUpdateEndpointTest(BaseIncidentCommentDetailsTe
 
     def test_superuser_can_edit(self):
         self.user.is_superuser = True
-        self.user.save()
+        with exempt_from_silo_limits():
+            self.user.save()
 
         edited_comment = "this comment has been edited"
 
         with self.feature("organizations:incidents"):
-            self.get_valid_response(
+            self.get_success_response(
                 self.organization.slug,
                 self.incident.identifier,
                 self.user2_activity.id,
@@ -104,23 +109,24 @@ class OrganizationIncidentCommentUpdateEndpointTest(BaseIncidentCommentDetailsTe
                 status_code=200,
             )
         activity = IncidentActivity.objects.get(id=self.user2_activity.id)
-        assert activity.user != self.user
+        assert activity.user_id != self.user.id
         assert activity.comment == edited_comment
 
 
-class OrganizationIncidentCommentDeleteEndpointTest(BaseIncidentCommentDetailsTest, APITestCase):
+@region_silo_test(stable=True)
+class OrganizationIncidentCommentDeleteEndpointTest(BaseIncidentCommentDetailsTest):
     method = "delete"
 
     def test_simple(self):
         with self.feature("organizations:incidents"):
-            self.get_valid_response(
+            self.get_success_response(
                 self.organization.slug, self.incident.identifier, self.activity.id, status_code=204
             )
         assert not IncidentActivity.objects.filter(id=self.activity.id).exists()
 
     def test_cannot_delete_others_comments(self):
         with self.feature("organizations:incidents"):
-            self.get_valid_response(
+            self.get_error_response(
                 self.organization.slug,
                 self.incident.identifier,
                 self.user2_activity.id,
@@ -129,10 +135,11 @@ class OrganizationIncidentCommentDeleteEndpointTest(BaseIncidentCommentDetailsTe
 
     def test_superuser_can_delete(self):
         self.user.is_superuser = True
-        self.user.save()
+        with exempt_from_silo_limits():
+            self.user.save()
 
         with self.feature("organizations:incidents"):
-            self.get_valid_response(
+            self.get_success_response(
                 self.organization.slug,
                 self.incident.identifier,
                 self.user2_activity.id,

@@ -4,7 +4,7 @@ import styled from '@emotion/styled';
 import {Location} from 'history';
 
 import {Client} from 'sentry/api';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import {HeaderTitleLegend} from 'sentry/components/charts/styles';
 import Count from 'sentry/components/count';
 import DropdownLink from 'sentry/components/dropdownLink';
@@ -19,12 +19,12 @@ import Pagination, {CursorHandler} from 'sentry/components/pagination';
 import {Panel} from 'sentry/components/panels';
 import QuestionTooltip from 'sentry/components/questionTooltip';
 import Radio from 'sentry/components/radio';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {IconArrow, IconEllipsis} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {AvatarProject, Organization, Project} from 'sentry/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import {formatPercentage, getDuration} from 'sentry/utils/formatters';
 import TrendsDiscoverQuery from 'sentry/utils/performance/trends/trendsDiscoverQuery';
 import {decodeScalar} from 'sentry/utils/queryString';
@@ -32,9 +32,10 @@ import {MutableSearch} from 'sentry/utils/tokenizeSearch';
 import useApi from 'sentry/utils/useApi';
 import withOrganization from 'sentry/utils/withOrganization';
 import withProjects from 'sentry/utils/withProjects';
-
-import {DisplayModes} from '../transactionSummary/transactionOverview/charts';
-import {transactionSummaryRouteWithQuery} from '../transactionSummary/utils';
+import {
+  DisplayModes,
+  transactionSummaryRouteWithQuery,
+} from 'sentry/views/performance/transactionSummary/utils';
 
 import Chart from './chart';
 import {
@@ -67,6 +68,7 @@ type Props = {
   trendView: TrendView;
   previousTrendColumn?: TrendColumnField;
   previousTrendFunction?: TrendFunctionField;
+  withBreakpoint?: boolean;
 };
 
 type TrendsCursorQuery = {
@@ -128,7 +130,11 @@ function getSelectedTransaction(
   return transactions.length > 0 ? transactions[0] : undefined;
 }
 
-function handleChangeSelected(location: Location, trendChangeType: TrendChangeType) {
+function handleChangeSelected(
+  location: Location,
+  organization: Organization,
+  trendChangeType: TrendChangeType
+) {
   return function updateSelected(transaction?: NormalizedTrendsTransaction) {
     const selectedQueryKey = getSelectedQueryKey(trendChangeType);
     const query = {
@@ -144,6 +150,11 @@ function handleChangeSelected(location: Location, trendChangeType: TrendChangeTy
     browserHistory.push({
       pathname: location.pathname,
       query,
+    });
+
+    trackAnalytics('performance_views.trends.widget_interaction', {
+      organization,
+      widget_type: trendChangeType,
     });
   };
 }
@@ -172,8 +183,10 @@ function handleFilterTransaction(location: Location, transaction: string) {
 
 function handleFilterDuration(
   location: Location,
+  organization: Organization,
   value: number,
   symbol: FilterSymbols,
+  trendChangeType: TrendChangeType,
   projects: Project[],
   projectIds: Readonly<number[]>
 ) {
@@ -203,6 +216,12 @@ function handleFilterDuration(
       query: String(query).trim(),
     },
   });
+
+  trackAnalytics('performance_views.trends.change_duration', {
+    organization,
+    widget_type: getChartTitle(trendChangeType),
+    value: `${symbol}${value}`,
+  });
 }
 
 function ChangedTransactions(props: Props) {
@@ -214,15 +233,23 @@ function ChangedTransactions(props: Props) {
     organization,
     projects,
     setError,
+    withBreakpoint,
   } = props;
   const api = useApi();
 
   const trendView = props.trendView.clone();
   const chartTitle = getChartTitle(trendChangeType);
-  modifyTrendView(trendView, location, trendChangeType, projects);
+  modifyTrendView(trendView, location, trendChangeType, projects, organization);
 
   const onCursor = makeTrendsCursorHandler(trendChangeType);
   const cursor = decodeScalar(location.query[trendCursorNames[trendChangeType]]);
+  const paginationAnalyticsEvent = (direction: string) => {
+    trackAnalytics('performance_views.trends.widget_pagination', {
+      organization,
+      direction,
+      widget_type: getChartTitle(trendChangeType),
+    });
+  };
 
   return (
     <TrendsDiscoverQuery
@@ -233,6 +260,7 @@ function ChangedTransactions(props: Props) {
       cursor={cursor}
       limit={5}
       setError={error => setError(error?.message)}
+      withBreakpoint={withBreakpoint}
     >
       {({isLoading, trendsData, pageLinks}) => {
         const trendFunction = getCurrentTrendFunction(location);
@@ -270,7 +298,7 @@ function ChangedTransactions(props: Props) {
           <TransactionsListContainer data-test-id="changed-transactions">
             <TrendsTransactionPanel>
               <StyledHeaderTitleLegend>
-                {chartTitle}
+                {chartTitle} {withBreakpoint && '- With Breakpoints'}
                 <QuestionTooltip size="sm" position="top" title={titleTooltipContent} />
               </StyledHeaderTitleLegend>
               {isLoading ? (
@@ -314,6 +342,7 @@ function ChangedTransactions(props: Props) {
                           statsData={statsData}
                           handleSelectTransaction={handleChangeSelected(
                             location,
+                            organization,
                             trendChangeType
                           )}
                         />
@@ -327,7 +356,11 @@ function ChangedTransactions(props: Props) {
                 </Fragment>
               )}
             </TrendsTransactionPanel>
-            <Pagination pageLinks={pageLinks} onCursor={onCursor} />
+            <Pagination
+              pageLinks={pageLinks}
+              onCursor={onCursor}
+              paginationAnalyticsEvent={paginationAnalyticsEvent}
+            />
           </TransactionsListContainer>
         );
       }}
@@ -360,6 +393,7 @@ function TrendsListItem(props: TrendsListItemProps) {
     currentTrendColumn,
     index,
     location,
+    organization,
     projects,
     handleSelectTransaction,
     trendView,
@@ -449,7 +483,7 @@ function TrendsListItem(props: TrendsListItemProps) {
         anchorRight
         title={
           <StyledButton
-            size="xsmall"
+            size="xs"
             icon={<IconEllipsis data-test-id="trends-item-action" size="xs" />}
             aria-label={t('Actions')}
           />
@@ -459,8 +493,10 @@ function TrendsListItem(props: TrendsListItemProps) {
           onClick={() =>
             handleFilterDuration(
               location,
+              organization,
               longestPeriodValue,
               FilterSymbols.LESS_THAN_EQUALS,
+              trendChangeType,
               projects,
               trendView.project
             )
@@ -472,8 +508,10 @@ function TrendsListItem(props: TrendsListItemProps) {
           onClick={() =>
             handleFilterDuration(
               location,
+              organization,
               longestPeriodValue,
               FilterSymbols.GREATER_THAN_EQUALS,
+              trendChangeType,
               projects,
               trendView.project
             )
@@ -502,11 +540,11 @@ function TrendsListItem(props: TrendsListItemProps) {
   );
 }
 
-export const CompareDurations = ({
+export function CompareDurations({
   transaction,
 }: {
   transaction: TrendsListItemProps['transaction'];
-}) => {
+}) {
   const {fromSeconds, toSeconds, showDigits} = transformDeltaSpread(
     transaction.aggregate_range_1,
     transaction.aggregate_range_2
@@ -519,9 +557,9 @@ export const CompareDurations = ({
       <Duration seconds={toSeconds} fixedDigits={showDigits ? 1 : 0} abbreviation />
     </DurationChange>
   );
-};
+}
 
-const ValueDelta = ({transaction, trendChangeType}: TrendsListItemProps) => {
+function ValueDelta({transaction, trendChangeType}: TrendsListItemProps) {
   const {seconds, fixedDigits, changeLabel} = transformValueDelta(
     transaction.trend_difference,
     trendChangeType
@@ -532,11 +570,11 @@ const ValueDelta = ({transaction, trendChangeType}: TrendsListItemProps) => {
       <Duration seconds={seconds} fixedDigits={fixedDigits} abbreviation /> {changeLabel}
     </span>
   );
-};
+}
 
 type TransactionSummaryLinkProps = TrendsListItemProps & {};
 
-const TransactionSummaryLink = (props: TransactionSummaryLinkProps) => {
+function TransactionSummaryLink(props: TransactionSummaryLinkProps) {
   const {
     organization,
     trendView: eventView,
@@ -562,7 +600,7 @@ const TransactionSummaryLink = (props: TransactionSummaryLinkProps) => {
       {transaction.transaction}
     </ItemTransactionName>
   );
-};
+}
 
 const TransactionsListContainer = styled('div')`
   display: flex;
@@ -623,7 +661,7 @@ const ItemRadioContainer = styled('div')`
 const ItemTransactionName = styled(Link)`
   font-size: ${p => p.theme.fontSizeMedium};
   margin-right: ${space(1)};
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
 `;
 
 const ItemTransactionDurationChange = styled('div')`

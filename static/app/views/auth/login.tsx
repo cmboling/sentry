@@ -1,12 +1,15 @@
-import * as React from 'react';
+import {Component, Fragment} from 'react';
+import {RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
 
 import {Client} from 'sentry/api';
+import {Alert} from 'sentry/components/alert';
+import {Button} from 'sentry/components/button';
 import LoadingError from 'sentry/components/loadingError';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import NavTabs from 'sentry/components/navTabs';
-import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {t, tct} from 'sentry/locale';
+import {space} from 'sentry/styles/space';
 import {AuthConfig} from 'sentry/types';
 import withApi from 'sentry/utils/withApi';
 
@@ -24,7 +27,7 @@ type ActiveTab = keyof typeof FORM_COMPONENTS;
 
 type TabConfig = [key: ActiveTab, label: string, disabled?: boolean];
 
-type Props = {
+type Props = RouteComponentProps<{orgId?: string}, {}> & {
   api: Client;
 };
 
@@ -35,7 +38,7 @@ type State = {
   loading: boolean;
 };
 
-class Login extends React.Component<Props, State> {
+class Login extends Component<Props, State> {
   state: State = {
     loading: true,
     error: null,
@@ -103,13 +106,16 @@ class Login extends React.Component<Props, State> {
         </li>
       );
 
+    const {orgId} = this.props.params;
+
     return (
-      <React.Fragment>
+      <Fragment>
         <Header>
           <Heading>{t('Sign in to continue')}</Heading>
           <AuthNavTabs>{tabs.map(renderTab)}</AuthNavTabs>
         </Header>
         {loading && <LoadingIndicator />}
+
         {error && (
           <StyledLoadingError
             message={t('Unable to load authentication configuration')}
@@ -118,10 +124,25 @@ class Login extends React.Component<Props, State> {
         )}
         {!loading && authConfig !== null && !error && (
           <FormWrapper hasAuthProviders={this.hasAuthProviders}>
+            {orgId !== undefined && (
+              <Alert
+                type="warning"
+                trailingItems={
+                  <Button to="/" size="xs">
+                    Reload
+                  </Button>
+                }
+              >
+                {tct(
+                  "Experimental SPA mode does not currently support SSO style login. To develop against the [org] you'll need to copy your production session cookie.",
+                  {org: this.props.params.orgId}
+                )}
+              </Alert>
+            )}
             <FormComponent {...{api, authConfig}} />
           </FormWrapper>
         )}
-      </React.Fragment>
+      </Fragment>
     );
   }
 }
@@ -148,18 +169,5 @@ const FormWrapper = styled('div')<{hasAuthProviders: boolean}>`
   padding: 35px;
   width: ${p => (p.hasAuthProviders ? '600px' : '490px')};
 `;
-
-const formFooterClass = `
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: ${space(1)};
-  align-items: center;
-  justify-items: end;
-  border-top: none;
-  margin-bottom: 0;
-  padding: 0;
-`;
-
-export {formFooterClass};
 
 export default withApi(Login);

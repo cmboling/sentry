@@ -1,14 +1,16 @@
-from exam import fixture
+from functools import cached_property
 
-from sentry.testutils import AcceptanceTestCase
-from sentry_plugins.opsgenie.plugin import OpsGeniePlugin
-from tests.acceptance.page_objects.organization_integration_settings import (
+from fixtures.page_objects.organization_integration_settings import (
     OrganizationAbstractDetailViewPage,
 )
+from sentry.testutils import AcceptanceTestCase
+from sentry.testutils.silo import region_silo_test
+from sentry_plugins.opsgenie.plugin import OpsGeniePlugin
 
 
+@region_silo_test
 class OrganizationPluginDetailedView(AcceptanceTestCase):
-    @fixture
+    @cached_property
     def plugin(self):
         return OpsGeniePlugin()
 

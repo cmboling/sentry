@@ -15,7 +15,7 @@ from sentry.digests.utils import (
 from sentry.eventstore.models import Event
 from sentry.notifications.notifications.base import ProjectNotification
 from sentry.notifications.notify import notify
-from sentry.notifications.types import ActionTargetType
+from sentry.notifications.types import ActionTargetType, FallthroughChoiceType
 from sentry.notifications.utils import (
     NotificationRuleDetails,
     get_email_link_extra_params,
@@ -28,17 +28,19 @@ from sentry.notifications.utils.digest import (
     send_as_alert_notification,
     should_send_as_alert_notification,
 )
+from sentry.services.hybrid_cloud.actor import RpcActor
 from sentry.types.integrations import ExternalProviders
+from sentry.utils.dates import to_timestamp
 
 if TYPE_CHECKING:
-    from sentry.models import Organization, Project, Team, User
+    from sentry.models import Organization, Project
 
 logger = logging.getLogger(__name__)
 
 
 class DigestNotification(ProjectNotification):
     message_builder = "DigestNotificationMessageBuilder"
-    referrer_base = "digest"
+    metrics_key = "digest"
     template_path = "sentry/emails/digests/body"
 
     def __init__(
@@ -47,17 +49,13 @@ class DigestNotification(ProjectNotification):
         digest: Digest,
         target_type: ActionTargetType,
         target_identifier: int | None = None,
+        fallthrough_choice: FallthroughChoiceType | None = None,
     ) -> None:
         super().__init__(project)
         self.digest = digest
         self.target_type = target_type
         self.target_identifier = target_identifier
-
-    def get_category(self) -> str:
-        return "digest_email"
-
-    def get_type(self) -> str:
-        return "notify.digest"
+        self.fallthrough_choice = fallthrough_choice
 
     def get_unsubscribe_key(self) -> tuple[str, int, str | None] | None:
         return "project", self.project.id, "alert_digest"
@@ -66,16 +64,32 @@ class DigestNotification(ProjectNotification):
         if not context:
             # This shouldn't be possible but adding a message just in case.
             return "Digest Report"
+
         return get_digest_subject(context["group"], context["counts"], context["start"])
 
-    def get_notification_title(self) -> str:
-        # This shouldn't be possible but adding a message just in case.
-        return "Digest Report"
+    def get_notification_title(
+        self, provider: ExternalProviders, context: Mapping[str, Any] | None = None
+    ) -> str:
+        if not context:
+            return "Digest Report"
+        project = context["group"].project
+        organization = project.organization
 
-    def get_title_link(self, recipient: Team | User) -> str | None:
+        return "<!date^{:.0f}^{count} {noun} detected {date} in| Digest Report for> <{project_link}|{project_name}>".format(
+            to_timestamp(context["start"]),
+            count=len(context["counts"]),
+            noun="issue" if len(context["counts"]) == 1 else "issues",
+            project_link=organization.absolute_url(
+                f"/organizations/{organization.slug}/projects/{project.slug}/"
+            ),
+            project_name=project.name,
+            date="{date_pretty}",
+        )
+
+    def get_title_link(self, recipient: RpcActor, provider: ExternalProviders) -> str | None:
         return None
 
-    def build_attachment_title(self, recipient: Team | User) -> str:
+    def build_attachment_title(self, recipient: RpcActor) -> str:
         return ""
 
     @property
@@ -112,7 +126,7 @@ class DigestNotification(ProjectNotification):
     def get_extra_context(
         self,
         participants_by_provider_by_event: Mapping[
-            Event, Mapping[ExternalProviders, set[Team | User]]
+            Event, Mapping[ExternalProviders, set[RpcActor]]
         ],
     ) -> Mapping[int, Mapping[str, Any]]:
         personalized_digests = get_personalized_digests(
@@ -129,7 +143,7 @@ class DigestNotification(ProjectNotification):
 
         if should_send_as_alert_notification(shared_context):
             return send_as_alert_notification(
-                shared_context, self.target_type, self.target_identifier
+                shared_context, self.target_type, self.target_identifier, self.fallthrough_choice
             )
 
         participants_by_provider_by_event = get_participants_by_event(
@@ -137,6 +151,7 @@ class DigestNotification(ProjectNotification):
             self.project,
             self.target_type,
             self.target_identifier,
+            self.fallthrough_choice,
         )
 
         # Get every actor ID for every provider as a set.

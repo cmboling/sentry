@@ -1,4 +1,3 @@
-import * as React from 'react';
 import styled from '@emotion/styled';
 
 /**
@@ -11,12 +10,14 @@ type Props = {
   avatar?: React.ReactNode;
 };
 
-const ShortId = ({shortId, avatar}: Props) => (
-  <Wrapper>
-    <AvatarWrapper>{avatar}</AvatarWrapper>
-    <IdWrapper>{shortId}</IdWrapper>
-  </Wrapper>
-);
+function ShortId({shortId, avatar}: Props) {
+  return (
+    <Wrapper>
+      <AvatarWrapper>{avatar}</AvatarWrapper>
+      <IdWrapper>{shortId}</IdWrapper>
+    </Wrapper>
+  );
+}
 
 export default ShortId;
 

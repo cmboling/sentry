@@ -2,8 +2,7 @@ import {Component} from 'react';
 import styled from '@emotion/styled';
 
 import {t} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 
 import {nullableValue} from './fieldRenderers';
 
@@ -58,7 +57,7 @@ const ArrayContainer = styled('div')<{expanded: boolean}>`
     outline: none;
     padding: 0;
     cursor: pointer;
-    color: ${p => p.theme.blue300};
+    color: ${p => p.theme.linkColor};
     margin-left: ${space(0.5)};
   }
 `;
@@ -67,7 +66,7 @@ const ArrayItem = styled('span')`
   flex-shrink: 1;
   display: block;
 
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
   width: unset;
 `;
 

@@ -4,7 +4,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import release_health
-from sentry.api.base import ReleaseAnalyticsMixin
+from sentry.api.base import ReleaseAnalyticsMixin, region_silo_endpoint
 from sentry.api.bases.organization import OrganizationReleasesBaseEndpoint
 from sentry.api.endpoints.organization_releases import (
     _release_suffix,
@@ -22,6 +22,7 @@ from sentry.api.serializers.rest_framework import (
 from sentry.models import Activity, Project, Release, ReleaseCommitError, ReleaseStatus
 from sentry.models.release import UnsafeReleaseDeletion
 from sentry.snuba.sessions import STATS_PERIODS
+from sentry.types.activity import ActivityType
 from sentry.utils.sdk import bind_organization_context, configure_scope
 
 
@@ -265,6 +266,7 @@ class OrganizationReleaseDetailsPaginationMixin:
         }
 
 
+@region_silo_endpoint
 class OrganizationReleaseDetailsEndpoint(
     OrganizationReleasesBaseEndpoint,
     ReleaseAnalyticsMixin,
@@ -475,7 +477,7 @@ class OrganizationReleaseDetailsEndpoint(
                     )
                 fetch_commits = not commit_list
                 try:
-                    release.set_refs(refs, request.user, fetch=fetch_commits)
+                    release.set_refs(refs, request.user.id, fetch=fetch_commits)
                 except InvalidRepository as e:
                     scope.set_tag("failure_reason", "InvalidRepository")
                     return Response({"refs": [str(e)]}, status=400)
@@ -483,7 +485,7 @@ class OrganizationReleaseDetailsEndpoint(
             if not was_released and release.date_released:
                 for project in projects:
                     Activity.objects.create(
-                        type=Activity.RELEASE,
+                        type=ActivityType.RELEASE.value,
                         project=project,
                         ident=Activity.get_version_ident(release.version),
                         data={"version": release.version},

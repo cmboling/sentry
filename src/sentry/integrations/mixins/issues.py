@@ -3,17 +3,29 @@ from __future__ import annotations
 import enum
 import logging
 from collections import defaultdict
+from copy import deepcopy
 from typing import Any, Mapping, Sequence
 
 from sentry.integrations.utils import where_should_sync
-from sentry.models import ExternalIssue, GroupLink, User, UserOption
+from sentry.models import ExternalIssue, GroupLink, UserOption
+from sentry.models.project import Project
+from sentry.notifications.utils import (
+    get_notification_group_title,
+    get_parent_and_repeating_spans,
+    get_span_and_problem,
+    get_span_evidence_value,
+    get_span_evidence_value_problem,
+)
+from sentry.services.hybrid_cloud.integration import integration_service
+from sentry.services.hybrid_cloud.user import RpcUser
+from sentry.services.hybrid_cloud.user_option import get_option_from_list, user_option_service
 from sentry.shared_integrations.exceptions import ApiError, IntegrationError
 from sentry.tasks.integrations import sync_status_inbound as sync_status_inbound_task
-from sentry.utils.compat import filter
 from sentry.utils.http import absolute_uri
 from sentry.utils.safe import safe_execute
 
 logger = logging.getLogger("sentry.integrations.issues")
+MAX_CHAR = 50
 
 
 class ResolveSyncAction(enum.Enum):
@@ -49,7 +61,7 @@ class IssueBasicMixin:
         return False
 
     def get_group_title(self, group, event, **kwargs):
-        return event.title
+        return get_notification_group_title(group, event, **kwargs)
 
     def get_issue_url(self, key):
         """
@@ -65,19 +77,40 @@ class IssueBasicMixin:
                 result.append(output)
         return "\n\n".join(result)
 
-    def get_group_description(self, group, event, **kwargs):
+    def get_group_link(self, group, **kwargs):
         params = {}
         if kwargs.get("link_referrer"):
             params["referrer"] = kwargs.get("link_referrer")
-        output = [
+        return [
             "Sentry Issue: [{}]({})".format(
                 group.qualified_short_id, absolute_uri(group.get_absolute_url(params=params))
             )
         ]
+
+    def get_group_description(self, group, event, **kwargs):
+        output = self.get_group_link(group, **kwargs)
         body = self.get_group_body(group, event)
         if body:
             output.extend(["", "```", body, "```"])
         return "\n".join(output)
+
+    def get_performance_issue_description_data(self, event):
+        """Generate the span evidence data from a performance issue to populate
+        an integration's ticket description. Each integration will need to take
+        this data and format it appropriately.
+        """
+        spans, matched_problem = get_span_and_problem(event)
+        if not matched_problem:
+            return ""
+
+        parent_span, repeating_spans = get_parent_and_repeating_spans(spans, matched_problem)
+        transaction_name = get_span_evidence_value_problem(matched_problem)
+        parent_span = get_span_evidence_value(parent_span)
+        repeating_spans = get_span_evidence_value(repeating_spans)
+        num_repeating_spans = (
+            str(len(matched_problem.offender_span_ids)) if matched_problem.offender_span_ids else ""
+        )
+        return (transaction_name, parent_span, num_repeating_spans, repeating_spans)
 
     def get_create_issue_config(self, group, user, **kwargs):
         """
@@ -131,7 +164,7 @@ class IssueBasicMixin:
         """
         return []
 
-    def store_issue_last_defaults(self, project, user, data):
+    def store_issue_last_defaults(self, project: Project, user: RpcUser, data):
         """
         Stores the last used field defaults on a per-project basis. This
         accepts a dict of values that will be filtered to keys returned by
@@ -149,27 +182,35 @@ class IssueBasicMixin:
         persisted_fields = self.get_persisted_default_config_fields()
         if persisted_fields:
             project_defaults = {k: v for k, v in data.items() if k in persisted_fields}
-            self.org_integration.config.setdefault("project_issue_defaults", {}).setdefault(
+            new_config = deepcopy(self.org_integration.config)
+            new_config.setdefault("project_issue_defaults", {}).setdefault(
                 str(project.id), {}
             ).update(project_defaults)
-            self.org_integration.save()
+            self.org_integration = integration_service.update_organization_integration(
+                org_integration_id=self.org_integration.id,
+                config=new_config,
+            )
 
         user_persisted_fields = self.get_persisted_user_default_config_fields()
         if user_persisted_fields:
             user_defaults = {k: v for k, v in data.items() if k in user_persisted_fields}
-            user_option_key = dict(user=user, key="issue:defaults", project=project)
-            new_user_defaults = UserOption.objects.get_value(default={}, **user_option_key)
-            new_user_defaults.setdefault(self.org_integration.integration.provider, {}).update(
-                user_defaults
+            user_option_key = dict(key="issue:defaults", project_id=project.id)
+            options = user_option_service.get_many(
+                filter={"user_ids": [user.id], **user_option_key}
             )
-            UserOption.objects.set_value(value=new_user_defaults, **user_option_key)
+            new_user_defaults = get_option_from_list(options, default={}, key="issue:defaults")
+            new_user_defaults.setdefault(self.model.provider, {}).update(user_defaults)
+            if user_defaults != new_user_defaults:
+                user_option_service.set_option(
+                    user_id=user.id, value=new_user_defaults, **user_option_key
+                )
 
     def get_defaults(self, project, user):
         project_defaults = self.get_project_defaults(project.id)
 
         user_option_key = dict(user=user, key="issue:defaults", project=project)
         user_defaults = UserOption.objects.get_value(default={}, **user_option_key).get(
-            self.org_integration.integration.provider, {}
+            self.model.provider, {}
         )
 
         defaults = {}
@@ -332,7 +373,7 @@ class IssueSyncMixin(IssueBasicMixin):
 
     def should_sync(self, attribute: str) -> bool:
         key = getattr(self, f"{attribute}_key", None)
-        if key is None:
+        if key is None or self.org_integration is None:
             return False
         value: bool = self.org_integration.config.get(key, False)
         return value
@@ -340,7 +381,7 @@ class IssueSyncMixin(IssueBasicMixin):
     def sync_assignee_outbound(
         self,
         external_issue: ExternalIssue,
-        user: User | None,
+        user: RpcUser | None,
         assign: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -380,3 +421,9 @@ class IssueSyncMixin(IssueBasicMixin):
                 "data": data,
             }
         )
+
+    def migrate_issues(self):
+        """
+        Migrate the corresponding plugin's issues to the integration and disable the plugins.
+        """
+        pass

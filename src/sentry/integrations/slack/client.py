@@ -15,7 +15,7 @@ class SlackClient(ApiClient):  # type: ignore
     allow_redirects = False
     integration_name = "slack"
     base_url = "https://slack.com/api"
-    datadog_prefix = "integrations.slack"
+    metrics_prefix = "integrations.slack"
 
     def track_response_data(
         self,
@@ -27,7 +27,7 @@ class SlackClient(ApiClient):  # type: ignore
         try:
             span.set_http_status(int(code))
         except ValueError:
-            span.set_status(code)
+            span.set_status(str(code))
 
         span.set_tag("integration", "slack")
 

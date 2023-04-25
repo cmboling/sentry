@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import re
-from typing import Any, Mapping, Sequence
+from datetime import datetime
+from typing import Any, Dict, Mapping, Sequence
 
 from django.utils.text import slugify
 from django.utils.translation import ugettext_lazy as _
@@ -18,10 +20,13 @@ from sentry.integrations import (
     IntegrationProvider,
 )
 from sentry.integrations.mixins import RepositoryMixin
+from sentry.integrations.mixins.commit_context import CommitContextMixin
+from sentry.integrations.utils.code_mapping import RepoTree
 from sentry.models import Integration, Organization, OrganizationIntegration, Repository
 from sentry.pipeline import Pipeline, PipelineView
+from sentry.services.hybrid_cloud.organization import organization_service
 from sentry.shared_integrations.constants import ERR_INTERNAL, ERR_UNAUTHORIZED
-from sentry.shared_integrations.exceptions import ApiError
+from sentry.shared_integrations.exceptions import ApiError, IntegrationError
 from sentry.tasks.integrations import migrate_repo
 from sentry.utils import jwt
 from sentry.web.helpers import render_to_response
@@ -30,6 +35,8 @@ from .client import GitHubAppsClient, GitHubClientMixin
 from .issues import GitHubIssueBasic
 from .repository import GitHubRepositoryProvider
 from .utils import get_jwt
+
+logger = logging.getLogger("sentry.integrations.github")
 
 DESCRIPTION = """
 Connect your Sentry organization into your GitHub organization or user account.
@@ -62,6 +69,12 @@ FEATURES = [
         """,
         IntegrationFeatures.STACKTRACE_LINK,
     ),
+    FeatureDescription(
+        """
+        Import your GitHub [CODEOWNERS file](https://docs.sentry.io/product/integrations/source-code-mgmt/github/#code-owners) and use it alongside your ownership rules to assign Sentry issues.
+        """,
+        IntegrationFeatures.CODEOWNERS,
+    ),
 ]
 
 metadata = IntegrationMetadata(
@@ -87,24 +100,66 @@ def build_repository_query(metadata: Mapping[str, Any], name: str, query: str) -
     return f"{account_type}:{name} {query}".encode()
 
 
-class GitHubIntegration(IntegrationInstallation, GitHubIssueBasic, RepositoryMixin):  # type: ignore
+# Github App docs and list of available endpoints
+# https://docs.github.com/en/rest/apps/installations
+# https://docs.github.com/en/rest/overview/endpoints-available-for-github-apps
+class GitHubIntegration(IntegrationInstallation, GitHubIssueBasic, RepositoryMixin, CommitContextMixin):  # type: ignore
     repo_search = True
     codeowners_locations = ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]
 
     def get_client(self) -> GitHubClientMixin:
         return GitHubAppsClient(integration=self.model)
 
-    def get_repositories(self, query: str | None = None) -> Sequence[Mapping[str, Any]]:
+    def get_trees_for_org(self, cache_seconds: int = 3600 * 24) -> Dict[str, RepoTree]:
+        trees: Dict[str, RepoTree] = {}
+        domain_name = self.model.metadata["domain_name"]
+        extra = {"metadata": self.model.metadata}
+        if domain_name.find("github.com/") == -1:
+            logger.warning("We currently only support github.com domains.", extra=extra)
+            return trees
+
+        gh_org = domain_name.split("github.com/")[1]
+        extra.update({"gh_org": gh_org})
+        organization_context = organization_service.get_organization_by_id(
+            id=self.org_integration.organization_id, user_id=None
+        )
+        if not organization_context:
+            logger.exception(
+                "No organization information was found. Continuing execution.", extra=extra
+            )
+        else:
+            trees = self.get_client().get_trees_for_org(gh_org=gh_org, cache_seconds=cache_seconds)
+
+        return trees
+
+    def get_repositories(
+        self, query: str | None = None, fetch_max_pages: bool = False
+    ) -> Sequence[Mapping[str, Any]]:
+        """
+        This fetches all repositories accessible to a Github App
+        https://docs.github.com/en/rest/apps/installations#list-repositories-accessible-to-the-app-installation
+
+        per_page: The number of results per page (max 100; default 30).
+        """
         if not query:
             return [
-                {"name": i["name"], "identifier": i["full_name"]}
-                for i in self.get_client().get_repositories()
+                {
+                    "name": i["name"],
+                    "identifier": i["full_name"],
+                    "default_branch": i.get("default_branch"),
+                }
+                for i in self.get_client().get_repositories(fetch_max_pages)
             ]
 
         full_query = build_repository_query(self.model.metadata, self.model.name, query)
         response = self.get_client().search_repositories(full_query)
         return [
-            {"name": i["name"], "identifier": i["full_name"]} for i in response.get("items", [])
+            {
+                "name": i["name"],
+                "identifier": i["full_name"],
+                "default_branch": i.get("default_branch"),
+            }
+            for i in response.get("items", [])
         ]
 
     def search_issues(self, query: str) -> Mapping[str, Sequence[Mapping[str, Any]]]:
@@ -153,11 +208,56 @@ class GitHubIntegration(IntegrationInstallation, GitHubIssueBasic, RepositoryMix
             # make sure installation has access to this specific repo
             # use hooks endpoint since we explicitly ask for those permissions
             # when installing the app (commits can be accessed for public repos)
-            # https://developer.github.com/v3/repos/hooks/#list-hooks
+            # https://docs.github.com/en/rest/webhooks/repo-config#list-hooks
             client.repo_hooks(repo.config["name"])
         except ApiError:
             return False
         return True
+
+    def get_commit_context(
+        self, repo: Repository, filepath: str, ref: str, event_frame: Mapping[str, Any]
+    ) -> Mapping[str, str] | None:
+        lineno = event_frame.get("lineno", 0)
+        if not lineno:
+            return None
+        try:
+            blame_range: Sequence[Mapping[str, Any]] | None = self.get_blame_for_file(
+                repo, filepath, ref, lineno
+            )
+
+            if blame_range is None:
+                return None
+        except ApiError as e:
+            raise e
+
+        try:
+            commit: Mapping[str, Any] = max(
+                (
+                    blame
+                    for blame in blame_range
+                    if blame.get("startingLine", 0) <= lineno <= blame.get("endingLine", 0)
+                ),
+                key=lambda blame: datetime.strptime(
+                    blame.get("commit", {}).get("committedDate"), "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                default={},
+            )
+            if not commit:
+                return None
+        except (ValueError, IndexError):
+            return None
+
+        commitInfo = commit.get("commit")
+        if not commitInfo:
+            return None
+        else:
+            return {
+                "commitId": commitInfo.get("oid"),
+                "committedDate": commitInfo.get("committedDate"),
+                "commitMessage": commitInfo.get("message"),
+                "commitAuthorName": commitInfo.get("author", {}).get("name"),
+                "commitAuthorEmail": commitInfo.get("author", {}).get("email"),
+            }
 
 
 class GitHubIntegrationProvider(IntegrationProvider):  # type: ignore
@@ -217,7 +317,12 @@ class GitHubIntegrationProvider(IntegrationProvider):  # type: ignore
         return resp
 
     def build_integration(self, state: Mapping[str, str]) -> Mapping[str, Any]:
-        installation = self.get_installation_info(state["installation_id"])
+        try:
+            installation = self.get_installation_info(state["installation_id"])
+        except ApiError as api_error:
+            if api_error.code == 404:
+                raise IntegrationError("The GitHub installation could not be found.")
+            raise api_error
 
         integration = {
             "name": installation["account"]["login"],
@@ -259,15 +364,17 @@ class GitHubInstallationRedirect(PipelineView):
             pipeline.bind_state("reinstall_id", request.GET["reinstall_id"])
 
         if "installation_id" in request.GET:
-            organization = self.get_active_organization(request)
+            self.determine_active_organization(request)
 
-            # We want to wait until the scheduled deletions finish or else the
-            # post install to migrate repos do not work.
-            integration_pending_deletion_exists = OrganizationIntegration.objects.filter(
-                integration__provider=GitHubIntegrationProvider.key,
-                organization=organization,
-                status=ObjectStatus.PENDING_DELETION,
-            ).exists()
+            integration_pending_deletion_exists = False
+            if self.active_organization:
+                # We want to wait until the scheduled deletions finish or else the
+                # post install to migrate repos do not work.
+                integration_pending_deletion_exists = OrganizationIntegration.objects.filter(
+                    integration__provider=GitHubIntegrationProvider.key,
+                    organization_id=self.active_organization.organization.id,
+                    status=ObjectStatus.PENDING_DELETION,
+                ).exists()
 
             if integration_pending_deletion_exists:
                 return render_to_response(

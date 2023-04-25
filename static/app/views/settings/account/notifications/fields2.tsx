@@ -1,5 +1,8 @@
-import {Field} from 'sentry/components/forms/type';
+import {Fragment} from 'react';
+
+import {Field} from 'sentry/components/forms/types';
 import ExternalLink from 'sentry/components/links/externalLink';
+import QuestionTooltip from 'sentry/components/questionTooltip';
 import {t, tct} from 'sentry/locale';
 import {getDocsLinkForEventType} from 'sentry/views/settings/account/notifications/utils';
 
@@ -31,7 +34,7 @@ export const NOTIFICATION_SETTING_FIELDS: Record<string, Field> = {
     label: t('Deploys'),
     choices: [
       ['always', t('On')],
-      ['committed_only', t('Only Committed Issues')],
+      ['committed_only', t('Releases with My Commits')],
       ['never', t('Off')],
     ],
     help: t('Release, environment, and commit overviews.'),
@@ -41,10 +44,18 @@ export const NOTIFICATION_SETTING_FIELDS: Record<string, Field> = {
     type: 'select',
     label: t('Delivery Method'),
     choices: [
-      ['email', t('Send to Email')],
-      ['slack', t('Send to Slack')],
-      ['email+slack', t('Send to Email and Slack')],
+      ['email', t('Email')],
+      ['slack', t('Slack')],
+      ['msteams', t('Microsoft Teams')],
     ],
+    multiple: true,
+    onChange: val => {
+      // This is a little hack to prevent this field from being empty.
+      // TODO(nisanthan): need to prevent showing the clearable on. the multi-select when its only 1 value.
+      if (!val || val.length === 0) {
+        throw Error('Invalid selection. Field cannot be empty.');
+      }
+    },
   },
   approval: {
     name: 'approval',
@@ -78,6 +89,16 @@ export const NOTIFICATION_SETTING_FIELDS: Record<string, Field> = {
     label: t('Email Routing'),
     help: t('Change the email address that receives notifications.'),
   },
+  spikeProtection: {
+    name: 'spikeProtection',
+    type: 'select',
+    label: t('Spike Protection'),
+    choices: [
+      ['always', t('On')],
+      ['never', t('Off')],
+    ],
+    help: t('Notifications about spikes on a per project basis.'),
+  },
   personalActivityNotifications: {
     name: 'personalActivityNotifications',
     type: 'select',
@@ -105,9 +126,7 @@ export const QUOTA_FIELDS = [
   {
     name: 'quotaWarnings',
     label: t('Set Quota Limit'),
-    help: t(
-      'Receive notifications when your organization exceeeds the following limits.'
-    ),
+    help: t('Receive notifications when your organization exceeds the following limits.'),
     choices: [
       ['always', t('100% and 80%')],
       ['never', t('100%')],
@@ -139,6 +158,17 @@ export const QUOTA_FIELDS = [
     ] as const,
   },
   {
+    name: 'quotaReplays',
+    label: t('Replays'),
+    help: tct('Receive notifications about your replay quotas. [learnMore:Learn more]', {
+      learnMore: <ExternalLink href={getDocsLinkForEventType('replay')} />,
+    }),
+    choices: [
+      ['always', t('On')],
+      ['never', t('Off')],
+    ] as const,
+  },
+  {
     name: 'quotaAttachments',
     label: t('Attachments'),
     help: tct(
@@ -147,6 +177,20 @@ export const QUOTA_FIELDS = [
         learnMore: <ExternalLink href={getDocsLinkForEventType('attachment')} />,
       }
     ),
+    choices: [
+      ['always', t('On')],
+      ['never', t('Off')],
+    ] as const,
+  },
+  {
+    name: 'quotaSpendAllocations',
+    label: (
+      <Fragment>
+        {t('Spend Allocations')}{' '}
+        <QuestionTooltip position="top" title="Business plan only" size="xs" />
+      </Fragment>
+    ),
+    help: t('Receive notifications about your spend allocations.'),
     choices: [
       ['always', t('On')],
       ['never', t('Off')],

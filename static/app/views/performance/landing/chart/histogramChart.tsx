@@ -12,7 +12,7 @@ import Placeholder from 'sentry/components/placeholder';
 import QuestionTooltip from 'sentry/components/questionTooltip';
 import {IconWarning} from 'sentry/icons/iconWarning';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import {Series} from 'sentry/types/echarts';
 import EventView from 'sentry/utils/discover/eventView';
@@ -142,10 +142,11 @@ export function Chart(props: ChartProps) {
     disableChartPadding,
     colors,
   } = props;
+  const theme = useTheme();
+
   if (!chartData) {
     return null;
   }
-  const theme = useTheme();
 
   const series = {
     seriesName: t('Count'),
@@ -155,7 +156,6 @@ export function Chart(props: ChartProps) {
   const xAxis = {
     type: 'category' as const,
     truncate: true,
-    boundaryGap: false,
     axisTick: {
       alignWithLabel: true,
     },

@@ -1,7 +1,7 @@
 from sentry.projectoptions import register
 
 # latest epoch
-LATEST_EPOCH = 7
+LATEST_EPOCH = 11
 
 # grouping related configs
 #
@@ -14,7 +14,9 @@ LATEST_EPOCH = 7
 # epoch instead.
 LEGACY_GROUPING_CONFIG = "legacy:2019-03-12"
 DEFAULT_GROUPING_CONFIG = "newstyle:2019-10-29"
-BETA_GROUPING_CONFIG = "mobile:2021-02-12"
+# NOTE: this is empty for now to migrate projects off the deprecated
+# `mobile` strategy via grouping auto-updates.
+BETA_GROUPING_CONFIG = ""
 register(
     key="sentry:grouping_config",
     epoch_defaults={
@@ -37,33 +39,43 @@ register(key="sentry:fingerprinting_rules", default="")
 register(key="sentry:secondary_grouping_expiry", default=0)
 register(key="sentry:secondary_grouping_config", default=None)
 
+# is auto upgrading enabled?
+register(key="sentry:grouping_auto_update", default=True)
+
 # The JavaScript loader version that is the project default.  This option
 # is expected to be never set but the epoch defaults are used if no
 # version is set on a project's DSN.
-register(key="sentry:default_loader_version", epoch_defaults={1: "4.x", 2: "5.x", 7: "6.x"})
+register(
+    key="sentry:default_loader_version", epoch_defaults={1: "4.x", 2: "5.x", 7: "6.x", 8: "7.x"}
+)
 
 # Default symbol sources.  The ios source does not exist by default and
 # will be skipped later.  The microsoft source exists by default and is
 # unlikely to be disabled.
 register(
     key="sentry:builtin_symbol_sources",
-    epoch_defaults={1: ["ios"], 2: ["ios", "microsoft"], 5: ["ios", "microsoft", "android"]},
+    epoch_defaults={
+        1: ["ios"],
+        2: ["ios", "microsoft"],
+        5: ["ios", "microsoft", "android"],
+        9: ["ios", "microsoft", "android", "nuget"],
+    },
 )
 
 # Default legacy-browsers filter
 register(key="filters:legacy-browsers", epoch_defaults={1: "0"})
 
-# Default legacy-browsers filter
+# Default web crawlers filter
 register(key="filters:web-crawlers", epoch_defaults={1: "1", 6: "0"})
 
-# Default legacy-browsers filter
+# Default browser extensions filter
 register(key="filters:browser-extensions", epoch_defaults={1: "0"})
 
-# Default legacy-browsers filter
+# Default localhost filter
 register(key="filters:localhost", epoch_defaults={1: "0"})
 
-# Default dynamic sampling rules
-register(key="sentry:dynamicSampling", epoch_defaults={1: []})
+# Default react hydration errors filter
+register(key="filters:react-hydration-errors", epoch_defaults={1: "1"})
 
 # Default breakdowns config
 register(
@@ -72,7 +84,7 @@ register(
         1: {
             "span_ops": {
                 "type": "spanOperations",
-                "matches": ["http", "db", "browser", "resource"],
+                "matches": ["http", "db", "browser", "resource", "ui"],
             }
         },
     },
@@ -84,3 +96,49 @@ register(key="sentry:transaction_metrics_custom_tags", epoch_defaults={1: []})
 
 # Default span attributes config
 register(key="sentry:span_attributes", epoch_defaults={1: ["exclusive-time"]})
+
+# Rate at which performance issues are created per project. Defaults to on (rate of 1.0), system flags and options will determine if an organization creates issues.
+# Can be used to turn off a projects detection for users if there is a project-specific issue.
+register(key="sentry:performance_issue_creation_rate", default=1.0)
+
+# Rate at which performance problems are sent to issues platform. Defaults to False, system flags and options will determine if an organization sends perf problems to platform.
+# Can be used to turn off writing occurrences for users if there is a project-specific issue.
+register(key="sentry:performance_issue_send_to_issues_platform", default=True)
+
+# Rate at which performance issues are created through issues platform per project. Defaults to False, system flags and options will determine if an organization creates issues through platform.
+# Can be used to turn off issue creation for users if there is a project-specific issue.
+register(key="sentry:performance_issue_create_issue_through_platform", default=False)
+
+DEFAULT_PROJECT_PERFORMANCE_DETECTION_SETTINGS = {
+    "n_plus_one_db_detection_rate": 1.0,
+    "n_plus_one_api_calls_detection_rate": 1.0,
+    "consecutive_db_queries_detection_rate": 1.0,
+    "uncompressed_assets_detection_enabled": True,
+}
+# A dict containing all the specific detection thresholds and rates.
+register(
+    key="sentry:performance_issue_settings",
+    default=DEFAULT_PROJECT_PERFORMANCE_DETECTION_SETTINGS,
+)
+
+# Replacement rules for transaction names discovered by the transaction clusterer.
+# Contains a mapping from rule to last seen timestamp,
+# for example `{"/organizations/*/**": 1334318402}`
+register(key="sentry:transaction_name_cluster_rules", default={})
+
+# The JavaScript loader dynamic SDK options that are the project defaults.
+register(
+    key="sentry:default_loader_options",
+    epoch_defaults={
+        10: {
+            "hasPerformance": True,
+            "hasReplay": True,
+        }
+    },
+)
+
+# The available loader SDK versions
+register(
+    key="sentry:loader_available_sdk_versions",
+    epoch_defaults={1: ["latest", "7.x", "6.x", "5.x", "4.x"], 11: ["latest", "7.x"]},
+)

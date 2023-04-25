@@ -1,19 +1,21 @@
 from datetime import datetime, timedelta
+from functools import cached_property
 
 from django.utils import timezone
-from exam import fixture
 from freezegun import freeze_time
 
 from sentry.api.serializers import serialize
 from sentry.models.recentsearch import RecentSearch
 from sentry.models.search_common import SearchType
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test(stable=True)
 class RecentSearchesListTest(APITestCase):
     endpoint = "sentry-api-0-organization-recent-searches"
 
-    @fixture
+    @cached_property
     def user(self):
         return self.create_user("test@test.com")
 
@@ -22,27 +24,37 @@ class RecentSearchesListTest(APITestCase):
         kwargs = {}
         if query:
             kwargs["query"] = query
-        response = self.get_valid_response(self.organization.slug, type=search_type.value, **kwargs)
+        response = self.get_success_response(
+            self.organization.slug, type=search_type.value, **kwargs
+        )
         assert response.data == serialize(expected)
 
     def test_simple(self):
         self.create_team(members=[self.user])
         RecentSearch.objects.create(
             organization=self.organization,
-            user=self.create_user("other@user.com"),
+            user_id=self.create_user("other@user.com").id,
             type=SearchType.ISSUE.value,
             query="some test",
         )
         RecentSearch.objects.create(
             organization=self.create_organization(),
-            user=self.user,
+            user_id=self.user.id,
             type=SearchType.ISSUE.value,
             query="some test",
         )
         event_recent_search = RecentSearch.objects.create(
             organization=self.organization,
-            user=self.user,
+            user_id=self.user.id,
             type=SearchType.EVENT.value,
+            query="some test",
+            last_seen=timezone.now(),
+            date_added=timezone.now(),
+        )
+        session_recent_search = RecentSearch.objects.create(
+            organization=self.organization,
+            user_id=self.user.id,
+            type=SearchType.SESSION.value,
             query="some test",
             last_seen=timezone.now(),
             date_added=timezone.now(),
@@ -50,7 +62,7 @@ class RecentSearchesListTest(APITestCase):
         issue_recent_searches = [
             RecentSearch.objects.create(
                 organization=self.organization,
-                user=self.user,
+                user_id=self.user.id,
                 type=SearchType.ISSUE.value,
                 query="some test",
                 last_seen=timezone.now(),
@@ -58,7 +70,7 @@ class RecentSearchesListTest(APITestCase):
             ),
             RecentSearch.objects.create(
                 organization=self.organization,
-                user=self.user,
+                user_id=self.user.id,
                 type=SearchType.ISSUE.value,
                 query="older query",
                 last_seen=timezone.now() - timedelta(minutes=30),
@@ -66,7 +78,7 @@ class RecentSearchesListTest(APITestCase):
             ),
             RecentSearch.objects.create(
                 organization=self.organization,
-                user=self.user,
+                user_id=self.user.id,
                 type=SearchType.ISSUE.value,
                 query="oldest query",
                 last_seen=timezone.now() - timedelta(hours=1),
@@ -75,6 +87,7 @@ class RecentSearchesListTest(APITestCase):
         ]
         self.check_results(issue_recent_searches, search_type=SearchType.ISSUE)
         self.check_results([event_recent_search], search_type=SearchType.EVENT)
+        self.check_results([session_recent_search], search_type=SearchType.SESSION)
 
     def test_param_validation(self):
         self.login_as(user=self.user)
@@ -92,7 +105,7 @@ class RecentSearchesListTest(APITestCase):
         issue_recent_searches = [
             RecentSearch.objects.create(
                 organization=self.organization,
-                user=self.user,
+                user_id=self.user.id,
                 type=SearchType.ISSUE.value,
                 query="some test",
                 last_seen=timezone.now(),
@@ -100,7 +113,7 @@ class RecentSearchesListTest(APITestCase):
             ),
             RecentSearch.objects.create(
                 organization=self.organization,
-                user=self.user,
+                user_id=self.user.id,
                 type=SearchType.ISSUE.value,
                 query="older query",
                 last_seen=timezone.now() - timedelta(minutes=30),
@@ -108,7 +121,7 @@ class RecentSearchesListTest(APITestCase):
             ),
             RecentSearch.objects.create(
                 organization=self.organization,
-                user=self.user,
+                user_id=self.user.id,
                 type=SearchType.ISSUE.value,
                 query="oldest query",
                 last_seen=timezone.now() - timedelta(hours=1),
@@ -122,11 +135,11 @@ class RecentSearchesCreateTest(APITestCase):
     endpoint = "sentry-api-0-organization-recent-searches"
     method = "post"
 
-    @fixture
+    @cached_property
     def organization(self):
         return self.create_organization()
 
-    @fixture
+    @cached_property
     def user(self):
         user = self.create_user("test@test.com")
         self.create_team(members=[user], organization=self.organization)
@@ -142,7 +155,7 @@ class RecentSearchesCreateTest(APITestCase):
             assert response.status_code == 201
             assert RecentSearch.objects.filter(
                 organization=self.organization,
-                user=self.user,
+                user_id=self.user.id,
                 type=search_type,
                 query=query,
                 last_seen=the_date,
@@ -153,7 +166,7 @@ class RecentSearchesCreateTest(APITestCase):
             assert response.status_code == 204, response.content
             assert RecentSearch.objects.filter(
                 organization=self.organization,
-                user=self.user,
+                user_id=self.user.id,
                 type=search_type,
                 query=query,
                 last_seen=the_date,

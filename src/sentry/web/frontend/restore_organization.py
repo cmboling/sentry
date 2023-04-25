@@ -4,8 +4,10 @@ from django.contrib import messages
 from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
 
+from sentry import audit_log
 from sentry.api import client
-from sentry.models import AuditLogEntryEvent, Organization, OrganizationStatus
+from sentry.models import Organization, OrganizationStatus
+from sentry.services.hybrid_cloud.organization import organization_service
 from sentry.web.frontend.base import OrganizationView
 from sentry.web.helpers import render_to_response
 
@@ -27,20 +29,21 @@ class RestoreOrganizationView(OrganizationView):
     required_scope = "org:admin"
     sudo_required = True
 
-    def get_active_organization(self, request: Request, organization_slug):
-        # A simply version than what comes from the base
+    def determine_active_organization(self, request: Request, organization_slug=None) -> None:
+        # A simplified version than what comes from the base
         # OrganizationView. We need to grab an organization
         # that is in any state, not just VISIBLE.
-        organizations = Organization.objects.get_for_user(user=request.user, only_visible=False)
-
-        try:
-            return next(o for o in organizations if o.slug == organization_slug)
-        except StopIteration:
-            return None
+        organization = organization_service.get_organization_by_slug(
+            user_id=request.user.id, slug=organization_slug, only_visible=False
+        )
+        if organization and organization.member:
+            self.active_organization = organization
+        else:
+            self.active_organization = None
 
     def get(self, request: Request, organization) -> Response:
         if organization.status == OrganizationStatus.VISIBLE:
-            return self.redirect(organization.get_url())
+            return self.redirect(Organization.get_url(organization.slug))
 
         context = {
             # If this were named 'organization', it triggers logic in the base
@@ -77,7 +80,7 @@ class RestoreOrganizationView(OrganizationView):
                     request=request,
                     organization=organization,
                     target_object=organization.id,
-                    event=AuditLogEntryEvent.ORG_RESTORE,
+                    event=audit_log.get_event_id("ORG_RESTORE"),
                     data=organization.get_audit_log_data(),
                 )
-        return self.redirect(organization.get_url())
+        return self.redirect(Organization.get_url(organization.slug))

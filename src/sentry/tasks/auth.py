@@ -5,19 +5,10 @@ from django.db import IntegrityError
 from django.db.models import F
 from django.urls import reverse
 
-from sentry import features, options
+from sentry import audit_log, features, options
 from sentry.auth import manager
 from sentry.auth.exceptions import ProviderNotRegistered
-from sentry.models import (
-    ApiKey,
-    AuditLogEntry,
-    AuditLogEntryEvent,
-    Authenticator,
-    Organization,
-    OrganizationMember,
-    User,
-    UserEmail,
-)
+from sentry.models import ApiKey, AuditLogEntry, Organization, OrganizationMember, User, UserEmail
 from sentry.tasks.base import instrumented_task
 from sentry.utils.email import MessageBuilder
 from sentry.utils.http import absolute_uri
@@ -101,9 +92,9 @@ class OrganizationComplianceTask(abc.ABC):
                     actor=actor,
                     actor_key=actor_key,
                     ip_address=ip_address,
-                    event=AuditLogEntryEvent.MEMBER_PENDING,
+                    event=audit_log.get_event_id("MEMBER_PENDING"),
                     data=member.get_audit_log_data(),
-                    organization=org,
+                    organization_id=org.id,
                     target_object=org.id,
                     target_user=user,
                 )
@@ -121,7 +112,7 @@ class TwoFactorComplianceTask(OrganizationComplianceTask):
     log_label = "2FA"
 
     def is_compliant(self, member: OrganizationMember) -> bool:
-        return Authenticator.objects.user_has_2fa(member.user)
+        return member.user.has_2fa()
 
     def call_to_action(self, org: Organization, user: User, member: OrganizationMember):
         # send invite to setup 2fa
@@ -136,7 +127,7 @@ class TwoFactorComplianceTask(OrganizationComplianceTask):
             type="user.setup_2fa",
             context=email_context,
         )
-        message.send_async([member.email])
+        message.send_async([member.get_email()])
 
 
 @instrumented_task(

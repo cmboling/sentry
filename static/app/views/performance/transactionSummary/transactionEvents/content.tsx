@@ -3,17 +3,23 @@ import styled from '@emotion/styled';
 import {Location} from 'history';
 import omit from 'lodash/omit';
 
-import Button from 'sentry/components/button';
-import DropdownControl, {DropdownItem} from 'sentry/components/dropdownControl';
+import {Button} from 'sentry/components/button';
+import {CompactSelect} from 'sentry/components/compactSelect';
+import DatePageFilter from 'sentry/components/datePageFilter';
+import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import SearchBar from 'sentry/components/events/searchBar';
 import * as Layout from 'sentry/components/layouts/thirds';
+import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
 import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {Organization} from 'sentry/types';
+import {space} from 'sentry/styles/space';
+import {Organization, Project} from 'sentry/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import EventView from 'sentry/utils/discover/eventView';
-import {WebVital} from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
 import {decodeScalar} from 'sentry/utils/queryString';
+import projectSupportsReplay from 'sentry/utils/replays/projectSupportsReplay';
+import {useRoutes} from 'sentry/utils/useRoutes';
 
 import Filter, {filterToSearchConditions, SpanOperationBreakdownFilter} from '../filter';
 import {SetStateAction} from '../types';
@@ -28,6 +34,8 @@ type Props = {
   onChangeEventsDisplayFilter: (eventsDisplayFilterName: EventsDisplayFilterName) => void;
   onChangeSpanOperationBreakdownFilter: (newFilter: SpanOperationBreakdownFilter) => void;
   organization: Organization;
+  projectId: string;
+  projects: Project[];
   setError: SetStateAction<string | undefined>;
   spanOperationBreakdownFilter: SpanOperationBreakdownFilter;
   transactionName: string;
@@ -35,7 +43,7 @@ type Props = {
   webVital?: WebVital;
 };
 
-const TRANSACTIONS_LIST_TITLES: Readonly<string[]> = [
+export const TRANSACTIONS_LIST_TITLES: Readonly<string[]> = [
   t('event id'),
   t('user'),
   t('operation duration'),
@@ -53,13 +61,18 @@ function EventsContent(props: Props) {
     spanOperationBreakdownFilter,
     webVital,
     setError,
+    projectId,
+    projects,
   } = props;
-
+  const routes = useRoutes();
   const eventView = originalEventView.clone();
   const transactionsListTitles = TRANSACTIONS_LIST_TITLES.slice();
+  const project = projects.find(p => p.id === projectId);
+
+  const fields = [...eventView.fields];
 
   if (webVital) {
-    transactionsListTitles.splice(3, 0, t(webVital));
+    transactionsListTitles.splice(3, 0, webVital);
   }
 
   const spanOperationBreakdownConditions = filterToSearchConditions(
@@ -69,22 +82,44 @@ function EventsContent(props: Props) {
 
   if (spanOperationBreakdownConditions) {
     eventView.query = `${eventView.query} ${spanOperationBreakdownConditions}`.trim();
-    transactionsListTitles.splice(2, 1, t(`${spanOperationBreakdownFilter} duration`));
+    transactionsListTitles.splice(2, 1, t('%s duration', spanOperationBreakdownFilter));
   }
+
+  if (
+    organization.features.includes('profiling') &&
+    project &&
+    // only show for projects that already sent a profile
+    // once we have a more compact design we will show this for
+    // projects that support profiling as well
+    project.hasProfiles
+  ) {
+    transactionsListTitles.push(t('profile'));
+    fields.push({field: 'profile.id'});
+  }
+
+  if (
+    organization.features.includes('session-replay') &&
+    project &&
+    projectSupportsReplay(project)
+  ) {
+    transactionsListTitles.push(t('replay'));
+    fields.push({field: 'replayId'});
+  }
+
+  eventView.fields = fields;
 
   return (
     <Layout.Main fullWidth>
-      <Search {...props} />
-      <StyledTable>
-        <EventsTable
-          eventView={eventView}
-          organization={organization}
-          location={location}
-          setError={setError}
-          columnTitles={transactionsListTitles}
-          transactionName={transactionName}
-        />
-      </StyledTable>
+      <Search {...props} eventView={eventView} />
+      <EventsTable
+        eventView={eventView}
+        organization={organization}
+        routes={routes}
+        location={location}
+        setError={setError}
+        columnTitles={transactionsListTitles}
+        transactionName={transactionName}
+      />
     </Layout.Main>
   );
 }
@@ -123,13 +158,23 @@ function Search(props: Props) {
     percentileValues
   );
 
+  const handleDiscoverButtonClick = () => {
+    trackAnalytics('performance_views.all_events.open_in_discover', {
+      organization,
+    });
+  };
+
   return (
-    <SearchWrapper>
+    <FilterActions>
       <Filter
         organization={organization}
         currentFilter={spanOperationBreakdownFilter}
         onChangeFilter={onChangeSpanOperationBreakdownFilter}
       />
+      <PageFilterBar condensed>
+        <EnvironmentPageFilter />
+        <DatePageFilter alignDropdown="left" />
+      </PageFilterBar>
       <StyledSearchBar
         organization={organization}
         projectIds={eventView.project}
@@ -137,52 +182,49 @@ function Search(props: Props) {
         fields={eventView.fields}
         onSearch={handleSearch}
       />
-      <SearchRowMenuItem>
-        <DropdownControl
-          buttonProps={{prefix: t('Percentile')}}
-          label={eventsFilterOptions[eventsDisplayFilterName].label}
-        >
-          {Object.entries(eventsFilterOptions).map(([name, filter]) => {
-            return (
-              <DropdownItem
-                key={name}
-                onSelect={onChangeEventsDisplayFilter}
-                eventKey={name}
-                data-test-id={name}
-                isActive={eventsDisplayFilterName === name}
-              >
-                {filter.label}
-              </DropdownItem>
-            );
-          })}
-        </DropdownControl>
-      </SearchRowMenuItem>
-      <SearchRowMenuItem>
-        <Button to={eventView.getResultsViewUrlTarget(organization.slug)}>
-          {t('Open in Discover')}
-        </Button>
-      </SearchRowMenuItem>
-    </SearchWrapper>
+      <CompactSelect
+        triggerProps={{prefix: t('Percentile')}}
+        value={eventsDisplayFilterName}
+        onChange={opt => onChangeEventsDisplayFilter(opt.value)}
+        options={Object.entries(eventsFilterOptions).map(([name, filter]) => ({
+          value: name as EventsDisplayFilterName,
+          label: filter.label,
+        }))}
+      />
+      <Button
+        to={eventView.getResultsViewUrlTarget(organization.slug)}
+        onClick={handleDiscoverButtonClick}
+      >
+        {t('Open in Discover')}
+      </Button>
+    </FilterActions>
   );
 }
 
-const SearchWrapper = styled('div')`
-  display: flex;
-  width: 100%;
-  margin-bottom: ${space(3)};
+const FilterActions = styled('div')`
+  display: grid;
+  gap: ${space(2)};
+  margin-bottom: ${space(2)};
+
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    grid-template-columns: repeat(4, min-content);
+  }
+
+  @media (min-width: ${p => p.theme.breakpoints.xlarge}) {
+    grid-template-columns: auto auto 1fr auto auto;
+  }
 `;
 
 const StyledSearchBar = styled(SearchBar)`
-  flex-grow: 1;
-`;
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    order: 1;
+    grid-column: 1/6;
+  }
 
-const StyledTable = styled('div')`
-  flex-grow: 1;
-`;
-
-const SearchRowMenuItem = styled('div')`
-  margin-left: ${space(1)};
-  flex-grow: 0;
+  @media (min-width: ${p => p.theme.breakpoints.xlarge}) {
+    order: initial;
+    grid-column: auto;
+  }
 `;
 
 export default EventsContent;

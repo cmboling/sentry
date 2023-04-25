@@ -1,9 +1,16 @@
 from typing import TYPE_CHECKING, Sequence
 
+from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 
 from sentry.constants import ObjectStatus
-from sentry.db.models import BaseManager, FlexibleForeignKey, Model, sane_repr
+from sentry.db.models import (
+    BaseManager,
+    FlexibleForeignKey,
+    Model,
+    region_silo_only_model,
+    sane_repr,
+)
 
 if TYPE_CHECKING:
     from sentry.models import Team
@@ -24,13 +31,15 @@ class ProjectTeamManager(BaseManager):
         orgs = {i.organization_id: i.organization for i in teams}
 
         for project_team in project_teams:
-            project_team.project.set_cached_field_value(
-                "organization", orgs[project_team.project.organization_id]
-            )
+            if project_team.project.organization_id in orgs:
+                project_team.project.set_cached_field_value(
+                    "organization", orgs[project_team.project.organization_id]
+                )
 
         return project_teams
 
 
+@region_silo_only_model
 class ProjectTeam(Model):
     __include_in_export__ = True
 
@@ -48,16 +57,21 @@ class ProjectTeam(Model):
 
 
 def process_resource_change(instance, **kwargs):
+    from sentry.models import Organization, Project
     from sentry.tasks.codeowners import update_code_owners_schema
 
-    return (
-        update_code_owners_schema.apply_async(
-            kwargs={
-                "organization": instance.project.organization,
-                "projects": [instance.project],
-            }
-        ),
-    )
+    def _spawn_task():
+        try:
+            update_code_owners_schema.apply_async(
+                kwargs={
+                    "organization": instance.project.organization,
+                    "projects": [instance.project],
+                }
+            )
+        except (Project.DoesNotExist, Organization.DoesNotExist):
+            pass
+
+    transaction.on_commit(_spawn_task)
 
 
 post_save.connect(

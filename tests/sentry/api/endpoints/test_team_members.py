@@ -1,7 +1,9 @@
 from sentry.models import InviteStatus
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class TeamMembersTest(APITestCase):
     endpoint = "sentry-api-0-team-members"
 
@@ -46,3 +48,29 @@ class TeamMembersTest(APITestCase):
         assert len(response.data) == 2
         assert response.data[0]["id"] == str(self.team_member.id)
         assert response.data[1]["id"] == str(pending_invite.id)
+
+    def test_team_members_list_does_not_include_inactive_users(self):
+        inactive_user = self.create_user(email="inactive@example.com")
+        inactive_user.is_active = False
+        inactive_user.save()
+
+        inactive_member = self.create_member(
+            organization=self.org,
+            user=inactive_user,
+            teams=[self.team],
+        )
+        self.login_as(user=self.user)
+
+        response = self.get_response(self.org.slug, self.team.slug)
+        assert response.status_code == 200
+        assert len(response.data) == 1
+        assert response.data[0]["id"] != str(inactive_member.id)
+
+    def test_team_members_list_includes_roles(self):
+        self.login_as(user=self.user)
+
+        response = self.get_response(self.org.slug, self.team.slug)
+        assert response.status_code == 200
+        assert len(response.data) == 1
+        assert response.data[0]["teamRole"] is None
+        assert response.data[0]["teamSlug"] == self.team.slug

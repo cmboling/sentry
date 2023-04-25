@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import {RouteComponentProps} from 'react-router';
 import {ClassNames} from '@emotion/react';
 import styled from '@emotion/styled';
@@ -6,18 +6,16 @@ import styled from '@emotion/styled';
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {resendMemberInvite} from 'sentry/actionCreators/members';
 import {redirectToRemainingOrganization} from 'sentry/actionCreators/organizations';
-import Button from 'sentry/components/button';
-import DropdownMenu from 'sentry/components/dropdownMenu';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import HookOrDefault from 'sentry/components/hookOrDefault';
 import Pagination from 'sentry/components/pagination';
 import {Panel, PanelBody, PanelHeader} from 'sentry/components/panels';
-import {MEMBER_ROLES} from 'sentry/constants';
-import {IconSliders} from 'sentry/icons';
+import {ORG_ROLES} from 'sentry/constants';
 import {t, tct} from 'sentry/locale';
 import ConfigStore from 'sentry/stores/configStore';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Member, MemberRole, Organization} from 'sentry/types';
-import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import routeTitleGen from 'sentry/utils/routeTitle';
 import theme from 'sentry/utils/theme';
 import withOrganization from 'sentry/utils/withOrganization';
@@ -26,7 +24,6 @@ import {
   RenderSearch,
   SearchWrapper,
 } from 'sentry/views/settings/components/defaultSearchBar';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 
 import MembersFilter from './components/membersFilter';
 import InviteRequestRow from './inviteRequestRow';
@@ -34,7 +31,7 @@ import OrganizationMemberRow from './organizationMemberRow';
 
 type Props = {
   organization: Organization;
-} & RouteComponentProps<{orgId: string}, {}>;
+} & RouteComponentProps<{}, {}>;
 
 type State = AsyncView['state'] & {
   inviteRequests: Member[];
@@ -60,7 +57,7 @@ class OrganizationMembersList extends AsyncView<Props, State> {
   onLoadAllEndpointsSuccess() {
     const {organization} = this.props;
     const {inviteRequests, members} = this.state;
-    trackAdvancedAnalyticsEvent('member_settings_page.loaded', {
+    trackAnalytics('member_settings_page.loaded', {
       organization,
       num_members: members?.length,
       num_invite_requests: inviteRequests?.length,
@@ -68,24 +65,24 @@ class OrganizationMembersList extends AsyncView<Props, State> {
   }
 
   getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
-    const {orgId} = this.props.params;
+    const {organization} = this.props;
 
     return [
-      ['members', `/organizations/${orgId}/members/`, {}, {paginate: true}],
+      ['members', `/organizations/${organization.slug}/members/`, {}, {paginate: true}],
       [
         'member',
-        `/organizations/${orgId}/members/me/`,
+        `/organizations/${organization.slug}/members/me/`,
         {},
         {allowError: error => error.status === 404},
       ],
       [
         'authProvider',
-        `/organizations/${orgId}/auth-provider/`,
+        `/organizations/${organization.slug}/auth-provider/`,
         {},
         {allowError: error => error.status === 403},
       ],
 
-      ['inviteRequests', `/organizations/${orgId}/invite-requests/`],
+      ['inviteRequests', `/organizations/${organization.slug}/invite-requests/`],
     ];
   }
 
@@ -95,9 +92,9 @@ class OrganizationMembersList extends AsyncView<Props, State> {
   }
 
   removeMember = async (id: string) => {
-    const {orgId} = this.props.params;
+    const {organization} = this.props;
 
-    await this.api.requestPromise(`/organizations/${orgId}/members/${id}/`, {
+    await this.api.requestPromise(`/organizations/${organization.slug}/members/${id}/`, {
       method: 'DELETE',
       data: {},
     });
@@ -140,10 +137,11 @@ class OrganizationMembersList extends AsyncView<Props, State> {
     this.setState(state => ({
       invited: {...state.invited, [id]: 'loading'},
     }));
+    const {organization} = this.props;
 
     try {
       await resendMemberInvite(this.api, {
-        orgId: this.props.params.orgId,
+        orgId: organization.slug,
         memberId: id,
         regenerate: expired,
       });
@@ -179,7 +177,7 @@ class OrganizationMembersList extends AsyncView<Props, State> {
     errorMessage,
     eventKey,
   }) => {
-    const {params, organization} = this.props;
+    const {organization} = this.props;
 
     this.setState(state => ({
       inviteRequestBusy: {...state.inviteRequestBusy, [inviteRequest.id]: true},
@@ -187,7 +185,7 @@ class OrganizationMembersList extends AsyncView<Props, State> {
 
     try {
       await this.api.requestPromise(
-        `/organizations/${params.orgId}/invite-requests/${inviteRequest.id}/`,
+        `/organizations/${organization.slug}/invite-requests/${inviteRequest.id}/`,
         {
           method,
           data,
@@ -196,7 +194,7 @@ class OrganizationMembersList extends AsyncView<Props, State> {
 
       this.removeInviteRequest(inviteRequest.id);
       addSuccessMessage(successMessage);
-      trackAdvancedAnalyticsEvent(eventKey, {
+      trackAnalytics(eventKey, {
         member_id: parseInt(inviteRequest.id, 10),
         invite_status: inviteRequest.inviteStatus,
         organization,
@@ -241,9 +239,9 @@ class OrganizationMembersList extends AsyncView<Props, State> {
   };
 
   renderBody() {
-    const {params, organization, routes} = this.props;
+    const {organization} = this.props;
     const {membersPageLinks, members, member: currentMember, inviteRequests} = this.state;
-    const {name: orgName, access} = organization;
+    const {access} = organization;
 
     const canAddMembers = access.includes('member:write');
     const canRemove = access.includes('member:admin');
@@ -261,28 +259,17 @@ class OrganizationMembersList extends AsyncView<Props, State> {
     // eslint-disable-next-line react/prop-types
     const renderSearch: RenderSearch = ({defaultSearchBar, value, handleChange}) => (
       <SearchWrapperWithFilter>
-        <DropdownMenu closeOnEscape>
-          {({getActorProps, isOpen}) => (
-            <FilterWrapper>
-              <Button icon={<IconSliders size="xs" />} {...getActorProps({})}>
-                {t('Filter')}
-              </Button>
-              {isOpen && (
-                <StyledMembersFilter
-                  roles={currentMember?.roles ?? MEMBER_ROLES}
-                  query={value}
-                  onChange={(query: string) => handleChange(query)}
-                />
-              )}
-            </FilterWrapper>
-          )}
-        </DropdownMenu>
+        <MembersFilter
+          roles={currentMember?.roles ?? ORG_ROLES}
+          query={value}
+          onChange={(query: string) => handleChange(query)}
+        />
         {defaultSearchBar}
       </SearchWrapperWithFilter>
     );
 
     return (
-      <React.Fragment>
+      <Fragment>
         <ClassNames>
           {({css}) =>
             this.renderSearchInput({
@@ -311,7 +298,7 @@ class OrganizationMembersList extends AsyncView<Props, State> {
                   organization={organization}
                   inviteRequest={inviteRequest}
                   inviteRequestBusy={{}}
-                  allRoles={currentMember?.roles ?? MEMBER_ROLES}
+                  allRoles={currentMember?.roles ?? ORG_ROLES}
                   onApprove={this.handleInviteRequestApprove}
                   onDeny={this.handleInviteRequestDeny}
                   onUpdate={data => this.updateInviteRequest(inviteRequest.id, data)}
@@ -325,13 +312,11 @@ class OrganizationMembersList extends AsyncView<Props, State> {
           <PanelBody>
             {members.map(member => (
               <OrganizationMemberRow
-                routes={routes}
-                params={params}
                 key={member.id}
+                organization={organization}
                 member={member}
                 status={this.state.invited[member.id]}
-                orgName={orgName}
-                memberCanLeave={!isOnlyOwner}
+                memberCanLeave={!isOnlyOwner && !member.flags['idp:provisioned']}
                 currentUser={currentUser}
                 canRemoveMembers={canRemove}
                 canAddMembers={canAddMembers}
@@ -348,7 +333,7 @@ class OrganizationMembersList extends AsyncView<Props, State> {
         </Panel>
 
         <Pagination pageLinks={membersPageLinks} />
-      </React.Fragment>
+      </Fragment>
     );
   }
 }
@@ -357,34 +342,6 @@ const SearchWrapperWithFilter = styled(SearchWrapper)`
   display: grid;
   grid-template-columns: max-content 1fr;
   margin-top: 0;
-`;
-
-const FilterWrapper = styled('div')`
-  position: relative;
-`;
-
-const StyledMembersFilter = styled(MembersFilter)`
-  position: absolute;
-  right: 0;
-  top: 42px;
-  z-index: ${p => p.theme.zIndex.dropdown};
-
-  &:before,
-  &:after {
-    position: absolute;
-    top: -16px;
-    right: 32px;
-    content: '';
-    height: 16px;
-    width: 16px;
-    border: 8px solid transparent;
-    border-bottom-color: ${p => p.theme.backgroundSecondary};
-  }
-
-  &:before {
-    margin-top: -1px;
-    border-bottom-color: ${p => p.theme.border};
-  }
 `;
 
 const StyledPanelItem = styled('div')`

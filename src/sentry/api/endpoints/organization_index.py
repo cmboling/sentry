@@ -5,16 +5,17 @@ from rest_framework import serializers, status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry import analytics, features, options, roles
-from sentry.api.base import Endpoint
+from sentry import analytics, audit_log, features, options
+from sentry import ratelimits as ratelimiter
+from sentry import roles
+from sentry.api.base import Endpoint, region_silo_endpoint
 from sentry.api.bases.organization import OrganizationPermission
 from sentry.api.paginator import DateTimePaginator, OffsetPaginator
 from sentry.api.serializers import serialize
-from sentry.app import ratelimiter
+from sentry.api.serializers.models.organization import BaseOrganizationSerializer
 from sentry.auth.superuser import is_active_superuser
 from sentry.db.models.query import in_iexact
 from sentry.models import (
-    AuditLogEntryEvent,
     Organization,
     OrganizationMember,
     OrganizationMemberTeam,
@@ -22,19 +23,23 @@ from sentry.models import (
     ProjectPlatform,
 )
 from sentry.search.utils import tokenize_query
-from sentry.signals import terms_accepted
+from sentry.services.hybrid_cloud import IDEMPOTENCY_KEY_LENGTH
+from sentry.services.hybrid_cloud.organization import organization_service
+from sentry.services.hybrid_cloud.organization_mapping import organization_mapping_service
+from sentry.signals import org_setup_complete, terms_accepted
 
 
-class OrganizationSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=64, required=True)
-    slug = serializers.RegexField(r"^[a-z0-9_\-]+$", max_length=50, required=False)
+class OrganizationSerializer(BaseOrganizationSerializer):
     defaultTeam = serializers.BooleanField(required=False)
     agreeTerms = serializers.BooleanField(required=True)
+    idempotencyKey = serializers.CharField(max_length=IDEMPOTENCY_KEY_LENGTH, required=False)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if not (settings.TERMS_URL and settings.PRIVACY_URL):
             del self.fields["agreeTerms"]
+        self.fields["slug"].required = False
+        self.fields["name"].required = True
 
     def validate_agreeTerms(self, value):
         if not value:
@@ -42,6 +47,7 @@ class OrganizationSerializer(serializers.Serializer):
         return value
 
 
+@region_silo_endpoint
 class OrganizationIndexEndpoint(Endpoint):
     permission_classes = (OrganizationPermission,)
 
@@ -67,15 +73,15 @@ class OrganizationIndexEndpoint(Endpoint):
         if request.auth and not request.user.is_authenticated:
             if hasattr(request.auth, "project"):
                 queryset = queryset.filter(id=request.auth.project.organization_id)
-            elif request.auth.organization is not None:
-                queryset = queryset.filter(id=request.auth.organization.id)
+            elif request.auth.organization_id is not None:
+                queryset = queryset.filter(id=request.auth.organization_id)
 
         elif owner_only:
             # This is used when closing an account
-            queryset = queryset.filter(
-                member_set__role=roles.get_top_dog().id,
-                member_set__user=request.user,
-                status=OrganizationStatus.VISIBLE,
+
+            # also fetches organizations in which you are a member of an owner team
+            queryset = Organization.objects.get_organizations_where_user_is_owner(
+                user_id=request.user.id
             )
             org_results = []
             for org in sorted(queryset, key=lambda x: x.name):
@@ -88,7 +94,9 @@ class OrganizationIndexEndpoint(Endpoint):
 
         elif not (is_active_superuser(request) and request.GET.get("show") == "all"):
             queryset = queryset.filter(
-                id__in=OrganizationMember.objects.filter(user=request.user).values("organization")
+                id__in=OrganizationMember.objects.filter(user_id=request.user.id).values(
+                    "organization"
+                )
             )
 
         query = request.GET.get("query")
@@ -197,12 +205,24 @@ class OrganizationIndexEndpoint(Endpoint):
             result = serializer.validated_data
 
             try:
+
                 with transaction.atomic():
                     org = Organization.objects.create(name=result["name"], slug=result.get("slug"))
 
-                    om = OrganizationMember.objects.create(
-                        organization=org, user=request.user, role=roles.get_top_dog().id
+                    organization_mapping_service.create(
+                        organization_id=org.id,
+                        slug=org.slug,
+                        name=org.name,
+                        idempotency_key=result.get("idempotencyKey", ""),
+                        region_name=settings.SENTRY_REGION or "us",
                     )
+                    rpc_org_member = organization_service.add_organization_member(
+                        organization_id=org.id,
+                        default_org_role=org.default_role,
+                        user_id=request.user.id,
+                        role=roles.get_top_dog().id,
+                    )
+                    om = OrganizationMember.objects.get(id=rpc_org_member.id)
 
                     if result.get("defaultTeam"):
                         team = org.team_set.create(name=org.name)
@@ -211,11 +231,15 @@ class OrganizationIndexEndpoint(Endpoint):
                             team=team, organizationmember=om, is_active=True
                         )
 
+                    org_setup_complete.send_robust(
+                        instance=org, user=request.user, sender=self.__class__
+                    )
+
                     self.create_audit_entry(
                         request=request,
                         organization=org,
                         target_object=org.id,
-                        event=AuditLogEntryEvent.ORG_ADD,
+                        event=audit_log.get_event_id("ORG_ADD"),
                         data=org.get_audit_log_data(),
                     )
 
@@ -225,6 +249,8 @@ class OrganizationIndexEndpoint(Endpoint):
                         actor_id=request.user.id if request.user.is_authenticated else None,
                     )
 
+            # TODO(hybrid-cloud): We'll need to catch a more generic error
+            # when the internal RPC is implemented.
             except IntegrityError:
                 return Response(
                     {"detail": "An organization with this slug already exists."}, status=409

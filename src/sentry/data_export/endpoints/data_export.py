@@ -5,7 +5,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
-from sentry.api.base import EnvironmentMixin
+from sentry.api.base import EnvironmentMixin, region_silo_endpoint
 from sentry.api.bases.organization import OrganizationDataExportPermission, OrganizationEndpoint
 from sentry.api.serializers import serialize
 from sentry.api.utils import InvalidParams, get_date_range_from_params
@@ -14,7 +14,6 @@ from sentry.exceptions import InvalidSearchQuery
 from sentry.models import Environment
 from sentry.search.events.builder import QueryBuilder
 from sentry.utils import metrics
-from sentry.utils.compat import map
 from sentry.utils.snuba import MAX_FIELDS, Dataset
 
 from ..base import ExportQueryType
@@ -84,7 +83,6 @@ class DataExportQuerySerializer(serializers.Serializer):
                 del query_info["statsPeriodEnd"]
             query_info["start"] = start.isoformat()
             query_info["end"] = end.isoformat()
-            query_info["use_snql"] = features.has("organizations:discover-use-snql", organization)
 
             # validate the query string by trying to parse it
             processor = DiscoverProcessor(
@@ -108,6 +106,7 @@ class DataExportQuerySerializer(serializers.Serializer):
         return data
 
 
+@region_silo_endpoint
 class DataExportEndpoint(OrganizationEndpoint, EnvironmentMixin):
     permission_classes = (OrganizationDataExportPermission,)
 
@@ -149,7 +148,7 @@ class DataExportEndpoint(OrganizationEndpoint, EnvironmentMixin):
             query_type = ExportQueryType.from_str(data["query_type"])
             data_export, created = ExportedData.objects.get_or_create(
                 organization=organization,
-                user=request.user,
+                user_id=request.user.id,
                 query_type=query_type,
                 query_info=data["query_info"],
                 date_finished=None,

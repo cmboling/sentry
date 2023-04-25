@@ -1,16 +1,15 @@
-import * as React from 'react';
 import styled from '@emotion/styled';
 
 import Access from 'sentry/components/acl/access';
 import Feature from 'sentry/components/acl/feature';
 import FeatureDisabled from 'sentry/components/acl/featureDisabled';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import {Hovercard} from 'sentry/components/hovercard';
 import {PanelItem} from 'sentry/components/panels';
 import Tag from 'sentry/components/tag';
 import {IconLock} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {AuthProvider} from 'sentry/types';
 import {FeatureDisabledHooks} from 'sentry/types/hooks';
 import {descopeFeatureName} from 'sentry/utils';
@@ -44,7 +43,7 @@ type Props = {
   onConfigure?: (providerKey: string, e: React.MouseEvent) => void;
 };
 
-const ProviderItem = ({provider, active, onConfigure}: Props) => {
+function ProviderItem({provider, active, onConfigure}: Props) {
   const handleConfigure = (e: React.MouseEvent) => {
     onConfigure?.(provider.key, e);
   };
@@ -59,7 +58,7 @@ const ProviderItem = ({provider, active, onConfigure}: Props) => {
         <Button
           type="submit"
           name="provider"
-          size="small"
+          size="sm"
           value={provider.key}
           disabled={!hasFeature || !hasAccess}
           onClick={handleConfigure}
@@ -143,7 +142,7 @@ const ProviderItem = ({provider, active, onConfigure}: Props) => {
       )}
     </Feature>
   );
-};
+}
 
 export default ProviderItem;
 
@@ -167,8 +166,8 @@ const ProviderName = styled('div')`
 `;
 
 const ProviderDescription = styled('div')`
-  margin-top: ${space(0.75)};
-  font-size: 0.8em;
+  font-size: ${p => p.theme.fontSizeSmall};
+  color: ${p => p.theme.subText};
 `;
 
 const FeatureBadge = styled('div')`
@@ -191,18 +190,22 @@ const DisabledHovercard = styled(Hovercard)`
   width: 350px;
 `;
 
-const LockedFeature = ({provider, features, className}: LockedFeatureProps) => (
-  <DisabledHovercard
-    containerClassName={className}
-    body={
-      <FeatureDisabled
-        features={features}
-        hideHelpToggle
-        message={t('%s SSO is disabled.', provider.name)}
-        featureName={t('SSO Auth')}
-      />
-    }
-  >
-    <Tag icon={<IconLock isSolid />}>{t('disabled')}</Tag>
-  </DisabledHovercard>
-);
+function LockedFeature({provider, features, className}: LockedFeatureProps) {
+  return (
+    <DisabledHovercard
+      containerClassName={className}
+      body={
+        <FeatureDisabled
+          features={features}
+          hideHelpToggle
+          message={t('%s SSO is disabled.', provider.name)}
+          featureName={t('SSO Auth')}
+        />
+      }
+    >
+      <Tag role="status" icon={<IconLock isSolid />}>
+        {t('disabled')}
+      </Tag>
+    </DisabledHovercard>
+  );
+}

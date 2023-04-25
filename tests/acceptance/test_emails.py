@@ -1,8 +1,10 @@
-import os.path
-from os.path import dirname, join
+import re
 from urllib.parse import urlencode
 
+from selenium.webdriver.common.by import By
+
 from sentry.testutils import AcceptanceTestCase
+from sentry.testutils.factories import get_fixture_path
 
 EMAILS = (
     ("/debug/mail/assigned/", "assigned"),
@@ -17,11 +19,12 @@ EMAILS = (
     ("/debug/mail/unassigned/", "unassigned"),
     ("/debug/mail/unable-to-fetch-commits/", "unable to fetch commits"),
     ("/debug/mail/unable-to-delete-repo/", "unable to delete repo"),
-    ("/debug/mail/alert/", "alert"),
+    ("/debug/mail/error-alert/", "alert"),
+    ("/debug/mail/performance-alert/transaction-n-plus-one", "performance"),
+    ("/debug/mail/performance-alert/transaction-n-plus-one-api-call/", "n1 api call"),
     ("/debug/mail/digest/", "digest"),
     ("/debug/mail/invalid-identity/", "invalid identity"),
     ("/debug/mail/invitation/", "invitation"),
-    ("/debug/mail/report/", "report"),
     ("/debug/mail/mfa-added/", "mfa added"),
     ("/debug/mail/mfa-removed/", "mfa removed"),
     ("/debug/mail/recovery-codes-regenerated/", "recovery codes regenerated"),
@@ -36,14 +39,22 @@ def read_txt_email_fixture(name: str) -> str:
     # "sso unlinked without password"
     # => "sso_unlinked_without_password.txt"
     filename = name.replace(" ", "_") + ".txt"
-    path = join(dirname(__file__), os.pardir, "fixtures", "emails", filename)
 
-    with open(path) as f:
+    with open(get_fixture_path("emails", filename)) as f:
         return f.read()
 
 
 def build_url(path: str, format: str = "html") -> str:
-    return f"{path}?{urlencode({'format': format, 'seed': b'123'})}"
+    return f"{path}?{urlencode({'format': format, 'seed': b'123', 'is_test': True})}"
+
+
+def redact_ids(text: str) -> str:
+    issues_re = re.compile("(testserver/organizations/sentry/issues/[0-9]+/)")
+    match = issues_re.search(text)
+    if match:
+        for g in match.groups():
+            text = text.replace(g, "testserver/organizations/sentry/issues/x/")
+    return text
 
 
 class EmailTestCase(AcceptanceTestCase):
@@ -63,8 +74,11 @@ class EmailTestCase(AcceptanceTestCase):
             # Text output is asserted against static fixture files
             self.browser.get(build_url(url, "txt"))
             self.browser.wait_until("#preview")
-            elem = self.browser.find_element_by_css_selector("#preview pre")
+            elem = self.browser.find_element(by=By.CSS_SELECTOR, value="#preview pre")
             text_src = elem.get_attribute("innerHTML")
+
+            # Avoid relying on IDs as this can cause flakey tests
+            text_src = redact_ids(text_src)
 
             fixture_src = read_txt_email_fixture(name)
             assert fixture_src == text_src

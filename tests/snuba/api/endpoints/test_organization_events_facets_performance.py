@@ -4,6 +4,7 @@ from django.urls import reverse
 
 from sentry.testutils import APITestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils.samples import load_data
 
 
@@ -34,6 +35,7 @@ class BaseOrganizationEventsFacetsPerformanceEndpointTest(SnubaTestCase, APITest
             return self.client.get(self.url, query, format="json")
 
 
+@region_silo_test
 class OrganizationEventsFacetsPerformanceEndpointTest(
     BaseOrganizationEventsFacetsPerformanceEndpointTest
 ):
@@ -156,6 +158,7 @@ class OrganizationEventsFacetsPerformanceEndpointTest(
             }
         )
 
+        assert response.status_code == 200, response.content
         data = response.data["data"]
         assert len(data) == 1
         assert data[0]["count"] == 5
@@ -197,6 +200,7 @@ class OrganizationEventsFacetsPerformanceEndpointTest(
 
         # With feature access
         response = self.do_request(request)
+        assert response.status_code == 200, response.content
         data = response.data["data"]
         assert len(data) == 5
         assert data[0]["count"] == 19
@@ -217,6 +221,7 @@ class OrganizationEventsFacetsPerformanceEndpointTest(
         }
 
         response = self.do_request(request)
+        assert response.status_code == 200, response.content
 
         data = response.data["data"]
         assert len(data) == 5
@@ -237,6 +242,7 @@ class OrganizationEventsFacetsPerformanceEndpointTest(
         }
         # With feature access
         response = self.do_request(request)
+        assert response.status_code == 200, response.content
         data = response.data["data"]
         assert len(data) == 3
         assert data[0]["count"] == 14
@@ -257,20 +263,10 @@ class OrganizationEventsFacetsPerformanceEndpointTest(
         }
 
         response = self.do_request(request)
+        assert response.status_code == 200, response.content
         data = response.data["data"]
         assert len(data) == 1
         assert data[0]["count"] == 1
         assert data[0]["comparison"] == 0
         assert data[0]["tags_key"] == "color"
         assert data[0]["tags_value"] == "purple"
-
-
-class OrganizationEventsFacetsPerformanceEndpointTestWithSnql(
-    OrganizationEventsFacetsPerformanceEndpointTest
-):
-    feature_list = (
-        "organizations:discover-basic",
-        "organizations:global-views",
-        "organizations:performance-view",
-        "organizations:performance-use-snql",
-    )

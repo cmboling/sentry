@@ -5,8 +5,9 @@ from django.db.models import Max
 from rest_framework import serializers
 
 from sentry.api.issue_search import parse_search_query
-from sentry.api.serializers.rest_framework import CamelSnakeSerializer
+from sentry.api.serializers.rest_framework import CamelSnakeSerializer, ListField
 from sentry.api.serializers.rest_framework.base import convert_dict_key_case, snake_to_camel_case
+from sentry.constants import ALL_ACCESS_PROJECTS
 from sentry.discover.arithmetic import ArithmeticError, categorize_columns
 from sentry.exceptions import InvalidSearchQuery
 from sentry.models import (
@@ -17,6 +18,7 @@ from sentry.models import (
     DashboardWidgetTypes,
 )
 from sentry.search.events.builder import UnresolvedQuery
+from sentry.search.events.fields import is_function
 from sentry.snuba.dataset import Dataset
 from sentry.utils.dates import parse_stats_period
 
@@ -141,28 +143,37 @@ class DashboardWidgetQuerySerializer(CamelSnakeSerializer):
         conditions = self._get_attr(data, "conditions", "")
         orderby = self._get_attr(data, "orderby", "")
         is_table = is_table_display_type(self.context.get("displayType"))
-
-        # TODO(dam): Use columns and aggregates for validation
-        fields = self._get_attr(data, "fields", []).copy()
-        equations, fields = categorize_columns(fields)
-
-        # TODO(dam): Temp code while we are sure adoption
-        # of fromtend code that sends this data is high enough
         columns = self._get_attr(data, "columns", []).copy()
         aggregates = self._get_attr(data, "aggregates", []).copy()
+        fields = columns + aggregates
 
-        if not columns and not aggregates:
-            for field in fields:
-                if is_aggregate(field):
-                    aggregates.append(field)
-                else:
-                    columns.append(field)
+        # Handle the orderby since it can be a value that's not included in fields
+        # e.g. a custom equation, or a function that isn't plotted as a y-axis
+        injected_orderby_equation, orderby_prefix = None, None
+        stripped_orderby = orderby.lstrip("-")
+        if is_equation(stripped_orderby):
+            # The orderby is a custom equation and needs to be added to fields
+            injected_orderby_equation = stripped_orderby
+            fields.append(injected_orderby_equation)
+            orderby_prefix = "-" if orderby.startswith("-") else ""
+        elif is_function(stripped_orderby) and stripped_orderby not in fields:
+            fields.append(stripped_orderby)
 
-            data["columns"] = columns
-            data["aggregates"] = aggregates
+        equations, fields = categorize_columns(fields)
+
+        if injected_orderby_equation is not None and orderby_prefix is not None:
+            # Subtract one because the equation is injected to fields
+            orderby = f"{orderby_prefix}equation[{len(equations) - 1}]"
+
+        params = {
+            "start": datetime.now() - timedelta(days=1),
+            "end": datetime.now(),
+            "project_id": [p.id for p in self.context.get("projects")],
+            "organization_id": self.context.get("organization").id,
+        }
 
         try:
-            parse_search_query(conditions)
+            parse_search_query(conditions, params=params)
         except InvalidSearchQuery as err:
             # We don't know if the widget that this query belongs to is an
             # Issue widget or Discover widget. Pass the error back to the
@@ -175,21 +186,20 @@ class DashboardWidgetQuerySerializer(CamelSnakeSerializer):
             # or to provide the start/end so that the interval can be computed.
             # This uses a hard coded start/end to ensure the validation succeeds
             # since the values themselves don't matter.
-            params = {
-                "start": datetime.now() - timedelta(days=1),
-                "end": datetime.now(),
-                "project_id": [p.id for p in self.context.get("projects")],
-                "organization_id": self.context.get("organization").id,
-            }
-
             builder = UnresolvedQuery(
                 dataset=Dataset.Discover,
                 params=params,
-                equation_config={"auto_add": not is_table, "aggregates_only": not is_table},
+                equation_config={
+                    "auto_add": not is_table or injected_orderby_equation,
+                    "aggregates_only": not is_table,
+                },
             )
 
+            builder.resolve_time_conditions()
             builder.resolve_conditions(conditions, use_aggregate_conditions=True)
-            builder.resolve_params()
+            # We need to resolve params to set time range params here since some
+            # field aliases might those params to be resolved (total.count)
+            builder.where = builder.resolve_params()
         except InvalidSearchQuery as err:
             data["discover_query_error"] = {"conditions": [f"Invalid conditions: {err}"]}
             return data
@@ -289,8 +299,61 @@ class DashboardDetailsSerializer(CamelSnakeSerializer):
     id = serializers.CharField(required=False)
     title = serializers.CharField(required=False, max_length=255)
     widgets = DashboardWidgetSerializer(many=True, required=False)
+    projects = ListField(child=serializers.IntegerField(), required=False, default=[])
+    environment = ListField(child=serializers.CharField(), required=False, allow_null=True)
+    period = serializers.CharField(required=False, allow_null=True)
+    start = serializers.DateTimeField(required=False, allow_null=True)
+    end = serializers.DateTimeField(required=False, allow_null=True)
+    filters = serializers.DictField(required=False)
+    utc = serializers.BooleanField(required=False)
 
     validate_id = validate_id
+
+    def validate_projects(self, projects):
+        from sentry.api.validators import validate_project_ids
+
+        return validate_project_ids(projects, {project.id for project in self.context["projects"]})
+
+    def validate(self, data):
+        start = data.get("start")
+        end = data.get("end")
+
+        if start and end and start >= end:
+            raise serializers.ValidationError("start must be before end")
+
+        if len(data.get("widgets", [])) > Dashboard.MAX_WIDGETS:
+            raise serializers.ValidationError(
+                f"Number of widgets must be less than {Dashboard.MAX_WIDGETS}"
+            )
+
+        return data
+
+    def update_dashboard_filters(self, instance, validated_data):
+        page_filter_keys = ["environment", "period", "start", "end", "utc"]
+        dashboard_filter_keys = ["release", "release_id"]
+
+        filters = {}
+
+        if "projects" in validated_data:
+            if validated_data["projects"] == ALL_ACCESS_PROJECTS:
+                filters["all_projects"] = True
+                instance.projects.clear()
+            else:
+                if instance.filters and instance.filters.get("all_projects"):
+                    filters["all_projects"] = False
+                instance.projects.set(validated_data["projects"])
+
+        for key in page_filter_keys:
+            if key in validated_data:
+                filters[key] = validated_data[key]
+
+        for key in dashboard_filter_keys:
+            if "filters" in validated_data and key in validated_data["filters"]:
+                filters[key] = validated_data["filters"][key]
+
+        if filters:
+            instance.filters = filters
+            instance.save()
 
     def create(self, validated_data):
         """
@@ -302,11 +365,13 @@ class DashboardDetailsSerializer(CamelSnakeSerializer):
         self.instance = Dashboard.objects.create(
             organization=self.context.get("organization"),
             title=validated_data["title"],
-            created_by=self.context.get("request").user,
+            created_by_id=self.context.get("request").user.id,
         )
 
         if "widgets" in validated_data:
             self.update_widgets(self.instance, validated_data["widgets"])
+
+        self.update_dashboard_filters(self.instance, validated_data)
 
         return self.instance
 
@@ -327,6 +392,8 @@ class DashboardDetailsSerializer(CamelSnakeSerializer):
 
         if "widgets" in validated_data:
             self.update_widgets(instance, validated_data["widgets"])
+
+        self.update_dashboard_filters(instance, validated_data)
 
         return instance
 

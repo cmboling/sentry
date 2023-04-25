@@ -1,11 +1,11 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
-import Alert from 'sentry/components/alert';
-import Button from 'sentry/components/button';
+import {Alert} from 'sentry/components/alert';
+import {Button} from 'sentry/components/button';
 import TimeSince from 'sentry/components/timeSince';
 import {t, tct, tn} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {ProcessingIssue} from 'sentry/types';
 
 type Props = {
@@ -25,9 +25,9 @@ function ProcessingIssueHint({orgId, projectId, issue, showProject}: Props) {
   let project: React.ReactNode = null;
   if (showProject) {
     project = (
-      <React.Fragment>
+      <Fragment>
         <strong>{projectId}</strong> &mdash;{' '}
-      </React.Fragment>
+      </Fragment>
     );
   }
 
@@ -38,13 +38,13 @@ function ProcessingIssueHint({orgId, projectId, issue, showProject}: Props) {
       issue.numIssues
     );
     lastEvent = (
-      <React.Fragment>
+      <Fragment>
         (
         {tct('last event from [ago]', {
           ago: <TimeSince date={issue.lastSeen} />,
         })}
         )
-      </React.Fragment>
+      </Fragment>
     );
     alertType = 'error';
     showButton = true;
@@ -74,7 +74,7 @@ function ProcessingIssueHint({orgId, projectId, issue, showProject}: Props) {
       showIcon
       trailingItems={
         showButton && (
-          <StyledButton size="xsmall" to={link}>
+          <StyledButton size="xs" to={link}>
             {t('Show details')}
           </StyledButton>
         )

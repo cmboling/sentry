@@ -1,5 +1,4 @@
 import {Experiments, ExperimentType} from 'sentry/types/experiments';
-
 /**
  * This is the value an experiment will have when the unit of assignment
  * (organization, user, etc) is not part of any experiment group.
@@ -14,7 +13,13 @@ export const unassignedValue = -1;
  */
 export const experimentList = [
   {
-    key: 'TargetedOnboardingMultiSelectExperiment',
+    key: 'OnboardingNewFooterExperiment',
+    type: ExperimentType.Organization,
+    parameter: 'scenario',
+    assignments: ['baseline', 'variant1', 'variant2'],
+  },
+  {
+    key: 'ExtendTrialByInvitingMemberExperiment',
     type: ExperimentType.Organization,
     parameter: 'exposed',
     assignments: [0, 1],

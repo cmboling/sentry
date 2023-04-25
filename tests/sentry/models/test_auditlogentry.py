@@ -1,34 +1,27 @@
 from django.utils import timezone
 
-from sentry.models import AuditLogEntry, AuditLogEntryEvent
+from sentry import audit_log
+from sentry.models import AuditLogEntry
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 
 
+@control_silo_test(stable=True)
 class AuditLogEntryTest(TestCase):
-    def test_plan_changed(self):
-        entry = AuditLogEntry.objects.create(
-            organization=self.organization,
-            event=AuditLogEntryEvent.PLAN_CHANGED,
+    def test_audit_log_entry(self):
+        AuditLogEntry.objects.create(
+            organization_id=self.organization.id,
+            event=audit_log.get_event_id("TEAM_ADD"),
             actor=self.user,
             datetime=timezone.now(),
-            data={"plan_name": "Team"},
+            data={"slug": "New Team"},
         )
-
-        assert entry.get_note() == "changed plan to Team"
-
-    def test_plan_changed_with_quotas(self):
-        entry = AuditLogEntry.objects.create(
-            organization=self.organization,
-            event=AuditLogEntryEvent.PLAN_CHANGED,
+        AuditLogEntry.objects.create(
+            organization_id=self.organization.id,
+            event=audit_log.get_event_id("TEAM_REMOVE"),
             actor=self.user,
             datetime=timezone.now(),
-            data={
-                "plan_name": "Team",
-                "quotas": "50K errors, 100K transactions, and 1 GB of attachments",
-            },
+            data={"slug": "Old Team"},
         )
-
-        assert (
-            entry.get_note()
-            == "changed plan to Team with 50K errors, 100K transactions, and 1 GB of attachments"
-        )
+        assert AuditLogEntry.objects.filter(event=audit_log.get_event_id("TEAM_ADD")).exists()
+        assert AuditLogEntry.objects.filter(event=audit_log.get_event_id("TEAM_REMOVE")).exists()

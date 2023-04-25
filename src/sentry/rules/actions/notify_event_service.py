@@ -10,7 +10,7 @@ from sentry.api.serializers import serialize
 from sentry.api.serializers.models.app_platform_event import AppPlatformEvent
 from sentry.api.serializers.models.incident import IncidentSerializer
 from sentry.constants import SentryAppInstallationStatus
-from sentry.eventstore.models import Event
+from sentry.eventstore.models import GroupEvent
 from sentry.incidents.models import (
     INCIDENT_STATUS,
     AlertRuleTriggerAction,
@@ -22,11 +22,13 @@ from sentry.models import SentryApp, SentryAppInstallation
 from sentry.plugins.base import plugins
 from sentry.rules import EventState
 from sentry.rules.actions.base import EventAction
-from sentry.rules.actions.services import PluginService, SentryAppService
+from sentry.rules.actions.services import PluginService
 from sentry.rules.base import CallbackFuture
-from sentry.tasks.sentry_apps import notify_sentry_app, send_and_save_webhook_request
+from sentry.services.hybrid_cloud.app import RpcSentryAppService, app_service
+from sentry.tasks.sentry_apps import notify_sentry_app
 from sentry.utils import metrics
 from sentry.utils.safe import safe_execute
+from sentry.utils.sentry_apps import send_and_save_webhook_request
 
 logger = logging.getLogger("sentry.integrations.sentry_app")
 PLUGINS_WITH_FIRST_PARTY_EQUIVALENTS = ["PagerDuty", "Slack"]
@@ -73,7 +75,7 @@ def send_incident_alert_notification(
 
     try:
         install = SentryAppInstallation.objects.get(
-            organization=organization.id,
+            organization_id=organization.id,
             sentry_app=sentry_app,
             status=SentryAppInstallationStatus.INSTALLED,
         )
@@ -86,6 +88,7 @@ def send_incident_alert_notification(
                 "organization": organization.slug,
                 "sentry_app_id": sentry_app.id,
             },
+            exc_info=True,
         )
         return None
 
@@ -170,7 +173,7 @@ class NotifyEventServiceAction(EventAction):
             return f"(Legacy) {title}"
         return title
 
-    def after(self, event: Event, state: EventState) -> Generator[CallbackFuture, None, None]:
+    def after(self, event: GroupEvent, state: EventState) -> Generator[CallbackFuture, None, None]:
         service = self.get_option("service")
 
         extra = {"event_id": event.event_id}
@@ -216,13 +219,8 @@ class NotifyEventServiceAction(EventAction):
             metrics.incr("notifications.sent", instance=plugin.slug, skip_internal=False)
             yield self.future(plugin.rule_notify)
 
-    def get_sentry_app_services(self) -> Sequence[SentryAppService]:
-        # excludes Sentry Apps that have Alert Rule UI Component in their schema
-        return [
-            SentryAppService(app)
-            for app in SentryApp.objects.get_alertable_sentry_apps(self.project.organization_id)
-            if not SentryAppService(app).has_alert_rule_action()
-        ]
+    def get_sentry_app_services(self) -> Sequence[RpcSentryAppService]:
+        return app_service.find_alertable_services(organization_id=self.project.organization_id)
 
     def get_plugins(self) -> Sequence[PluginService]:
         from sentry.plugins.bases.notify import NotificationPlugin

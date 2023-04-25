@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Sequence
 
 from django import forms
 
-from sentry.eventstore.models import Event
+from sentry.eventstore.models import GroupEvent
 from sentry.mail.forms.assigned_to import AssignedToForm
 from sentry.notifications.types import ASSIGNEE_CHOICES, AssigneeTargetType
 from sentry.rules import EventState
@@ -31,7 +31,7 @@ class AssignedToFilter(EventFilter):
             cache.set(cache_key, assignee_list, 60)
         return assignee_list
 
-    def passes(self, event: Event, state: EventState) -> bool:
+    def passes(self, event: GroupEvent, state: EventState) -> bool:
         target_type = AssigneeTargetType(self.get_option("targetType"))
 
         if target_type == AssigneeTargetType.UNASSIGNED:
@@ -45,7 +45,7 @@ class AssignedToFilter(EventFilter):
                         return True
             elif target_type == AssigneeTargetType.MEMBER:
                 for assignee in self.get_assignees(event.group):
-                    if assignee.user and assignee.user_id == target_id:
+                    if assignee.user_id and assignee.user_id == target_id:
                         return True
             return False
 

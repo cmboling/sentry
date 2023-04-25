@@ -5,6 +5,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.constants import SentryAppStatus
 from sentry.incidents.endpoints.bases import OrganizationEndpoint
@@ -42,7 +43,7 @@ def build_action_response(
         if registered_type.type == AlertRuleTriggerAction.Type.PAGERDUTY:
             action_response["options"] = [
                 {"value": service["id"], "label": service["service_name"]}
-                for service in get_pagerduty_services(organization, integration.id)
+                for service in get_pagerduty_services(organization.id, integration.id)
             ]
 
     elif sentry_app_installation:
@@ -61,6 +62,7 @@ def build_action_response(
     return action_response
 
 
+@region_silo_endpoint
 class OrganizationAlertRuleAvailableActionIndexEndpoint(OrganizationEndpoint):
     def get(self, request: Request, organization) -> Response:
         """

@@ -5,6 +5,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import roles
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import OrganizationMemberEndpoint
 from sentry.api.bases.organization import OrganizationPermission
 from sentry.api.serializers import serialize
@@ -13,7 +14,7 @@ from sentry.exceptions import UnableToAcceptMemberInvitationException
 from sentry.models import InviteStatus, Organization, OrganizationMember
 from sentry.utils.audit import get_api_key_for_audit_log
 
-from ... import get_allowed_roles, save_team_assignments
+from ... import get_allowed_org_roles, save_team_assignments
 from ...index import OrganizationMemberSerializer
 
 
@@ -41,6 +42,7 @@ class InviteRequestPermissions(OrganizationPermission):
     }
 
 
+@region_silo_endpoint
 class OrganizationInviteRequestDetailsEndpoint(OrganizationMemberEndpoint):
     permission_classes = (InviteRequestPermissions,)
 
@@ -85,8 +87,9 @@ class OrganizationInviteRequestDetailsEndpoint(OrganizationMemberEndpoint):
         :param string member_id: the member ID
         :param boolean approve: allows the member to be invited
         :param string role: the suggested role of the new member
-        :param array teams: the suggested slugs of the teams the member should belong to.
-
+        :param string orgRole: the suggested org-role of the new member
+        :param array teams: the teams which the member should belong to.
+        :param array teamRoles: the teams and team-roles assigned to the member
         :auth: required
         """
 
@@ -101,14 +104,22 @@ class OrganizationInviteRequestDetailsEndpoint(OrganizationMemberEndpoint):
 
         result = serializer.validated_data
 
-        if result.get("role"):
+        if result.get("orgRole"):
+            member.update(role=result["orgRole"])
+        elif result.get("role"):
             member.update(role=result["role"])
 
-        if "teams" in result:
-            save_team_assignments(member, result["teams"])
+        # Do not set team-roles when inviting members
+        if "teamRoles" in result or "teams" in result:
+            teams = (
+                [team for team, _ in result.get("teamRoles")]
+                if "teamRoles" in result and result["teamRoles"]
+                else result.get("teams")
+            )
+            save_team_assignments(member, teams)
 
         if "approve" in request.data:
-            _, allowed_roles = get_allowed_roles(request, organization)
+            allowed_roles = get_allowed_org_roles(request, organization)
 
             serializer = ApproveInviteRequestSerializer(
                 data=request.data,

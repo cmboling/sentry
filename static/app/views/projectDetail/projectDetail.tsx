@@ -8,12 +8,11 @@ import {updateProjects} from 'sentry/actionCreators/pageFilters';
 import {fetchTagValues} from 'sentry/actionCreators/tags';
 import Feature from 'sentry/components/acl/feature';
 import Breadcrumbs from 'sentry/components/breadcrumbs';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import CreateAlertButton from 'sentry/components/createAlertButton';
 import GlobalAppStoreConnectUpdateAlert from 'sentry/components/globalAppStoreConnectUpdateAlert';
 import GlobalEventProcessingAlert from 'sentry/components/globalEventProcessingAlert';
-import {GlobalSdkUpdateAlert} from 'sentry/components/globalSdkUpdateAlert';
 import IdBadge from 'sentry/components/idBadge';
 import * as Layout from 'sentry/components/layouts/thirds';
 import LoadingError from 'sentry/components/loadingError';
@@ -23,11 +22,11 @@ import MissingProjectMembership from 'sentry/components/projects/missingProjectM
 import {DEFAULT_RELATIVE_PERIODS} from 'sentry/constants';
 import {IconSettings} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {PageContent} from 'sentry/styles/organization';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, PageFilters, Project} from 'sentry/types';
 import {defined} from 'sentry/utils';
 import routeTitleGen from 'sentry/utils/routeTitle';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 import withPageFilters from 'sentry/utils/withPageFilters';
 import withProjects from 'sentry/utils/withProjects';
 import AsyncView from 'sentry/views/asyncView';
@@ -84,14 +83,16 @@ class ProjectDetail extends AsyncView<Props, State> {
 
     // if we change project in global header, we need to sync the project slug in the URL
     if (newlySelectedProject?.id) {
-      router.replace({
-        pathname: `/organizations/${organization.slug}/projects/${newlySelectedProject.slug}/`,
-        query: {
-          ...location.query,
-          project: newlySelectedProject.id,
-          environment: undefined,
-        },
-      });
+      router.replace(
+        normalizeUrl({
+          pathname: `/organizations/${organization.slug}/projects/${newlySelectedProject.slug}/`,
+          query: {
+            ...location.query,
+            project: newlySelectedProject.id,
+            environment: undefined,
+          },
+        })
+      );
     }
   };
 
@@ -110,14 +111,14 @@ class ProjectDetail extends AsyncView<Props, State> {
     const {location, organization} = this.props;
     const {project: projectId} = location.query;
 
-    return fetchTagValues(
-      this.api,
-      organization.slug,
-      key,
+    return fetchTagValues({
+      api: this.api,
+      orgSlug: organization.slug,
+      tagKey: key,
       search,
-      projectId ? [projectId] : null,
-      location.query
-    );
+      projectIds: projectId ? [projectId] : undefined,
+      endpointParams: location.query,
+    });
   };
 
   syncProjectWithSlug() {
@@ -154,20 +155,20 @@ class ProjectDetail extends AsyncView<Props, State> {
     const {organization} = this.props;
 
     return (
-      <PageContent>
+      <Layout.Page>
         <MissingProjectMembership organization={organization} project={project} />
-      </PageContent>
+      </Layout.Page>
     );
   }
 
   renderProjectNotFound() {
     return (
-      <PageContent>
+      <Layout.Page withPadding>
         <LoadingError
           message={t('This project could not be found.')}
           onRetry={this.onRetryProjects}
         />
-      </PageContent>
+      </Layout.Page>
     );
   }
 
@@ -197,20 +198,9 @@ class ProjectDetail extends AsyncView<Props, State> {
     }
 
     return (
-      <PageFiltersContainer
-        disableMultipleProjectSelection
-        skipLoadLastUsed
-        onUpdateProjects={this.handleProjectChange}
-        relativeDateOptions={
-          hasOnlyBasicChart
-            ? pick(DEFAULT_RELATIVE_PERIODS, ERRORS_BASIC_CHART_PERIODS)
-            : undefined
-        }
-        showAbsolute={!hasOnlyBasicChart}
-        hideGlobalHeader
-      >
-        <NoProjectMessage organization={organization}>
-          <StyledPageContent>
+      <PageFiltersContainer skipLoadLastUsed showAbsolute={!hasOnlyBasicChart}>
+        <Layout.Page>
+          <NoProjectMessage organization={organization}>
             <Layout.Header>
               <Layout.HeaderContent>
                 <Breadcrumbs
@@ -223,20 +213,23 @@ class ProjectDetail extends AsyncView<Props, State> {
                   ]}
                 />
                 <Layout.Title>
-                  {project && (
+                  {project ? (
                     <IdBadge
                       project={project}
                       avatarSize={28}
                       hideOverflow="100%"
                       disableLink
+                      hideName
                     />
-                  )}
+                  ) : null}
+                  {project?.slug}
                 </Layout.Title>
               </Layout.HeaderContent>
 
               <Layout.HeaderActions>
                 <ButtonBar gap={1}>
                   <Button
+                    size="sm"
                     to={
                       // if we are still fetching project, we can use project slug to build issue stream url and let the redirect handle it
                       project?.id
@@ -247,10 +240,13 @@ class ProjectDetail extends AsyncView<Props, State> {
                     {t('View All Issues')}
                   </Button>
                   <CreateAlertButton
+                    size="sm"
                     organization={organization}
                     projectSlug={params.projectId}
+                    aria-label={t('Create Alert')}
                   />
                   <Button
+                    size="sm"
                     icon={<IconSettings />}
                     aria-label={t('Settings')}
                     to={`/settings/${params.orgId}/projects/${params.projectId}/`}
@@ -259,11 +255,8 @@ class ProjectDetail extends AsyncView<Props, State> {
               </Layout.HeaderActions>
             </Layout.Header>
 
-            <Layout.Body>
+            <Layout.Body noRowGap>
               {project && <StyledGlobalEventProcessingAlert projects={[project]} />}
-              <Layout.Main fullWidth>
-                <StyledSdkUpdatesAlert />
-              </Layout.Main>
               <StyledGlobalAppStoreConnectUpdateAlert
                 project={project}
                 organization={organization}
@@ -273,6 +266,11 @@ class ProjectDetail extends AsyncView<Props, State> {
                   <ProjectFilters
                     query={query}
                     onSearch={this.handleSearch}
+                    relativeDateOptions={
+                      hasOnlyBasicChart
+                        ? pick(DEFAULT_RELATIVE_PERIODS, ERRORS_BASIC_CHART_PERIODS)
+                        : undefined
+                    }
                     tagValueLoader={this.tagValueLoader}
                   />
                 </ProjectFiltersWrapper>
@@ -284,6 +282,8 @@ class ProjectDetail extends AsyncView<Props, State> {
                   hasSessions={hasSessions}
                   hasTransactions={hasTransactions}
                   query={query}
+                  project={project}
+                  location={location}
                 />
                 {isProjectStabilized && (
                   <Fragment>
@@ -300,6 +300,7 @@ class ProjectDetail extends AsyncView<Props, State> {
                         hasTransactions={!!hasTransactions}
                         visibleCharts={visibleCharts}
                         query={query}
+                        project={project}
                       />
                     ))}
                     <ProjectIssues
@@ -336,35 +337,25 @@ class ProjectDetail extends AsyncView<Props, State> {
                 />
               </Layout.Side>
             </Layout.Body>
-          </StyledPageContent>
-        </NoProjectMessage>
+          </NoProjectMessage>
+        </Layout.Page>
       </PageFiltersContainer>
     );
   }
 }
 
-const StyledPageContent = styled(PageContent)`
-  padding: 0;
-`;
-
 const ProjectFiltersWrapper = styled('div')`
   margin-bottom: ${space(2)};
 `;
 
-const StyledSdkUpdatesAlert = styled(GlobalSdkUpdateAlert)`
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
-    margin-bottom: 0;
-  }
-`;
-
 const StyledGlobalEventProcessingAlert = styled(GlobalEventProcessingAlert)`
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (min-width: ${p => p.theme.breakpoints.medium}) {
     margin-bottom: 0;
   }
 `;
 
 const StyledGlobalAppStoreConnectUpdateAlert = styled(GlobalAppStoreConnectUpdateAlert)`
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (min-width: ${p => p.theme.breakpoints.medium}) {
     margin-bottom: 0;
   }
 `;

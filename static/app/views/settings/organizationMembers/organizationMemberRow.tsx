@@ -1,20 +1,19 @@
 import {Fragment, PureComponent} from 'react';
-import {PlainRoute} from 'react-router';
 import styled from '@emotion/styled';
 
 import UserAvatar from 'sentry/components/avatar/userAvatar';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import Confirm from 'sentry/components/confirm';
 import HookOrDefault from 'sentry/components/hookOrDefault';
 import Link from 'sentry/components/links/link';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {OrgRoleInfo} from 'sentry/components/orgRole';
 import {PanelItem} from 'sentry/components/panels';
 import {IconCheckmark, IconClose, IconFlag, IconMail, IconSubtract} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {AvatarUser, Member} from 'sentry/types';
+import {space} from 'sentry/styles/space';
+import {AvatarUser, Member, Organization} from 'sentry/types';
 import isMemberDisabledFromLimit from 'sentry/utils/isMemberDisabledFromLimit';
-import recreateRoute from 'sentry/utils/recreateRoute';
 
 type Props = {
   canAddMembers: boolean;
@@ -25,10 +24,8 @@ type Props = {
   onLeave: (member: Member) => void;
   onRemove: (member: Member) => void;
   onSendInvite: (member: Member) => void;
-  orgName: string;
-  params: Record<string, string>;
+  organization: Organization;
   requireLink: boolean;
-  routes: PlainRoute[];
   status: '' | 'loading' | 'success' | 'error' | null;
 };
 
@@ -74,12 +71,11 @@ export default class OrganizationMemberRow extends PureComponent<Props, State> {
     if (typeof onSendInvite !== 'function') {
       return;
     }
-
     onSendInvite(member);
   };
 
   renderMemberRole() {
-    const {member} = this.props;
+    const {member, organization} = this.props;
     const {roleName, pending, expired} = member;
     if (isMemberDisabledFromLimit(member)) {
       return <DisabledMemberTooltip>{t('Deactivated')}</DisabledMemberTooltip>;
@@ -92,15 +88,13 @@ export default class OrganizationMemberRow extends PureComponent<Props, State> {
         </InvitedRole>
       );
     }
-    return roleName;
+    return <OrgRoleInfo member={member} organization={organization} />;
   }
 
   render() {
     const {
-      params,
-      routes,
       member,
-      orgName,
+      organization,
       status,
       requireLink,
       memberCanLeave,
@@ -112,15 +106,16 @@ export default class OrganizationMemberRow extends PureComponent<Props, State> {
     const {id, flags, email, name, pending, user} = member;
 
     // if member is not the only owner, they can leave
+    const isIdpProvisioned = flags['idp:provisioned'];
     const needsSso = !flags['sso:linked'] && requireLink;
     const isCurrentUser = currentUser.email === email;
     const showRemoveButton = !isCurrentUser;
     const showLeaveButton = isCurrentUser;
-    const canRemoveMember = canRemoveMembers && !isCurrentUser;
+    const canRemoveMember = canRemoveMembers && !isCurrentUser && !isIdpProvisioned;
     // member has a `user` property if they are registered with sentry
     // i.e. has accepted an invite to join org
     const has2fa = user && user.has2fa;
-    const detailsUrl = recreateRoute(id, {routes, params});
+    const detailsUrl = `/settings/${organization.slug}/members/${id}/`;
     const isInviteSuccessful = status === 'success';
     const isInviting = status === 'loading';
     const showResendButton = pending || needsSso;
@@ -152,7 +147,7 @@ export default class OrganizationMemberRow extends PureComponent<Props, State> {
                 <Button
                   disabled={!canAddMembers}
                   priority="primary"
-                  size="small"
+                  size="sm"
                   onClick={this.handleSendInvite}
                 >
                   {pending ? t('Resend invite') : t('Resend SSO link')}
@@ -172,19 +167,19 @@ export default class OrganizationMemberRow extends PureComponent<Props, State> {
         </div>
 
         {showRemoveButton || showLeaveButton ? (
-          <div>
+          <RightColumn>
             {showRemoveButton && canRemoveMember && (
               <Confirm
                 message={tct('Are you sure you want to remove [name] from [orgName]?', {
                   name,
-                  orgName,
+                  orgName: organization.slug,
                 })}
                 onConfirm={this.handleRemove}
               >
                 <Button
                   data-test-id="remove"
                   icon={<IconSubtract isCircled size="xs" />}
-                  size="small"
+                  size="sm"
                   busy={this.state.busy}
                 >
                   {t('Remove')}
@@ -195,8 +190,14 @@ export default class OrganizationMemberRow extends PureComponent<Props, State> {
             {showRemoveButton && !canRemoveMember && (
               <Button
                 disabled
-                size="small"
-                title={t('You do not have access to remove members')}
+                size="sm"
+                title={
+                  isIdpProvisioned
+                    ? t(
+                        "This user is managed through your organization's identity provider."
+                      )
+                    : t('You do not have access to remove members')
+                }
                 icon={<IconSubtract isCircled size="xs" />}
               >
                 {t('Remove')}
@@ -206,11 +207,11 @@ export default class OrganizationMemberRow extends PureComponent<Props, State> {
             {showLeaveButton && memberCanLeave && (
               <Confirm
                 message={tct('Are you sure you want to leave [orgName]?', {
-                  orgName,
+                  orgName: organization.slug,
                 })}
                 onConfirm={this.handleLeave}
               >
-                <Button priority="danger" size="small" icon={<IconClose size="xs" />}>
+                <Button priority="danger" size="sm" icon={<IconClose size="xs" />}>
                   {t('Leave')}
                 </Button>
               </Confirm>
@@ -218,17 +219,23 @@ export default class OrganizationMemberRow extends PureComponent<Props, State> {
 
             {showLeaveButton && !memberCanLeave && (
               <Button
-                size="small"
+                size="sm"
                 icon={<IconClose size="xs" />}
                 disabled
-                title={t(
-                  'You cannot leave this organization as you are the only organization owner.'
-                )}
+                title={
+                  isIdpProvisioned
+                    ? t(
+                        "Your account is managed through your organization's identity provider."
+                      )
+                    : t(
+                        'You cannot leave this organization as you are the only organization owner.'
+                      )
+                }
               >
                 {t('Leave')}
               </Button>
             )}
-          </div>
+          </RightColumn>
         ) : null}
       </StyledPanelItem>
     );
@@ -237,9 +244,17 @@ export default class OrganizationMemberRow extends PureComponent<Props, State> {
 
 const StyledPanelItem = styled(PanelItem)`
   display: grid;
-  grid-template-columns: minmax(150px, 2fr) minmax(90px, 1fr) minmax(120px, 1fr) 90px;
+  grid-template-columns: minmax(150px, 4fr) minmax(90px, 2fr) minmax(120px, 2fr) minmax(
+      100px,
+      1fr
+    );
   gap: ${space(2)};
   align-items: center;
+`;
+// Force action button at the end to align to right
+const RightColumn = styled('div')`
+  display: flex;
+  justify-content: flex-end;
 `;
 
 const Section = styled('div')`
@@ -256,14 +271,14 @@ const MemberDescription = styled(Link)`
 
 const UserName = styled('div')`
   display: block;
-  font-size: ${p => p.theme.fontSizeLarge};
   overflow: hidden;
+  font-size: ${p => p.theme.fontSizeMedium};
   text-overflow: ellipsis;
 `;
 
 const Email = styled('div')`
-  color: ${p => p.theme.textColor};
-  font-size: ${p => p.theme.fontSizeMedium};
+  color: ${p => p.theme.subText};
+  font-size: ${p => p.theme.fontSizeSmall};
   overflow: hidden;
   text-overflow: ellipsis;
 `;

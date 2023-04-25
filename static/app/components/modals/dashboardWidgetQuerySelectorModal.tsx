@@ -1,26 +1,26 @@
-import * as React from 'react';
-import {Link} from 'react-router';
+import {Component, Fragment} from 'react';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 
 import {ModalRenderProps} from 'sentry/actionCreators/modal';
 import {Client} from 'sentry/api';
-import Button from 'sentry/components/button';
-import Input from 'sentry/components/forms/controls/input';
+import {Button} from 'sentry/components/button';
+import Input from 'sentry/components/input';
+import Link from 'sentry/components/links/link';
 import {IconChevron, IconSearch} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, PageFilters} from 'sentry/types';
-import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
-import {DisplayModes} from 'sentry/utils/discover/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import withApi from 'sentry/utils/withApi';
 import withPageFilters from 'sentry/utils/withPageFilters';
-import {DisplayType, Widget} from 'sentry/views/dashboardsV2/types';
-import {eventViewFromWidget} from 'sentry/views/dashboardsV2/utils';
+import {Widget} from 'sentry/views/dashboards/types';
+import {getWidgetDiscoverUrl} from 'sentry/views/dashboards/utils';
 
 export type DashboardWidgetQuerySelectorModalOptions = {
   organization: Organization;
   widget: Widget;
+  isMetricsData?: boolean;
 };
 
 type Props = ModalRenderProps &
@@ -30,33 +30,22 @@ type Props = ModalRenderProps &
     selection: PageFilters;
   };
 
-class DashboardWidgetQuerySelectorModal extends React.Component<Props> {
+class DashboardWidgetQuerySelectorModal extends Component<Props> {
   renderQueries() {
-    const {organization, widget, selection} = this.props;
+    const {organization, widget, selection, isMetricsData} = this.props;
     const querySearchBars = widget.queries.map((query, index) => {
-      const eventView = eventViewFromWidget(
-        widget.title,
-        query,
+      const discoverLocation = getWidgetDiscoverUrl(
+        {
+          ...widget,
+          queries: [query],
+        },
         selection,
-        widget.displayType
+        organization,
+        0,
+        isMetricsData
       );
-      const discoverLocation = eventView.getResultsViewUrlTarget(organization.slug);
-      // Pull a max of 3 valid Y-Axis from the widget
-      const yAxisOptions = eventView.getYAxisOptions().map(({value}) => value);
-      discoverLocation.query.yAxis = [
-        ...new Set(
-          query.aggregates.filter(aggregate => yAxisOptions.includes(aggregate))
-        ),
-      ].slice(0, 3);
-      switch (widget.displayType) {
-        case DisplayType.BAR:
-          discoverLocation.query.display = DisplayModes.BAR;
-          break;
-        default:
-          break;
-      }
       return (
-        <React.Fragment key={index}>
+        <Fragment key={index}>
           <QueryContainer>
             <Container>
               <SearchLabel htmlFor="smart-search-input" aria-label={t('Search events')}>
@@ -69,19 +58,16 @@ class DashboardWidgetQuerySelectorModal extends React.Component<Props> {
                 priority="primary"
                 icon={<IconChevron size="xs" direction="right" />}
                 onClick={() => {
-                  trackAdvancedAnalyticsEvent(
-                    'dashboards_views.query_selector.selected',
-                    {
-                      organization,
-                      widget_type: widget.displayType,
-                    }
-                  );
+                  trackAnalytics('dashboards_views.query_selector.selected', {
+                    organization,
+                    widget_type: widget.displayType,
+                  });
                 }}
                 aria-label={t('Open in Discover')}
               />
             </Link>
           </QueryContainer>
-        </React.Fragment>
+        </Fragment>
       );
     });
     return querySearchBars;
@@ -90,7 +76,7 @@ class DashboardWidgetQuerySelectorModal extends React.Component<Props> {
   render() {
     const {Body, Header, widget} = this.props;
     return (
-      <React.Fragment>
+      <Fragment>
         <Header closeButton>
           <h4>{widget.title}</h4>
         </Header>
@@ -102,7 +88,7 @@ class DashboardWidgetQuerySelectorModal extends React.Component<Props> {
           </p>
           {this.renderQueries()}
         </Body>
-      </React.Fragment>
+      </Fragment>
     );
   }
 }
@@ -127,7 +113,7 @@ const OpenInDiscoverButton = styled(Button)`
 
 const Container = styled('div')`
   border: 1px solid ${p => p.theme.border};
-  box-shadow: inset ${p => p.theme.dropShadowLight};
+  box-shadow: inset ${p => p.theme.dropShadowMedium};
   background: ${p => p.theme.backgroundSecondary};
   padding: 7px ${space(1)};
   position: relative;

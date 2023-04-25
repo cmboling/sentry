@@ -1,9 +1,12 @@
-import {useEffect} from 'react';
-import {Link as RouterLink, withRouter, WithRouterProps} from 'react-router';
-import isPropValid from '@emotion/is-prop-valid';
+import {forwardRef, useContext} from 'react';
+import {Link as RouterLink} from 'react-router';
 import styled from '@emotion/styled';
-import * as Sentry from '@sentry/react';
 import {Location, LocationDescriptor} from 'history';
+
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
+import {RouteContext} from 'sentry/views/routeContext';
+
+import {linkStyles} from './styles';
 
 export interface LinkProps
   extends Omit<
@@ -11,7 +14,13 @@ export interface LinkProps
     'href' | 'target' | 'as' | 'css'
   > {
   /**
-   * The string path or LocationDescriptor object
+   * The string path or LocationDescriptor object.
+   *
+   * If your link target is a string literal or a `LocationDescriptor` with
+   * a literal `pathname`, you need to use the slug based URL
+   * e.g `/organizations/${slug}/issues/`. This ensures that your link will
+   * work in environments that do have customer-domains (saas) and those without
+   * customer-domains (single-tenant).
    */
   to: ((location: Location) => LocationDescriptor) | LocationDescriptor;
   /**
@@ -22,63 +31,35 @@ export interface LinkProps
    * Indicator if the link should be disabled
    */
   disabled?: boolean;
+  /**
+   * Forwarded ref
+   */
+  forwardedRef?: React.Ref<HTMLAnchorElement>;
 }
 
 /**
  * A context-aware version of Link (from react-router) that falls
  * back to <a> if there is no router present
  */
-
-interface WithRouterBaseLinkProps extends WithRouterProps, LinkProps {}
-function BaseLink({
-  location,
-  disabled,
-  to,
-  ref,
-  router: _router,
-  params: _params,
-  routes: _routes,
-  ...props
-}: WithRouterBaseLinkProps): React.ReactElement {
-  useEffect(() => {
-    // check if the router is present
-    if (!location) {
-      Sentry.captureException(
-        new Error('The link component was rendered without being wrapped by a <Router />')
-      );
-    }
-  }, []);
+function BaseLink({disabled, to, forwardedRef, ...props}: LinkProps): React.ReactElement {
+  const route = useContext(RouteContext);
+  const location = route?.location;
+  to = normalizeUrl(to, location);
 
   if (!disabled && location) {
-    return <RouterLink to={to} ref={ref as any} {...props} />;
+    return <RouterLink to={to} ref={forwardedRef as any} {...props} />;
   }
 
-  if (typeof to === 'string') {
-    return <Anchor href={to} ref={ref} disabled={disabled} {...props} />;
-  }
-
-  return <Anchor href="" ref={ref} {...props} disabled />;
+  return <a href={typeof to === 'string' ? to : ''} ref={forwardedRef} {...props} />;
 }
 
-// Set the displayName for testing convenience
-BaseLink.displayName = 'Link';
-
 // Re-assign to Link to make auto-importing smarter
-const Link = withRouter(BaseLink);
+const Link = styled(
+  forwardRef<HTMLAnchorElement, Omit<LinkProps, 'forwardedRef'>>((props, ref) => (
+    <BaseLink forwardedRef={ref} {...props} />
+  ))
+)`
+  ${linkStyles}
+`;
 
 export default Link;
-
-const Anchor = styled('a', {
-  shouldForwardProp: prop =>
-    typeof prop === 'string' && isPropValid(prop) && prop !== 'disabled',
-})<{disabled?: boolean}>`
-  ${p =>
-    p.disabled &&
-    `
-  color:${p.theme.disabled};
-  pointer-events: none;
-  :hover {
-    color: ${p.theme.disabled};
-  }
-  `};
-`;

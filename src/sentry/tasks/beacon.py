@@ -8,15 +8,16 @@ from django.conf import settings
 from django.utils import timezone
 
 import sentry
-from sentry.app import locks, tsdb
+from sentry import tsdb
 from sentry.debug.utils.packages import get_all_package_versions
 from sentry.http import safe_urlopen, safe_urlread
+from sentry.locks import locks
 from sentry.tasks.base import instrumented_task
 from sentry.utils import json
 
 BEACON_URL = "https://sentry.io/remote/beacon/"
 
-logger = logging.getLogger("beacon")
+logger = logging.getLogger(__name__)
 
 
 def get_install_id():
@@ -113,7 +114,7 @@ def send_beacon():
             # XXX(dcramer): we're missing a unique constraint on upstream_id
             # so we're using a lock to work around that. In the future we'd like
             # to have a data migration to clean up the duplicates and add the constraint
-            lock = locks.get("broadcasts:{}".format(notice["id"]), duration=60)
+            lock = locks.get("broadcasts:{}".format(notice["id"]), duration=60, name="broadcasts")
             with lock.acquire():
                 affected = Broadcast.objects.filter(upstream_id=notice["id"]).update(**defaults)
                 if not affected:

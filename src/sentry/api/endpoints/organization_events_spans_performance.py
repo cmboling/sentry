@@ -14,7 +14,8 @@ from snuba_sdk.conditions import Condition, Op
 from snuba_sdk.function import Function, Identifier, Lambda
 from snuba_sdk.orderby import Direction, OrderBy
 
-from sentry import eventstore, features
+from sentry import eventstore
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import NoProjects, OrganizationEventsV2EndpointBase
 from sentry.api.paginator import GenericOffsetPaginator
 from sentry.api.serializers.rest_framework import ListField
@@ -81,15 +82,6 @@ SPAN_PERFORMANCE_COLUMNS: Dict[str, SpanPerformanceColumn] = {
 
 
 class OrganizationEventsSpansEndpointBase(OrganizationEventsV2EndpointBase):  # type: ignore
-    def has_feature(self, request: Request, organization: Organization) -> bool:
-        return bool(
-            features.has(
-                "organizations:performance-suspect-spans-view",
-                organization,
-                actor=request.user,
-            )
-        )
-
     def get_snuba_params(
         self, request: Request, organization: Organization, check_global_views: bool = True
     ) -> Dict[str, Any]:
@@ -126,6 +118,19 @@ class SpansPerformanceSerializer(serializers.Serializer):  # type: ignore
     spanGroup = ListField(
         child=serializers.CharField(), required=False, allow_null=True, max_length=4
     )
+    min_exclusive_time = serializers.FloatField(required=False)
+    max_exclusive_time = serializers.FloatField(required=False)
+
+    def validate(self, data):
+        if (
+            "min_exclusive_time" in data
+            and "max_exclusive_time" in data
+            and data["min_exclusive_time"] > data["max_exclusive_time"]
+        ):
+            raise serializers.ValidationError(
+                "min_exclusive_time cannot be greater than max_exclusive_time."
+            )
+        return data
 
     def validate_spanGroup(self, span_groups):
         for group in span_groups:
@@ -134,10 +139,9 @@ class SpansPerformanceSerializer(serializers.Serializer):  # type: ignore
         return span_groups
 
 
+@region_silo_endpoint
 class OrganizationEventsSpansPerformanceEndpoint(OrganizationEventsSpansEndpointBase):
     def get(self, request: Request, organization: Organization) -> Response:
-        if not self.has_feature(request, organization):
-            return Response(status=404)
 
         try:
             params = self.get_snuba_params(request, organization)
@@ -153,6 +157,8 @@ class OrganizationEventsSpansPerformanceEndpoint(OrganizationEventsSpansEndpoint
         query = serialized.get("query")
         span_ops = serialized.get("spanOp")
         span_groups = serialized.get("spanGroup")
+        min_exclusive_time = serialized.get("min_exclusive_time")
+        max_exclusive_time = serialized.get("max_exclusive_time")
 
         direction, orderby_column = self.get_orderby_column(request)
 
@@ -167,6 +173,8 @@ class OrganizationEventsSpansPerformanceEndpoint(OrganizationEventsSpansEndpoint
                 orderby_column,
                 limit,
                 offset,
+                min_exclusive_time,
+                max_exclusive_time,
             )
 
             return [suspect.serialize() for suspect in suspects]
@@ -183,6 +191,19 @@ class OrganizationEventsSpansPerformanceEndpoint(OrganizationEventsSpansEndpoint
 class SpanSerializer(serializers.Serializer):  # type: ignore
     query = serializers.CharField(required=False, allow_null=True)
     span = serializers.CharField(required=True, allow_null=False)
+    min_exclusive_time = serializers.FloatField(required=False)
+    max_exclusive_time = serializers.FloatField(required=False)
+
+    def validate(self, data):
+        if (
+            "min_exclusive_time" in data
+            and "max_exclusive_time" in data
+            and data["min_exclusive_time"] > data["max_exclusive_time"]
+        ):
+            raise serializers.ValidationError(
+                "min_exclusive_time cannot be greater than max_exclusive_time."
+            )
+        return data
 
     def validate_span(self, span: str) -> Span:
         try:
@@ -191,10 +212,9 @@ class SpanSerializer(serializers.Serializer):  # type: ignore
             raise serializers.ValidationError(str(e))
 
 
+@region_silo_endpoint
 class OrganizationEventsSpansExamplesEndpoint(OrganizationEventsSpansEndpointBase):
     def get(self, request: Request, organization: Organization) -> Response:
-        if not self.has_feature(request, organization):
-            return Response(status=404)
 
         try:
             params = self.get_snuba_params(request, organization)
@@ -208,12 +228,22 @@ class OrganizationEventsSpansExamplesEndpoint(OrganizationEventsSpansEndpointBas
 
         query = serialized.get("query")
         span = serialized["span"]
+        min_exclusive_time = serialized.get("min_exclusive_time")
+        max_exclusive_time = serialized.get("max_exclusive_time")
 
         direction, orderby_column = self.get_orderby_column(request)
 
         def data_fn(offset: int, limit: int) -> Any:
             example_transactions = query_example_transactions(
-                params, query, direction, orderby_column, span, limit, offset
+                params,
+                query,
+                direction,
+                orderby_column,
+                span,
+                limit,
+                offset,
+                min_exclusive_time,
+                max_exclusive_time,
             )
 
             return [
@@ -225,6 +255,8 @@ class OrganizationEventsSpansExamplesEndpoint(OrganizationEventsSpansEndpointBas
                             event,
                             span.op,
                             span.group,
+                            min_exclusive_time,
+                            max_exclusive_time,
                         ).serialize()
                         for event in example_transactions.get(span, [])
                     ],
@@ -261,10 +293,9 @@ class SpanExamplesPaginator:
         )
 
 
+@region_silo_endpoint
 class OrganizationEventsSpansStatsEndpoint(OrganizationEventsSpansEndpointBase):
     def get(self, request: Request, organization: Organization) -> Response:
-        if not self.has_feature(request, organization):
-            return Response(status=404)
 
         serializer = SpanSerializer(data=request.GET)
         if not serializer.is_valid():
@@ -440,6 +471,8 @@ def query_suspect_span_groups(
     orderby: str,
     limit: int,
     offset: int,
+    min_exclusive_time: Optional[float] = None,
+    max_exclusive_time: Optional[float] = None,
 ) -> List[SuspectSpan]:
     suspect_span_columns = SPAN_PERFORMANCE_COLUMNS[orderby]
 
@@ -494,6 +527,24 @@ def query_suspect_span_groups(
             )
         )
 
+    if min_exclusive_time is not None:
+        extra_conditions.append(
+            Condition(
+                builder.resolve_function("array_join(spans_exclusive_time)"),
+                Op.GT,
+                min_exclusive_time,
+            )
+        )
+
+    if max_exclusive_time is not None:
+        extra_conditions.append(
+            Condition(
+                builder.resolve_function("array_join(spans_exclusive_time)"),
+                Op.LT,
+                max_exclusive_time,
+            )
+        )
+
     if extra_conditions:
         builder.add_conditions(extra_conditions)
 
@@ -523,9 +574,34 @@ def query_suspect_span_groups(
 
 
 class SpanQueryBuilder(QueryBuilder):  # type: ignore
-    def resolve_span_function(self, function: str, span: Span, alias: str):
+    def resolve_span_function(
+        self,
+        function: str,
+        span: Span,
+        alias: str,
+        min_exclusive_time: Optional[float] = None,
+        max_exclusive_time: Optional[float] = None,
+    ):
         op = span.op
         group = span.group
+
+        condition = Function(
+            "and",
+            [
+                Function("equals", [Identifier("x"), op]),
+                Function("equals", [Identifier("y"), group]),
+            ],
+        )
+
+        if min_exclusive_time is not None:
+            condition = Function(
+                "and", [Function("greater", [Identifier("z"), min_exclusive_time]), condition]
+            )
+
+        if max_exclusive_time is not None:
+            condition = Function(
+                "and", [Function("less", [Identifier("z"), max_exclusive_time]), condition]
+            )
 
         return Function(
             "arrayReduce",
@@ -536,17 +612,12 @@ class SpanQueryBuilder(QueryBuilder):  # type: ignore
                     "arrayMap",
                     [
                         Lambda(
-                            ["x", "y"],
-                            Function(
-                                "and",
-                                [
-                                    Function("equals", [Identifier("x"), op]),
-                                    Function("equals", [Identifier("y"), group]),
-                                ],
-                            ),
+                            ["x", "y", "z"],
+                            condition,
                         ),
                         self.column("spans_op"),
                         self.column("spans_group"),
+                        self.column("spans_exclusive_time"),
                     ],
                 ),
             ],
@@ -562,6 +633,8 @@ def query_example_transactions(
     span: Span,
     per_suspect: int = 5,
     offset: Optional[int] = None,
+    min_exclusive_time: Optional[float] = None,
+    max_exclusive_time: Optional[float] = None,
 ) -> Dict[Span, List[EventID]]:
     # there aren't any suspects, early return to save an empty query
     if per_suspect == 0:
@@ -584,10 +657,13 @@ def query_example_transactions(
 
     # Make sure to resolve the custom span functions and add it to the columns and order bys
     orderby_columns = [
-        builder.resolve_span_function(function, span, f"{function}_span_time")
+        builder.resolve_span_function(
+            function, span, f"{function}_span_time", min_exclusive_time, max_exclusive_time
+        )
         for function in SPAN_PERFORMANCE_COLUMNS[orderby].suspect_example_functions
     ]
     builder.columns += orderby_columns
+
     builder.orderby += [
         OrderBy(column, Direction.DESC if direction == "-" else Direction.ASC)
         for column in orderby_columns
@@ -599,7 +675,9 @@ def query_example_transactions(
             Condition(Function("has", [builder.column("spans_op"), span.op]), Op.EQ, 1),
             Condition(Function("has", [builder.column("spans_group"), span.group]), Op.EQ, 1),
             Condition(
-                builder.resolve_span_function("count", span, "count_span_time"),
+                builder.resolve_span_function(
+                    "count", span, "count_span_time", min_exclusive_time, max_exclusive_time
+                ),
                 Op.GT,
                 0,
             ),
@@ -642,6 +720,8 @@ def get_example_transaction(
     event: EventID,
     span_op: str,
     span_group: str,
+    min_exclusive_time: Optional[float] = None,
+    max_exclusive_time: Optional[float] = None,
 ) -> ExampleTransaction:
     span_group_id = int(span_group, 16)
     nodestore_event = eventstore.get_event_by_id(event.project_id, event.event_id)
@@ -665,6 +745,16 @@ def get_example_transaction(
         for span in chain([root_span], data.get("spans", []))
         if span["op"] == span_op and int(span["hash"], 16) == span_group_id
     ]
+
+    if min_exclusive_time is not None:
+        matching_spans = [
+            span for span in matching_spans if span["exclusive_time"] > min_exclusive_time
+        ]
+
+    if max_exclusive_time is not None:
+        matching_spans = [
+            span for span in matching_spans if span["exclusive_time"] < max_exclusive_time
+        ]
 
     # get the first non-None description
     # use None if all descriptions are None

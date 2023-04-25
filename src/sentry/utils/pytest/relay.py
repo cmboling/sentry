@@ -13,6 +13,7 @@ import pytest
 import requests
 
 from sentry.runner.commands.devservices import get_docker_client
+from sentry.utils.pytest.sentry import TEST_REDIS_DB
 
 _log = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ def relay_server_setup(live_server, tmpdir_factory):
         datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     )
     config_path = tmpdir_factory.mktemp(prefix)
+    config_path.chmod(0o755)
     config_path = str(config_path)
 
     parsed_live_server_url = urlparse(live_server.url)
@@ -76,11 +78,17 @@ def relay_server_setup(live_server, tmpdir_factory):
     # NOTE: if we ever need to start the test relay server at various ports here's where we need to change
     relay_port = 33331
 
+    redis_db = TEST_REDIS_DB
+    from sentry.relay import projectconfig_cache
+
+    assert redis_db == projectconfig_cache.backend.cluster.connection_pool.connection_kwargs["db"]
+
     template_vars = {
         "SENTRY_HOST": upstream_host,
         "RELAY_PORT": relay_port,
         "KAFKA_HOST": kafka_host,
         "REDIS_HOST": redis_host,
+        "REDIS_DB": redis_db,
     }
 
     for source in sources:
@@ -92,14 +100,15 @@ def relay_server_setup(live_server, tmpdir_factory):
         for var_name, var_val in template_vars.items():
             content = content.replace("${%s}" % var_name, str(var_val))
 
-        with open(dest_path, "wt") as output:
+        with open(dest_path, "w") as output:
             output.write(content)
 
     # we have a config path for relay that is set up with the current live serve as upstream
     # check if we have the test relay docker container
-    docker_client = get_docker_client()
-    container_name = _relay_server_container_name()
-    _remove_container_if_exists(docker_client, container_name)
+    with get_docker_client() as docker_client:
+        container_name = _relay_server_container_name()
+        _remove_container_if_exists(docker_client, container_name)
+
     options = {
         "image": RELAY_TEST_IMAGE,
         "ports": {"%s/tcp" % relay_port: relay_port},
@@ -117,17 +126,19 @@ def relay_server_setup(live_server, tmpdir_factory):
 
     # cleanup
     shutil.rmtree(config_path)
-    _remove_container_if_exists(docker_client, container_name)
+    if not environ.get("RELAY_TEST_KEEP_CONTAINER", False):
+        with get_docker_client() as docker_client:
+            _remove_container_if_exists(docker_client, container_name)
 
 
 @pytest.fixture(scope="function")
 def relay_server(relay_server_setup, settings):
     adjust_settings_for_relay_tests(settings)
     options = relay_server_setup["options"]
-    docker_client = get_docker_client()
-    container_name = _relay_server_container_name()
-    _remove_container_if_exists(docker_client, container_name)
-    container = docker_client.containers.run(**options)
+    with get_docker_client() as docker_client:
+        container_name = _relay_server_container_name()
+        _remove_container_if_exists(docker_client, container_name)
+        container = docker_client.containers.run(**options)
 
     _log.info("Waiting for Relay container to start")
 
@@ -140,7 +151,7 @@ def relay_server(relay_server_setup, settings):
         except Exception as ex:
             if i == 4:
                 raise ValueError(f"relay did not start in time:\n{container.logs()}") from ex
-            time.sleep(0.1 * 2 ** i)
+            time.sleep(0.1 * 2**i)
     else:
         raise ValueError("relay did not start in time")
 

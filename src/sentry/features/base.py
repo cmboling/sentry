@@ -1,10 +1,21 @@
-__all__ = ["Feature", "OrganizationFeature", "ProjectFeature", "ProjectPluginFeature"]
+from __future__ import annotations
+
+from enum import Enum
+
+__all__ = [
+    "Feature",
+    "OrganizationFeature",
+    "ProjectFeature",
+    "ProjectPluginFeature",
+    "UserFeature",
+    "FeatureHandlerStrategy",
+]
 
 import abc
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from sentry.models import Organization, Project
+    from sentry.models import Organization, Project, User
 
 
 class Feature:
@@ -19,29 +30,61 @@ class Feature:
         self.name = name
 
     @abc.abstractmethod
-    def get_organization(self) -> "Organization":
+    def get_subject(self) -> User | Organization | None:
         raise NotImplementedError
 
 
+class SystemFeature(Feature):
+    """
+    System feature flags don't have user/project/organization and are
+    based on how the application is configured instead.
+    """
+
+    def get_subject(self) -> None:
+        return None
+
+
 class OrganizationFeature(Feature):
-    def __init__(self, name: str, organization: "Organization") -> None:
+    def __init__(self, name: str, organization: Organization) -> None:
         super().__init__(name)
         self.organization = organization
 
-    def get_organization(self) -> "Organization":
+    def get_subject(self) -> Organization:
         return self.organization
 
 
 class ProjectFeature(Feature):
-    def __init__(self, name: str, project: "Project") -> None:
+    def __init__(self, name: str, project: Project) -> None:
         super().__init__(name)
         self.project = project
 
-    def get_organization(self) -> "Organization":
+    def get_subject(self) -> Organization:
         return self.project.organization
 
 
 class ProjectPluginFeature(ProjectFeature):
-    def __init__(self, name: str, project: "Project", plugin: Any) -> None:
+    def __init__(self, name: str, project: Project, plugin: Any) -> None:
         super().__init__(name, project=project)
         self.plugin = plugin
+
+
+class UserFeature(Feature):
+    def __init__(self, name: str, user: User) -> None:
+        super().__init__(name)
+        self.user = user
+
+    def get_subject(self) -> User:
+        return self.user
+
+
+class FeatureHandlerStrategy(Enum):
+    """
+    This controls whether the feature flag is evaluated statically,
+    or if it's managed by a remote feature flag service.
+    See https://develop.sentry.dev/feature-flags/
+    """
+
+    INTERNAL = 1
+    """Handle the feature using a constant or logic within python"""
+    REMOTE = 2
+    """Handle the feature using a remote flag management service"""

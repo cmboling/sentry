@@ -1,16 +1,15 @@
-import * as React from 'react';
+import {Component, Fragment} from 'react';
 import {browserHistory} from 'react-router';
 import styled from '@emotion/styled';
 import {Location, LocationDescriptor, Query} from 'history';
 
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
+import {CompactSelect} from 'sentry/components/compactSelect';
 import DiscoverButton from 'sentry/components/discoverButton';
-import DropdownButton from 'sentry/components/dropdownButton';
-import DropdownControl, {DropdownItem} from 'sentry/components/dropdownControl';
 import Pagination, {CursorHandler} from 'sentry/components/pagination';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import DiscoverQuery, {TableDataRow} from 'sentry/utils/discover/discoverQuery';
 import EventView from 'sentry/utils/discover/eventView';
@@ -18,9 +17,9 @@ import {Sort} from 'sentry/utils/discover/fields';
 import {TrendsEventsDiscoverQuery} from 'sentry/utils/performance/trends/trendsDiscoverQuery';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
-import {Actions} from 'sentry/views/eventsV2/table/cellAction';
-import {TableColumn} from 'sentry/views/eventsV2/table/types';
-import {decodeColumnOrder} from 'sentry/views/eventsV2/utils';
+import {Actions} from 'sentry/views/discover/table/cellAction';
+import {TableColumn} from 'sentry/views/discover/table/types';
+import {decodeColumnOrder} from 'sentry/views/discover/utils';
 import {SpanOperationBreakdownFilter} from 'sentry/views/performance/transactionSummary/filter';
 import {mapShowTransactionToPercentile} from 'sentry/views/performance/transactionSummary/transactionEvents/utils';
 import {TransactionFilterOptions} from 'sentry/views/performance/transactionSummary/utils';
@@ -113,6 +112,7 @@ type Props = {
    * The callback for when Open in Discover is clicked.
    */
   handleOpenInDiscoverClick?: (e: React.MouseEvent<Element>) => void;
+  referrer?: string;
   showTransactions?: TransactionFilterOptions;
   /**
    * A list of preferred table headers to use over the field names.
@@ -121,7 +121,7 @@ type Props = {
   trendView?: TrendView;
 };
 
-class _TransactionsList extends React.Component<Props> {
+class _TransactionsList extends Component<Props> {
   static defaultProps = {
     cursorName: 'transactionCursor',
     limit: DEFAULT_TRANSACTION_LIMIT,
@@ -174,32 +174,14 @@ class _TransactionsList extends React.Component<Props> {
     } = this.props;
 
     return (
-      <React.Fragment>
+      <Fragment>
         <div>
-          <DropdownControl
-            button={({isOpen, getActorProps}) => (
-              <StyledDropdownButton
-                {...getActorProps()}
-                isOpen={isOpen}
-                prefix={t('Filter')}
-                size="xsmall"
-              >
-                {selected.label}
-              </StyledDropdownButton>
-            )}
-          >
-            {options.map(({value, label}) => (
-              <DropdownItem
-                data-test-id={`option-${value}`}
-                key={value}
-                onSelect={handleDropdownChange}
-                eventKey={value}
-                isActive={value === selected.value}
-              >
-                {label}
-              </DropdownItem>
-            ))}
-          </DropdownControl>
+          <CompactSelect
+            triggerProps={{prefix: t('Filter'), size: 'xs'}}
+            value={selected.value}
+            options={options}
+            onChange={opt => handleDropdownChange(opt.value)}
+          />
         </div>
         {!this.isTrend() &&
           (handleOpenAllEventsClick ? (
@@ -213,7 +195,7 @@ class _TransactionsList extends React.Component<Props> {
                     breakdown,
                   }
                 )}
-                size="xsmall"
+                size="xs"
                 data-test-id="transaction-events-open"
               >
                 {t('View All Events')}
@@ -226,14 +208,14 @@ class _TransactionsList extends React.Component<Props> {
                 to={this.generateDiscoverEventView().getResultsViewUrlTarget(
                   organization.slug
                 )}
-                size="xsmall"
+                size="xs"
                 data-test-id="discover-open"
               >
                 {t('Open in Discover')}
               </DiscoverButton>
             </GuideAnchor>
           ))}
-      </React.Fragment>
+      </Fragment>
     );
   }
 
@@ -247,6 +229,7 @@ class _TransactionsList extends React.Component<Props> {
       titles,
       generateLink,
       forceLoading,
+      referrer,
     } = this.props;
 
     const eventView = this.getEventView();
@@ -254,27 +237,31 @@ class _TransactionsList extends React.Component<Props> {
     const cursor = decodeScalar(location.query?.[cursorName]);
 
     const tableRenderer = ({isLoading, pageLinks, tableData}) => (
-      <React.Fragment>
+      <Fragment>
         <Header>
           {this.renderHeader()}
           <StyledPagination
             pageLinks={pageLinks}
             onCursor={this.handleCursor}
-            size="xsmall"
+            size="xs"
           />
         </Header>
-        <TransactionsTable
-          eventView={eventView}
-          organization={organization}
-          location={location}
-          isLoading={isLoading}
-          tableData={tableData}
-          columnOrder={columnOrder}
-          titles={titles}
-          generateLink={generateLink}
-          handleCellAction={handleCellAction}
-        />
-      </React.Fragment>
+        <GuideAnchor target="transactions_table" position="top-start">
+          <TransactionsTable
+            eventView={eventView}
+            organization={organization}
+            location={location}
+            isLoading={isLoading}
+            tableData={tableData}
+            columnOrder={columnOrder}
+            titles={titles}
+            generateLink={generateLink}
+            handleCellAction={handleCellAction}
+            useAggregateAlias={false}
+            referrer={referrer}
+          />
+        </GuideAnchor>
+      </Fragment>
     );
 
     if (forceLoading) {
@@ -322,13 +309,13 @@ class _TransactionsList extends React.Component<Props> {
         limit={5}
       >
         {({isLoading, trendsData, pageLinks}) => (
-          <React.Fragment>
+          <Fragment>
             <Header>
               {this.renderHeader()}
               <StyledPagination
                 pageLinks={pageLinks}
                 onCursor={this.handleCursor}
-                size="small"
+                size="sm"
               />
             </Header>
             <TransactionsTable
@@ -344,8 +331,9 @@ class _TransactionsList extends React.Component<Props> {
                 {field: 'trend_difference()'},
               ])}
               generateLink={generateLink}
+              useAggregateAlias
             />
-          </React.Fragment>
+          </Fragment>
         )}
       </TrendsEventsDiscoverQuery>
     );
@@ -358,9 +346,9 @@ class _TransactionsList extends React.Component<Props> {
 
   render() {
     return (
-      <React.Fragment>
+      <Fragment>
         {this.isTrend() ? this.renderTrendsTable() : this.renderTransactionTable()}
-      </React.Fragment>
+      </Fragment>
     );
   }
 }
@@ -372,21 +360,17 @@ const Header = styled('div')`
   align-items: center;
 `;
 
-const StyledDropdownButton = styled(DropdownButton)`
-  min-width: 145px;
-`;
-
 const StyledPagination = styled(Pagination)`
   margin: 0 0 0 ${space(1)};
 `;
 
-const TransactionsList = (
+function TransactionsList(
   props: Omit<Props, 'cursorName' | 'limit'> & {
     cursorName?: Props['cursorName'];
     limit?: Props['limit'];
   }
-) => {
+) {
   return <_TransactionsList {...props} />;
-};
+}
 
 export default TransactionsList;

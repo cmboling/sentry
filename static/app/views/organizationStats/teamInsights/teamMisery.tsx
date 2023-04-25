@@ -4,7 +4,7 @@ import styled from '@emotion/styled';
 import {Location} from 'history';
 
 import AsyncComponent from 'sentry/components/asyncComponent';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import {DateTimeObject} from 'sentry/components/charts/utils';
 import CollapsePanel, {COLLAPSE_COUNT} from 'sentry/components/collapsePanel';
 import Link from 'sentry/components/links/link';
@@ -12,8 +12,7 @@ import LoadingError from 'sentry/components/loadingError';
 import PanelTable from 'sentry/components/panels/panelTable';
 import {IconStar} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Project, SavedQueryVersions} from 'sentry/types';
 import DiscoverQuery, {
   TableData,
@@ -22,7 +21,7 @@ import DiscoverQuery, {
 import EventView from 'sentry/utils/discover/eventView';
 import {getFieldRenderer} from 'sentry/utils/discover/fieldRenderers';
 import type {QueryError} from 'sentry/utils/discover/genericDiscoverQuery';
-import type {Color} from 'sentry/utils/theme';
+import type {ColorOrAlias} from 'sentry/utils/theme';
 import {transactionSummaryRouteWithQuery} from 'sentry/views/performance/transactionSummary/utils';
 
 import {ProjectBadge, ProjectBadgeContainer} from './styles';
@@ -50,7 +49,8 @@ function TeamMisery({
   error,
 }: TeamMiseryProps) {
   const miseryRenderer =
-    periodTableData?.meta && getFieldRenderer('user_misery', periodTableData.meta);
+    periodTableData?.meta &&
+    getFieldRenderer('user_misery()', periodTableData.meta, false);
 
   // Calculate trend, so we can sort based on it
   const sortedTableData = (periodTableData?.data ?? [])
@@ -60,7 +60,8 @@ function TeamMisery({
       );
 
       const trend = weekRow
-        ? ((dataRow.user_misery as number) - (weekRow.user_misery as number)) * 100
+        ? ((dataRow['user_misery()'] as number) - (weekRow['user_misery()'] as number)) *
+          100
         : null;
 
       return {
@@ -82,11 +83,11 @@ function TeamMisery({
       {({isExpanded, showMoreButton}) => (
         <Fragment>
           <StyledPanelTable
-            isEmpty={projects.length === 0 || periodTableData?.data.length === 0}
+            isEmpty={projects.length === 0 || periodTableData?.data?.length === 0}
             emptyMessage={t('No key transactions starred by this team')}
             emptyAction={
               <Button
-                size="small"
+                size="sm"
                 external
                 href="https://docs.sentry.io/product/performance/transaction-summary/#starring-key-transactions"
               >
@@ -95,7 +96,7 @@ function TeamMisery({
             }
             headers={[
               <FlexCenter key="transaction">
-                <StyledIconStar isSolid color="yellow300" /> {t('Key transaction')}
+                <StyledIconStar isSolid color="yellow400" /> {t('Key transaction')}
               </FlexCenter>,
               t('Project'),
               tct('Last [period]', {period}),
@@ -128,7 +129,7 @@ function TeamMisery({
                 <Fragment key={idx}>
                   <KeyTransactionTitleWrapper>
                     <div>
-                      <StyledIconStar isSolid color="yellow300" />
+                      <StyledIconStar isSolid color="yellow400" />
                     </div>
                     <TransactionWrapper>
                       <Link
@@ -157,7 +158,7 @@ function TeamMisery({
                         {t('change')}
                       </SubText>
                     ) : (
-                      <TrendText color={trend >= 0 ? 'green300' : 'red300'}>
+                      <TrendText color={trend >= 0 ? 'successText' : 'errorText'}>
                         {`${trendValue}\u0025 `}
                         {trend >= 0 ? t('better') : t('worse')}
                       </TrendText>
@@ -296,7 +297,7 @@ const FlexCenter = styled('div')`
 `;
 
 const KeyTransactionTitleWrapper = styled('div')`
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
   display: flex;
   align-items: center;
 `;
@@ -308,7 +309,7 @@ const StyledIconStar = styled(IconStar)`
 `;
 
 const TransactionWrapper = styled('div')`
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
 `;
 
 const RightAligned = styled('span')`
@@ -326,6 +327,6 @@ const SubText = styled('div')`
   color: ${p => p.theme.subText};
 `;
 
-const TrendText = styled('div')<{color: Color}>`
+const TrendText = styled('div')<{color: ColorOrAlias}>`
   color: ${p => p.theme[p.color]};
 `;

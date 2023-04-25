@@ -3,18 +3,18 @@ import styled from '@emotion/styled';
 import ExternalLink from 'sentry/components/links/externalLink';
 import SentryAppComponentIcon from 'sentry/components/sentryAppComponentIcon';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {SentryAppComponent} from 'sentry/types';
 import {addQueryParamsToExistingUrl} from 'sentry/utils/queryString';
 import {recordInteraction} from 'sentry/utils/recordSentryAppInteraction';
 
 type Props = {
-  components: Array<SentryAppComponent>;
+  components: SentryAppComponent[];
   filename: string;
   lineNo: number;
 };
 
-const OpenInContextLine = ({lineNo, filename, components}: Props) => {
+function OpenInContextLine({lineNo, filename, components}: Props) {
   const handleRecordInteraction =
     (slug: SentryAppComponent['sentryApp']['slug']) => () => {
       recordInteraction(slug, 'sentry_app_component_interacted', {
@@ -43,17 +43,17 @@ const OpenInContextLine = ({lineNo, filename, components}: Props) => {
             openInNewTab
           >
             <SentryAppComponentIcon sentryAppComponent={component} />
-            <OpenInName>{t(`${component.sentryApp.name}`)}</OpenInName>
+            <OpenInName>{component.sentryApp.name}</OpenInName>
           </OpenInLink>
         );
       })}
     </OpenInContainer>
   );
-};
+}
 
 export {OpenInContextLine};
 
-export const OpenInContainer = styled('div')<{columnQuantity: number}>`
+const OpenInContainer = styled('div')<{columnQuantity: number}>`
   position: relative;
   z-index: 1;
   display: grid;
@@ -64,14 +64,13 @@ export const OpenInContainer = styled('div')<{columnQuantity: number}>`
   font-family: ${p => p.theme.text.family};
   border-bottom: 1px solid ${p => p.theme.border};
   padding: ${space(0.25)} ${space(3)};
-  box-shadow: ${p => p.theme.dropShadowLightest};
+  box-shadow: ${p => p.theme.dropShadowLight};
   text-indent: initial;
   overflow: auto;
   white-space: nowrap;
 `;
 
-export const OpenInLink = styled(ExternalLink)`
-  display: inline-grid;
+const OpenInLink = styled(ExternalLink)`
   align-items: center;
   grid-template-columns: max-content auto;
   gap: ${space(0.75)};

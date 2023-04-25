@@ -9,6 +9,7 @@ const defaultProps = {
 type Props = {
   loading: boolean;
   reloading: boolean;
+  children?: React.ReactNode;
 } & typeof defaultProps;
 
 type State = {
@@ -32,7 +33,7 @@ class TransitionChart extends Component<Props, State> {
     // - reloading (also called pending in other apps)
     //
     // This component remounts the chart to ensure the stable transition
-    // from one data set to the next.
+    // from one dataset to the next.
 
     const prevReloading = state.prevReloading;
     const nextReloading = props.reloading;

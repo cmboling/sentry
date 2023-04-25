@@ -5,6 +5,8 @@ from rest_framework import serializers
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry import audit_log
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.serializers import serialize
@@ -14,9 +16,9 @@ from sentry.api.serializers.models.plugin import (
     serialize_field,
 )
 from sentry.exceptions import InvalidIdentity, PluginError, PluginIdentityRequired
-from sentry.models import AuditLogEntryEvent
 from sentry.plugins.base import plugins
 from sentry.signals import plugin_enabled
+from sentry.utils.http import absolute_uri
 
 ERR_ALWAYS_ENABLED = "This plugin is always enabled."
 ERR_FIELD_REQUIRED = "This field is required."
@@ -24,6 +26,7 @@ ERR_FIELD_REQUIRED = "This field is required."
 OK_UPDATED = "Successfully updated configuration."
 
 
+@region_silo_endpoint
 class ProjectPluginDetailsEndpoint(ProjectEndpoint):
     def _get_plugin(self, plugin_id):
         try:
@@ -39,7 +42,8 @@ class ProjectPluginDetailsEndpoint(ProjectEndpoint):
         except PluginIdentityRequired as e:
             context = serialize(plugin, request.user, PluginSerializer(project))
             context["config_error"] = str(e)
-            context["auth_url"] = reverse("socialauth_associate", args=[plugin.slug])
+            # Use an absolute URI so that oauth redirects work.
+            context["auth_url"] = absolute_uri(reverse("socialauth_associate", args=[plugin.slug]))
 
         if context["isDeprecated"]:
             raise Http404
@@ -64,7 +68,7 @@ class ProjectPluginDetailsEndpoint(ProjectEndpoint):
                 request=request,
                 organization=project.organization,
                 target_object=project.id,
-                event=AuditLogEntryEvent.INTEGRATION_EDIT,
+                event=audit_log.get_event_id("INTEGRATION_EDIT"),
                 data={"integration": plugin_id, "project": project.slug},
             )
 
@@ -79,7 +83,7 @@ class ProjectPluginDetailsEndpoint(ProjectEndpoint):
             request=request,
             organization=project.organization,
             target_object=project.id,
-            event=AuditLogEntryEvent.INTEGRATION_ADD,
+            event=audit_log.get_event_id("INTEGRATION_ADD"),
             data={"integration": plugin_id, "project": project.slug},
         )
 
@@ -100,7 +104,7 @@ class ProjectPluginDetailsEndpoint(ProjectEndpoint):
             request=request,
             organization=project.organization,
             target_object=project.id,
-            event=AuditLogEntryEvent.INTEGRATION_REMOVE,
+            event=audit_log.get_event_id("INTEGRATION_REMOVE"),
             data={"integration": plugin_id, "project": project.slug},
         )
 
@@ -163,7 +167,7 @@ class ProjectPluginDetailsEndpoint(ProjectEndpoint):
             request=request,
             organization=project.organization,
             target_object=project.id,
-            event=AuditLogEntryEvent.INTEGRATION_EDIT,
+            event=audit_log.get_event_id("INTEGRATION_EDIT"),
             data={"integration": plugin_id, "project": project.slug},
         )
 

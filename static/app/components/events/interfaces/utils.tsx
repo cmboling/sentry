@@ -7,14 +7,16 @@ import * as qs from 'query-string';
 import {FILTER_MASK} from 'sentry/constants';
 import ConfigStore from 'sentry/stores/configStore';
 import {Frame, PlatformType} from 'sentry/types';
+import {Image} from 'sentry/types/debugImage';
 import {EntryRequest} from 'sentry/types/event';
 import {defined} from 'sentry/utils';
 import {fileExtensionToPlatform, getFileExtension} from 'sentry/utils/fileExtension';
 
-import {DebugImage} from './debugMeta/types';
-
-export function escapeQuotes(v: string) {
-  return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+/**
+ * Attempts to escape a string from any bash double quote special characters.
+ */
+function escapeBashString(v: string) {
+  return v.replace(/(["$`\\])/g, '\\$1');
 }
 
 // TODO(dcramer): support cookies
@@ -40,24 +42,24 @@ export function getCurlCommand(data: EntryRequest['data']) {
     }) ?? [];
 
   for (const header of headers) {
-    result += ' \\\n -H "' + header[0] + ': ' + escapeQuotes(header[1] + '') + '"';
+    result += ' \\\n -H "' + header[0] + ': ' + escapeBashString(header[1] + '') + '"';
   }
 
   if (defined(data.data)) {
     switch (data.inferredContentType) {
       case 'application/json':
-        result += ' \\\n --data "' + escapeQuotes(JSON.stringify(data.data)) + '"';
+        result += ' \\\n --data "' + escapeBashString(JSON.stringify(data.data)) + '"';
         break;
       case 'application/x-www-form-urlencoded':
         result +=
           ' \\\n --data "' +
-          escapeQuotes(qs.stringify(data.data as {[key: string]: any})) +
+          escapeBashString(qs.stringify(data.data as {[key: string]: any})) +
           '"';
         break;
 
       default:
         if (isString(data.data)) {
-          result += ' \\\n --data "' + escapeQuotes(data.data) + '"';
+          result += ' \\\n --data "' + escapeBashString(data.data) + '"';
         } else if (Object.keys(data.data).length === 0) {
           // Do nothing with empty object data.
         } else {
@@ -108,7 +110,7 @@ export function getFullUrl(data: EntryRequest['data']): string | undefined {
     fullUrl += '#' + data.fragment;
   }
 
-  return fullUrl;
+  return escapeBashString(fullUrl);
 }
 
 /**
@@ -168,7 +170,7 @@ export function parseAddress(address?: string | null) {
   }
 }
 
-export function getImageRange(image: DebugImage) {
+export function getImageRange(image: Image) {
   // The start address is normalized to a `0x` prefixed hex string. The event
   // schema also allows ingesting plain numbers, but this is converted during
   // ingestion.
@@ -189,11 +191,29 @@ export function parseAssembly(assembly: string | null) {
 
   const pieces = assembly ? assembly.split(',') : [];
 
-  if (pieces.length === 4) {
+  if (pieces.length > 0) {
     name = pieces[0];
-    version = pieces[1].split('Version=')[1];
-    culture = pieces[2].split('Culture=')[1];
-    publicKeyToken = pieces[3].split('PublicKeyToken=')[1];
+  }
+
+  for (let i = 1; i < pieces.length; i++) {
+    const [key, value] = pieces[i].trim().split('=');
+
+    // eslint-disable-next-line default-case
+    switch (key) {
+      case 'Version':
+        version = value;
+        break;
+      case 'Culture':
+        if (value !== 'neutral') {
+          culture = value;
+        }
+        break;
+      case 'PublicKeyToken':
+        if (value !== 'null') {
+          publicKeyToken = value;
+        }
+        break;
+    }
   }
 
   return {name, version, culture, publicKeyToken};

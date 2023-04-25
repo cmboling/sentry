@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import logging
+
 __all__ = ["FeatureManager"]
 
 import abc
@@ -18,7 +22,7 @@ from typing import (
 import sentry_sdk
 from django.conf import settings
 
-from .base import Feature
+from .base import Feature, FeatureHandlerStrategy
 from .exceptions import FeatureNotRegistered
 
 if TYPE_CHECKING:
@@ -36,9 +40,9 @@ class RegisteredFeatureManager:
     """
 
     def __init__(self) -> None:
-        self._handler_registry: MutableMapping[str, List["FeatureHandler"]] = defaultdict(list)
+        self._handler_registry: MutableMapping[str, List[FeatureHandler]] = defaultdict(list)
 
-    def add_handler(self, handler: "FeatureHandler") -> None:
+    def add_handler(self, handler: FeatureHandler) -> None:
         """
         Register a feature handler.
 
@@ -48,7 +52,7 @@ class RegisteredFeatureManager:
         for feature_name in handler.features:
             self._handler_registry[feature_name].append(handler)
 
-    def _get_handler(self, feature: Feature, actor: "User") -> Optional[bool]:
+    def _get_handler(self, feature: Feature, actor: User) -> Optional[bool]:
         for handler in self._handler_registry[feature.name]:
             rv = handler(feature, actor)
             if rv is not None:
@@ -67,10 +71,10 @@ class RegisteredFeatureManager:
     def has_for_batch(
         self,
         name: str,
-        organization: "Organization",
-        objects: Sequence["Project"],
-        actor: Optional["User"] = None,
-    ) -> Mapping["Project", bool]:
+        organization: Organization,
+        objects: Sequence[Project],
+        actor: Optional[User] = None,
+    ) -> Mapping[Project, bool]:
         """
         Determine in a batch if a feature is enabled.
 
@@ -131,7 +135,7 @@ class FeatureManager(RegisteredFeatureManager):
         super().__init__()
         self._feature_registry: MutableMapping[str, Type[Feature]] = {}
         self.entity_features: MutableSet[str] = set()
-        self._entity_handler: Optional["FeatureHandler"] = None
+        self._entity_handler: Optional[FeatureHandler] = None
 
     def all(self, feature_type: Type[Feature] = Feature) -> Mapping[str, Type[Feature]]:
         """
@@ -140,7 +144,12 @@ class FeatureManager(RegisteredFeatureManager):
         """
         return {k: v for k, v in self._feature_registry.items() if v == feature_type}
 
-    def add(self, name: str, cls: Type[Feature] = Feature, entity_feature: bool = False) -> None:
+    def add(
+        self,
+        name: str,
+        cls: Type[Feature] = Feature,
+        entity_feature_strategy: bool | FeatureHandlerStrategy = False,
+    ) -> None:
         """
         Register a feature.
 
@@ -149,7 +158,11 @@ class FeatureManager(RegisteredFeatureManager):
 
         >>> FeatureManager.has('my:feature', actor=request.user)
         """
-        if entity_feature:
+        entity_feature_strategy = self._shim_feature_strategy(entity_feature_strategy)
+
+        if entity_feature_strategy == FeatureHandlerStrategy.REMOTE:
+            if name.startswith("users:"):
+                raise NotImplementedError("User flags not allowed with entity_feature=True")
             self.entity_features.add(name)
         self._feature_registry[name] = cls
 
@@ -168,7 +181,7 @@ class FeatureManager(RegisteredFeatureManager):
         cls = self._get_feature_class(name)
         return cls(name, *args, **kwargs)
 
-    def add_entity_handler(self, handler: "FeatureHandler") -> None:
+    def add_entity_handler(self, handler: FeatureHandler) -> None:
         """
         Registers a handler that doesn't require a feature name match
         """
@@ -207,32 +220,36 @@ class FeatureManager(RegisteredFeatureManager):
         >>> FeatureManager.has('organizations:feature', organization, actor=request.user)
 
         """
-        actor = kwargs.pop("actor", None)
-        feature = self.get(name, *args, **kwargs)
+        try:
+            actor = kwargs.pop("actor", None)
+            feature = self.get(name, *args, **kwargs)
 
-        # Check registered feature handlers
-        rv = self._get_handler(feature, actor)
-        if rv is not None:
-            return rv
-
-        if self._entity_handler and not skip_entity:
-            rv = self._entity_handler.has(feature, actor)
+            # Check registered feature handlers
+            rv = self._get_handler(feature, actor)
             if rv is not None:
                 return rv
 
-        rv = settings.SENTRY_FEATURES.get(feature.name, False)
-        if rv is not None:
-            return rv
+            if self._entity_handler and not skip_entity:
+                rv = self._entity_handler.has(feature, actor)
+                if rv is not None:
+                    return rv
 
-        # Features are by default disabled if no plugin or default enables them
-        return False
+            rv = settings.SENTRY_FEATURES.get(feature.name, False)
+            if rv is not None:
+                return rv
+
+            # Features are by default disabled if no plugin or default enables them
+            return False
+        except Exception:
+            logging.exception("Failed to run feature check")
+            return False
 
     def batch_has(
         self,
         feature_names: Sequence[str],
-        actor: Optional["User"] = None,
-        projects: Optional[Sequence["Project"]] = None,
-        organization: Optional["Organization"] = None,
+        actor: Optional[User] = None,
+        projects: Optional[Sequence[Project]] = None,
+        organization: Optional[Organization] = None,
     ) -> Optional[Mapping[str, Mapping[str, bool]]]:
         """
         Determine if multiple features are enabled. Unhandled flags will not be in
@@ -246,7 +263,47 @@ class FeatureManager(RegisteredFeatureManager):
                 feature_names, actor, projects=projects, organization=organization
             )
         else:
+            # Fall back to default handler if no entity handler available.
+            project_features = filter(lambda name: name.startswith("projects:"), feature_names)
+            if projects and project_features:
+                results: MutableMapping[str, Mapping[str, bool]] = {}
+                for project in projects:
+                    proj_results = results[f"project:{project.id}"] = {}
+                    for feature_name in project_features:
+                        proj_results[feature_name] = self.has(feature_name, project, actor=actor)
+                return results
+
+            org_features = filter(lambda name: name.startswith("organizations:"), feature_names)
+            if organization and org_features:
+                org_results = {}
+                for feature_name in org_features:
+                    org_results[feature_name] = self.has(feature_name, organization, actor=actor)
+                return {f"organization:{organization.id}": org_results}
+
+            unscoped_features = filter(
+                lambda name: not name.startswith("organizations:")
+                and not name.startswith("projects:"),
+                feature_names,
+            )
+            if unscoped_features:
+                unscoped_results = {}
+                for feature_name in unscoped_features:
+                    unscoped_results[feature_name] = self.has(feature_name, actor=actor)
+                return {"unscoped": unscoped_results}
             return None
+
+    @staticmethod
+    def _shim_feature_strategy(
+        entity_feature_strategy: bool | FeatureHandlerStrategy,
+    ) -> FeatureHandlerStrategy:
+        """
+        Shim layer for old API to register a feature until all the features have been converted
+        """
+        if entity_feature_strategy is True:
+            return FeatureHandlerStrategy.REMOTE
+        elif entity_feature_strategy is False:
+            return FeatureHandlerStrategy.INTERNAL
+        return entity_feature_strategy
 
 
 class FeatureCheckBatch:
@@ -262,9 +319,9 @@ class FeatureCheckBatch:
         self,
         manager: RegisteredFeatureManager,
         name: str,
-        organization: "Organization",
-        objects: Iterable["Project"],
-        actor: "User",
+        organization: Organization,
+        objects: Iterable[Project],
+        actor: User,
     ) -> None:
         self._manager = manager
         self.feature_name = name
@@ -272,7 +329,7 @@ class FeatureCheckBatch:
         self.objects = objects
         self.actor = actor
 
-    def get_feature_objects(self) -> Mapping["Project", Feature]:
+    def get_feature_objects(self) -> Mapping[Project, Feature]:
         """
         Iterate over individual Feature objects.
 
@@ -282,3 +339,7 @@ class FeatureCheckBatch:
 
         cls = self._manager._get_feature_class(self.feature_name)
         return {obj: cls(self.feature_name, obj) for obj in self.objects}
+
+    @property
+    def subject(self) -> Organization | User:
+        return self.organization or self.actor

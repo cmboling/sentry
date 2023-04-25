@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 
 import GenericDiscoverQuery from 'sentry/utils/discover/genericDiscoverQuery';
 import {
@@ -10,7 +10,6 @@ import {
   getTraceRequestPayload,
   makeEventView,
 } from 'sentry/utils/performance/quickTrace/utils';
-import withApi from 'sentry/utils/withApi';
 
 export type TraceMetaQueryChildrenProps = BaseTraceChildrenProps & {
   meta: TraceMeta | null;
@@ -30,13 +29,13 @@ function TraceMetaQuery({
 }: QueryProps) {
   if (!traceId) {
     return (
-      <React.Fragment>
+      <Fragment>
         {children({
           isLoading: false,
           error: null,
           meta: null,
         })}
-      </React.Fragment>
+      </Fragment>
     );
   }
 
@@ -59,4 +58,4 @@ function TraceMetaQuery({
   );
 }
 
-export default withApi(TraceMetaQuery);
+export default TraceMetaQuery;

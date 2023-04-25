@@ -4,7 +4,7 @@ from enum import Enum
 from django.db import models
 from django.utils import timezone
 
-from sentry.db.models import FlexibleForeignKey, Model
+from sentry.db.models import FlexibleForeignKey, Model, region_silo_only_model
 from sentry.db.models.base import DefaultFieldsModel
 from sentry.db.models.manager import BaseManager
 
@@ -20,17 +20,18 @@ query_aggregation_to_snuba = {
 }
 
 
-class QueryDatasets(Enum):
-    EVENTS = "events"
-    TRANSACTIONS = "transactions"
-    SESSIONS = "sessions"
-    METRICS = "metrics"
-
-
+@region_silo_only_model
 class SnubaQuery(Model):
     __include_in_export__ = True
 
+    class Type(Enum):
+        ERROR = 0
+        PERFORMANCE = 1
+        CRASH_RATE = 2
+
     environment = FlexibleForeignKey("sentry.Environment", null=True, db_constraint=False)
+    # Possible values are in the the `Type` enum
+    type = models.SmallIntegerField()
     dataset = models.TextField()
     query = models.TextField()
     aggregate = models.TextField()
@@ -47,6 +48,7 @@ class SnubaQuery(Model):
         return [type.event_type for type in self.snubaqueryeventtype_set.all()]
 
 
+@region_silo_only_model
 class SnubaQueryEventType(Model):
     __include_in_export__ = True
 
@@ -68,6 +70,7 @@ class SnubaQueryEventType(Model):
         return self.EventType(self.type)
 
 
+@region_silo_only_model
 class QuerySubscription(DefaultFieldsModel):
     __include_in_export__ = True
 

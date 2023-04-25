@@ -5,12 +5,13 @@ from rest_framework import serializers, status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry import audit_log
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint, OrganizationPermission
 from sentry.api.paginator import OffsetPaginator
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models.team import TeamSerializer
 from sentry.models import (
-    AuditLogEntryEvent,
     ExternalActor,
     OrganizationMember,
     OrganizationMemberTeam,
@@ -47,6 +48,7 @@ class TeamPostSerializer(serializers.Serializer):
             )
         },
     )
+    idp_provisioned = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
         if not (attrs.get("name") or attrs.get("slug")):
@@ -54,6 +56,7 @@ class TeamPostSerializer(serializers.Serializer):
         return attrs
 
 
+@region_silo_endpoint
 class OrganizationTeamsEndpoint(OrganizationEndpoint):
     permission_classes = (OrganizationTeamsPermission,)
 
@@ -78,9 +81,11 @@ class OrganizationTeamsEndpoint(OrganizationEndpoint):
         if request.auth and hasattr(request.auth, "project"):
             return Response(status=403)
 
-        queryset = Team.objects.filter(
-            organization=organization, status=TeamStatus.VISIBLE
-        ).order_by("slug")
+        queryset = (
+            Team.objects.filter(organization=organization, status=TeamStatus.VISIBLE)
+            .order_by("slug")
+            .select_related("organization")  # Used in TeamSerializer
+        )
 
         query = request.GET.get("query")
 
@@ -153,6 +158,7 @@ class OrganizationTeamsEndpoint(OrganizationEndpoint):
                     team = Team.objects.create(
                         name=result.get("name") or result["slug"],
                         slug=result.get("slug"),
+                        idp_provisioned=result.get("idp_provisioned", False),
                         organization=organization,
                     )
             except IntegrityError:
@@ -181,7 +187,7 @@ class OrganizationTeamsEndpoint(OrganizationEndpoint):
                 request=request,
                 organization=organization,
                 target_object=team.id,
-                event=AuditLogEntryEvent.TEAM_ADD,
+                event=audit_log.get_event_id("TEAM_ADD"),
                 data=team.get_audit_log_data(),
             )
             return Response(

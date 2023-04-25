@@ -1,24 +1,24 @@
-import {withRouter, WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 
 import {updateEnvironments} from 'sentry/actionCreators/pageFilters';
 import Badge from 'sentry/components/badge';
-import MultipleEnvironmentSelector from 'sentry/components/organizations/multipleEnvironmentSelector';
+import type {ButtonProps} from 'sentry/components/button';
+import EnvironmentSelector from 'sentry/components/organizations/environmentSelector';
 import PageFilterDropdownButton from 'sentry/components/organizations/pageFilters/pageFilterDropdownButton';
+import PageFilterPinIndicator from 'sentry/components/organizations/pageFilters/pageFilterPinIndicator';
 import {IconWindow} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
-import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-import space from 'sentry/styles/space';
 import {trimSlug} from 'sentry/utils/trimSlug';
 import useOrganization from 'sentry/utils/useOrganization';
+import usePageFilters from 'sentry/utils/usePageFilters';
 import useProjects from 'sentry/utils/useProjects';
+import useRouter from 'sentry/utils/useRouter';
 
-type EnvironmentSelectorProps = React.ComponentProps<typeof MultipleEnvironmentSelector>;
+type EnvironmentSelectorProps = React.ComponentProps<typeof EnvironmentSelector>;
 
 type Props = {
-  router: WithRouterProps['router'];
   alignDropdown?: EnvironmentSelectorProps['alignDropdown'];
+  disabled?: EnvironmentSelectorProps['disabled'];
   /**
    * Max character length for the dropdown title. Default is 20. This number
    * is used to determine how many projects to show, and how much to truncate.
@@ -28,17 +28,21 @@ type Props = {
    * Reset these URL params when we fire actions (custom routing only)
    */
   resetParamsOnChange?: string[];
+  size?: ButtonProps['size'];
 };
 
 function EnvironmentPageFilter({
-  router,
   resetParamsOnChange = [],
   alignDropdown,
+  disabled,
   maxTitleLength = 20,
+  size = 'md',
 }: Props) {
+  const router = useRouter();
+
   const {projects, initiallyLoaded: projectsLoaded} = useProjects();
   const organization = useOrganization();
-  const {selection, isReady, desyncedFilters} = useLegacyStore(PageFiltersStore);
+  const {selection, isReady, desyncedFilters} = usePageFilters();
 
   const handleUpdateEnvironments = (environments: string[]) => {
     updateEnvironments(environments, router, {
@@ -57,39 +61,44 @@ function EnvironmentPageFilter({
         : value.slice(0, 1);
     const summary = value.length
       ? environmentsToShow.map(env => trimSlug(env, maxTitleLength)).join(', ')
-      : t('All Env');
+      : t('All Envs');
 
     return (
       <PageFilterDropdownButton
-        detached
-        hideBottomBorder={false}
         isOpen={isOpen}
         highlighted={desyncedFilters.has('environments')}
+        data-test-id="page-filter-environment-selector"
+        disabled={disabled}
+        size={size}
+        icon={
+          <PageFilterPinIndicator filter="environments">
+            <IconWindow />
+          </PageFilterPinIndicator>
+        }
       >
-        <DropdownTitle>
-          <IconWindow />
-          <TitleContainer>
-            {summary}
-            {!!value.length && value.length > environmentsToShow.length && (
-              <Badge text={`+${value.length - environmentsToShow.length}`} />
-            )}
-          </TitleContainer>
-        </DropdownTitle>
+        <TitleContainer>
+          {summary}
+          {!!value.length && value.length > environmentsToShow.length && (
+            <Badge text={`+${value.length - environmentsToShow.length}`} />
+          )}
+        </TitleContainer>
       </PageFilterDropdownButton>
     );
   };
 
   const customLoadingIndicator = (
-    <PageFilterDropdownButton showChevron={false} disabled>
-      <DropdownTitle>
-        <IconWindow />
-        {t('Loading\u2026')}
-      </DropdownTitle>
+    <PageFilterDropdownButton
+      icon={<IconWindow />}
+      showChevron={false}
+      disabled
+      data-test-id="page-filter-environment-selector"
+    >
+      <TitleContainer>{t('Loading\u2026')}</TitleContainer>
     </PageFilterDropdownButton>
   );
 
   return (
-    <MultipleEnvironmentSelector
+    <EnvironmentSelector
       organization={organization}
       projects={projects}
       loadingProjects={!projectsLoaded || !isReady}
@@ -99,28 +108,14 @@ function EnvironmentPageFilter({
       customDropdownButton={customDropdownButton}
       customLoadingIndicator={customLoadingIndicator}
       alignDropdown={alignDropdown}
-      detached
-      showPin
+      disabled={disabled}
     />
   );
 }
 
 const TitleContainer = styled('div')`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1 1 0%;
-  margin-left: ${space(1)};
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  text-align: left;
+  ${p => p.theme.overflowEllipsis}
 `;
 
-const DropdownTitle = styled('div')`
-  display: flex;
-  overflow: hidden;
-  align-items: center;
-  flex: 1;
-`;
-
-export default withRouter<Props>(EnvironmentPageFilter);
+export default EnvironmentPageFilter;

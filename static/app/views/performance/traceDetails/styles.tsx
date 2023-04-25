@@ -6,7 +6,7 @@ import {SecondaryHeader} from 'sentry/components/events/interfaces/spans/header'
 import {Panel} from 'sentry/components/panels';
 import Pills from 'sentry/components/pills';
 import SearchBar from 'sentry/components/searchBar';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import {defined} from 'sentry/utils';
 import {TraceFullDetailed} from 'sentry/utils/performance/quickTrace/types';
@@ -29,10 +29,11 @@ export const TraceSearchBar = styled(SearchBar)`
 `;
 
 export const TraceViewHeaderContainer = styled(SecondaryHeader)`
-  position: static;
-  top: auto;
   border-top: none;
   border-bottom: 1px solid ${p => p.theme.border};
+  position: sticky;
+  top: 0;
+  z-index: 1;
 `;
 
 export const TraceDetailHeader = styled('div')`
@@ -41,14 +42,14 @@ export const TraceDetailHeader = styled('div')`
   gap: ${space(3)};
   margin-bottom: ${space(2)};
 
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (min-width: ${p => p.theme.breakpoints.medium}) {
     grid-template-columns: max-content max-content;
     grid-row-gap: 0;
   }
 `;
 
 export const TraceDetailBody = styled('div')`
-  margin-top: ${space(2)};
+  height: 100%;
 `;
 
 export const TraceViewContainer = styled('div')`
@@ -58,7 +59,8 @@ export const TraceViewContainer = styled('div')`
 `;
 
 export const TracePanel = styled(Panel)`
-  overflow: hidden;
+  height: 100%;
+  overflow: auto;
 `;
 
 export const ProjectBadgeContainer = styled('span')`
@@ -88,7 +90,6 @@ export function Tags({
   }
 
   const orgSlug = organization.slug;
-  const releasesPath = `/organizations/${orgSlug}/releases/`;
 
   return (
     <tr>
@@ -110,11 +111,11 @@ export function Tags({
               <EventTagsPill
                 key={!defined(tag.key) ? `tag-pill-${index}` : tag.key}
                 tag={tag}
-                projectId={transaction.project_slug}
+                projectSlug={transaction.project_slug}
+                projectId={transaction.project_id.toString()}
                 organization={organization}
                 query={query}
                 streamPath={streamPath}
-                releasesPath={releasesPath}
               />
             );
           })}

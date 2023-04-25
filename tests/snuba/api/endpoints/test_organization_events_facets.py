@@ -9,8 +9,10 @@ from rest_framework.exceptions import ParseError
 
 from sentry.testutils import APITestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class OrganizationEventsFacetsEndpointTest(SnubaTestCase, APITestCase):
     def setUp(self):
         super().setUp()
@@ -84,6 +86,42 @@ class OrganizationEventsFacetsEndpointTest(SnubaTestCase, APITestCase):
             {"count": 1, "name": "two", "value": "two"},
         ]
         self.assert_facet(response, "number", expected)
+
+    def test_order_by(self):
+        self.store_event(
+            data={
+                "event_id": uuid4().hex,
+                "timestamp": self.min_ago_iso,
+                "tags": {"alpha": "one"},
+                "environment": "aaaa",
+            },
+            project_id=self.project2.id,
+        )
+        self.store_event(
+            data={
+                "event_id": uuid4().hex,
+                "timestamp": self.min_ago_iso,
+                "tags": {"beta": "one"},
+                "environment": "bbbb",
+            },
+            project_id=self.project.id,
+        )
+        self.store_event(
+            data={
+                "event_id": uuid4().hex,
+                "timestamp": self.min_ago_iso,
+                "tags": {"charlie": "two"},
+                "environment": "cccc",
+            },
+            project_id=self.project.id,
+        )
+
+        with self.feature(self.features):
+            response = self.client.get(self.url, format="json")
+
+        assert response.status_code == 200, response.content
+        keys = [facet["key"] for facet in response.data]
+        assert ["alpha", "beta", "charlie", "environment", "level", "project"] == keys
 
     def test_with_message_query(self):
         self.store_event(
@@ -467,7 +505,7 @@ class OrganizationEventsFacetsEndpointTest(SnubaTestCase, APITestCase):
             "(column 1). This is commonly caused by unmatched parentheses. Enclose any text in double quotes."
         )
 
-    @mock.patch("sentry.snuba.discover.raw_query")
+    @mock.patch("sentry.search.events.builder.discover.raw_snql_query")
     def test_handling_snuba_errors(self, mock_query):
         mock_query.side_effect = ParseError("test")
         with self.feature(self.features):
@@ -595,17 +633,39 @@ class OrganizationEventsFacetsEndpointTest(SnubaTestCase, APITestCase):
 
             assert len(mock_quantize.mock_calls) == 2
 
+    def test_device_class(self):
+        self.store_event(
+            data={
+                "event_id": uuid4().hex,
+                "timestamp": self.min_ago_iso,
+                "tags": {"device.class": "1"},
+            },
+            project_id=self.project2.id,
+        )
+        self.store_event(
+            data={
+                "event_id": uuid4().hex,
+                "timestamp": self.min_ago_iso,
+                "tags": {"device.class": "2"},
+            },
+            project_id=self.project.id,
+        )
+        self.store_event(
+            data={
+                "event_id": uuid4().hex,
+                "timestamp": self.min_ago_iso,
+                "tags": {"device.class": "3"},
+            },
+            project_id=self.project.id,
+        )
 
-class OrganizationEventsFacetsEndpointTestWithSnql(OrganizationEventsFacetsEndpointTest):
-    def setUp(self):
-        super().setUp()
-        self.features["organizations:discover-use-snql"] = True
-
-    # Separate test for now to keep the patching simpler
-    @mock.patch("sentry.search.events.builder.raw_snql_query")
-    def test_handling_snuba_errors(self, mock_query):
-        mock_query.side_effect = ParseError("test")
         with self.feature(self.features):
             response = self.client.get(self.url, format="json")
 
-        assert response.status_code == 400, response.content
+        assert response.status_code == 200, response.content
+        expected = [
+            {"count": 1, "name": "high", "value": "high"},
+            {"count": 1, "name": "medium", "value": "medium"},
+            {"count": 1, "name": "low", "value": "low"},
+        ]
+        self.assert_facet(response, "device.class", expected)

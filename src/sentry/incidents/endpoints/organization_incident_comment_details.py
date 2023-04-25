@@ -3,6 +3,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.incident import IncidentEndpoint, IncidentPermission
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.serializers import serialize
@@ -28,7 +29,7 @@ class CommentDetailsEndpoint(IncidentEndpoint):
 
         try:
             # Superusers may mutate any comment
-            user_filter = {} if request.user.is_superuser else {"user": request.user}
+            user_filter = {} if request.user.is_superuser else {"user_id": request.user.id}
 
             kwargs["activity"] = IncidentActivity.objects.get(
                 id=activity_id,
@@ -43,6 +44,7 @@ class CommentDetailsEndpoint(IncidentEndpoint):
         return args, kwargs
 
 
+@region_silo_endpoint
 class OrganizationIncidentCommentDetailsEndpoint(CommentDetailsEndpoint):
     permission_classes = (IncidentPermission,)
 

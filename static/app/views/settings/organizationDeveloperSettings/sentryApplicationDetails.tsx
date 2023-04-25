@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import {browserHistory, RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
 import omit from 'lodash/omit';
@@ -12,16 +12,17 @@ import {
 } from 'sentry/actionCreators/sentryAppTokens';
 import Avatar from 'sentry/components/avatar';
 import AvatarChooser, {Model} from 'sentry/components/avatarChooser';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import DateTime from 'sentry/components/dateTime';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import Form from 'sentry/components/forms/form';
 import FormField from 'sentry/components/forms/formField';
 import JsonForm from 'sentry/components/forms/jsonForm';
 import FormModel, {FieldValue} from 'sentry/components/forms/model';
-import TextCopyInput from 'sentry/components/forms/textCopyInput';
 import ExternalLink from 'sentry/components/links/externalLink';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
-import Tooltip from 'sentry/components/tooltip';
+import TextCopyInput from 'sentry/components/textCopyInput';
+import {Tooltip} from 'sentry/components/tooltip';
 import {SENTRY_APP_PERMISSIONS} from 'sentry/constants';
 import {
   internalIntegrationForms,
@@ -29,11 +30,12 @@ import {
 } from 'sentry/data/forms/sentryApplication';
 import {IconAdd, IconDelete} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {InternalAppApiToken, Scope, SentryApp} from 'sentry/types';
+import {space} from 'sentry/styles/space';
+import {InternalAppApiToken, Organization, Scope, SentryApp} from 'sentry/types';
 import getDynamicText from 'sentry/utils/getDynamicText';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
+import withOrganization from 'sentry/utils/withOrganization';
 import AsyncView from 'sentry/views/asyncView';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
 import PermissionsObserver from 'sentry/views/settings/organizationDeveloperSettings/permissionsObserver';
 
@@ -82,6 +84,33 @@ const getResourceFromScope = (scope: Scope): Resource | undefined => {
   return undefined;
 };
 
+/**
+ * We need to map the API response errors to the actual form fields.
+ * We do this by pulling out scopes and mapping each scope error to the correct input.
+ * @param {Object} responseJSON
+ */
+const mapFormErrors = (responseJSON?: any) => {
+  if (!responseJSON) {
+    return responseJSON;
+  }
+  const formErrors = omit(responseJSON, ['scopes']);
+  if (responseJSON.scopes) {
+    responseJSON.scopes.forEach((message: string) => {
+      // find the scope from the error message of a specific format
+      const matches = message.match(/Requested permission of (\w+:\w+)/);
+      if (matches) {
+        const scope = matches[1];
+        const resource = getResourceFromScope(scope as Scope);
+        // should always match but technically resource can be undefined
+        if (resource) {
+          formErrors[`${resource}--permission`] = [message];
+        }
+      }
+    });
+  }
+  return formErrors;
+};
+
 class SentryAppFormModel extends FormModel {
   /**
    * Filter out Permission input field values.
@@ -104,44 +133,19 @@ class SentryAppFormModel extends FormModel {
       return data;
     }, {});
   }
-
-  /**
-   * We need to map the API response errors to the actual form fields.
-   * We do this by pulling out scopes and mapping each scope error to the correct input.
-   * @param {Object} responseJSON
-   */
-  mapFormErrors(responseJSON?: any) {
-    if (!responseJSON) {
-      return responseJSON;
-    }
-    const formErrors = omit(responseJSON, ['scopes']);
-    if (responseJSON.scopes) {
-      responseJSON.scopes.forEach((message: string) => {
-        // find the scope from the error message of a specific format
-        const matches = message.match(/Requested permission of (\w+:\w+)/);
-        if (matches) {
-          const scope = matches[1];
-          const resource = getResourceFromScope(scope as Scope);
-          // should always match but technically resource can be undefined
-          if (resource) {
-            formErrors[`${resource}--permission`] = [message];
-          }
-        }
-      });
-    }
-    return formErrors;
-  }
 }
 
-type Props = RouteComponentProps<{orgId: string; appSlug?: string}, {}>;
+type Props = RouteComponentProps<{appSlug?: string}, {}> & {
+  organization: Organization;
+};
 
 type State = AsyncView['state'] & {
   app: SentryApp | null;
   tokens: InternalAppApiToken[];
 };
 
-export default class SentryApplicationDetails extends AsyncView<Props, State> {
-  form = new SentryAppFormModel();
+class SentryApplicationDetails extends AsyncView<Props, State> {
+  form = new SentryAppFormModel({mapFormErrors});
 
   getDefaultState(): State {
     return {
@@ -181,15 +185,16 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
 
   handleSubmitSuccess = (data: SentryApp) => {
     const {app} = this.state;
-    const {orgId} = this.props.params;
-    const baseUrl = `/settings/${orgId}/developer-settings/`;
-    const url = app ? baseUrl : `${baseUrl}${data.slug}/`;
+    const {organization} = this.props;
+    const type = this.isInternal ? 'internal' : 'public';
+    const baseUrl = `/settings/${organization.slug}/developer-settings/`;
+    const url = app ? `${baseUrl}?type=${type}` : `${baseUrl}${data.slug}/`;
     if (app) {
       addSuccessMessage(t('%s successfully saved.', data.name));
     } else {
       addSuccessMessage(t('%s successfully created.', data.name));
     }
-    browserHistory.push(url);
+    browserHistory.push(normalizeUrl(url));
   };
 
   handleSubmitError = err => {
@@ -267,7 +272,7 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
                 'You do not have access to view these credentials because the permissions for this integration exceed those of your role.'
               )}
             >
-              <TextCopyInput>
+              <TextCopyInput aria-label={t('Token value')}>
                 {getDynamicText({value: token.token, fixed: 'xxxxxx'})}
               </TextCopyInput>
             </Tooltip>
@@ -283,10 +288,9 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
           </CreatedDate>
           <Button
             onClick={this.onRemoveToken.bind(this, token)}
-            size="small"
+            size="sm"
             icon={<IconDelete />}
             data-test-id="token-delete"
-            type="button"
           >
             {t('Revoke')}
           </Button>
@@ -377,7 +381,6 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
   };
 
   renderBody() {
-    const {orgId} = this.props.params;
     const {app} = this.state;
     const scopes = (app && [...app.scopes]) || [];
     const events = (app && this.normalize(app.events)) || [];
@@ -402,7 +405,7 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
           apiEndpoint={endpoint}
           allowUndo
           initialData={{
-            organization: orgId,
+            organization: this.props.organization.slug,
             isAlertable: false,
             isInternal: this.isInternal,
             schema: {},
@@ -420,7 +423,7 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
               const webhookDisabled =
                 this.isInternal && !this.form.getValue('webhookUrl');
               return (
-                <React.Fragment>
+                <Fragment>
                   <JsonForm additionalFieldProps={{webhookDisabled}} forms={forms} />
                   {this.getAvatarChooser(true)}
                   {this.getAvatarChooser(false)}
@@ -430,7 +433,7 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
                     scopes={scopes}
                     events={events}
                   />
-                </React.Fragment>
+                </Fragment>
               );
             }}
           </Observer>
@@ -440,11 +443,10 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
               <PanelHeader hasButtons>
                 {t('Tokens')}
                 <Button
-                  size="xsmall"
+                  size="xs"
                   icon={<IconAdd size="xs" isCircled />}
                   onClick={evt => this.onAddToken(evt)}
                   data-test-id="token-add"
-                  type="button"
                 >
                   {t('New Token')}
                 </Button>
@@ -459,15 +461,15 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
               <PanelBody>
                 {app.status !== 'internal' && (
                   <FormField name="clientId" label="Client ID">
-                    {({value}) => (
-                      <TextCopyInput>
+                    {({value, id}) => (
+                      <TextCopyInput id={id}>
                         {getDynamicText({value, fixed: 'CI_CLIENT_ID'})}
                       </TextCopyInput>
                     )}
                   </FormField>
                 )}
                 <FormField name="clientSecret" label="Client Secret">
-                  {({value}) =>
+                  {({value, id}) =>
                     value ? (
                       <Tooltip
                         disabled={this.showAuthInfo}
@@ -477,7 +479,7 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
                           'You do not have access to view these credentials because the permissions for this integration exceed those of your role.'
                         )}
                       >
-                        <TextCopyInput>
+                        <TextCopyInput id={id}>
                           {getDynamicText({value, fixed: 'CI_CLIENT_SECRET'})}
                         </TextCopyInput>
                       </Tooltip>
@@ -495,8 +497,11 @@ export default class SentryApplicationDetails extends AsyncView<Props, State> {
   }
 }
 
+export default withOrganization(SentryApplicationDetails);
+
 const StyledPanelItem = styled(PanelItem)`
   display: flex;
+  align-items: center;
   justify-content: space-between;
 `;
 

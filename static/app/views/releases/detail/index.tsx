@@ -5,8 +5,9 @@ import {Location} from 'history';
 import isEqual from 'lodash/isEqual';
 import pick from 'lodash/pick';
 
-import Alert from 'sentry/components/alert';
+import {Alert} from 'sentry/components/alert';
 import AsyncComponent from 'sentry/components/asyncComponent';
+import * as Layout from 'sentry/components/layouts/thirds';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import NoProjectMessage from 'sentry/components/noProjectMessage';
 import PageFiltersContainer from 'sentry/components/organizations/pageFilters/container';
@@ -15,8 +16,7 @@ import PickProjectToContinue from 'sentry/components/pickProjectToContinue';
 import {PAGE_URL_PARAM, URL_PARAM} from 'sentry/constants/pageFilters';
 import {IconInfo} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {PageContent} from 'sentry/styles/organization';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {
   Deploy,
   Organization,
@@ -25,16 +25,19 @@ import {
   ReleaseProject,
   ReleaseWithHealth,
   SessionApiResponse,
-  SessionField,
+  SessionFieldWithOperation,
 } from 'sentry/types';
 import {formatVersion} from 'sentry/utils/formatters';
+import withRouteAnalytics, {
+  WithRouteAnalyticsProps,
+} from 'sentry/utils/routeAnalytics/withRouteAnalytics';
 import routeTitleGen from 'sentry/utils/routeTitle';
 import {getCount} from 'sentry/utils/sessions';
 import withOrganization from 'sentry/utils/withOrganization';
 import withPageFilters from 'sentry/utils/withPageFilters';
 import AsyncView from 'sentry/views/asyncView';
 
-import {getReleaseBounds, ReleaseBounds} from '../utils';
+import {getReleaseBounds, ReleaseBounds, searchReleaseVersion} from '../utils';
 
 import ReleaseHeader from './header/releaseHeader';
 
@@ -54,11 +57,12 @@ type RouteParams = {
   release: string;
 };
 
-type Props = RouteComponentProps<RouteParams, {}> & {
-  organization: Organization;
-  releaseMeta: ReleaseMeta;
-  selection: PageFilters;
-};
+type Props = RouteComponentProps<RouteParams, {}> &
+  WithRouteAnalyticsProps & {
+    organization: Organization;
+    releaseMeta: ReleaseMeta;
+    selection: PageFilters;
+  };
 
 type State = {
   deploys: Deploy[];
@@ -139,11 +143,14 @@ class ReleasesDetail extends AsyncView<Props, State> {
         query: {
           project: location.query.project,
           environment: location.query.environment ?? [],
-          query: `release:"${params.release}"`,
+          query: searchReleaseVersion(params.release),
           field: 'sum(session)',
           statsPeriod: '90d',
           interval: '1d',
         },
+      },
+      {
+        allowError: error => error.status === 400,
       },
     ]);
 
@@ -164,11 +171,11 @@ class ReleasesDetail extends AsyncView<Props, State> {
 
     if (possiblyWrongProject) {
       return (
-        <PageContent>
+        <Layout.Page>
           <Alert type="error" showIcon>
             {t('This release may not be in your selected project.')}
           </Alert>
-        </PageContent>
+        </Layout.Page>
       );
     }
 
@@ -177,9 +184,9 @@ class ReleasesDetail extends AsyncView<Props, State> {
 
   renderLoading() {
     return (
-      <PageContent>
+      <Layout.Page>
         <LoadingIndicator />
-      </PageContent>
+      </Layout.Page>
     );
   }
 
@@ -198,8 +205,8 @@ class ReleasesDetail extends AsyncView<Props, State> {
     }
 
     return (
-      <NoProjectMessage organization={organization}>
-        <StyledPageContent>
+      <Layout.Page>
+        <NoProjectMessage organization={organization}>
           <ReleaseHeader
             location={location}
             organization={organization}
@@ -215,14 +222,15 @@ class ReleasesDetail extends AsyncView<Props, State> {
               deploys,
               releaseMeta,
               refetchData: this.fetchData,
-              hasHealthData: getCount(sessions?.groups, SessionField.SESSIONS) > 0,
+              hasHealthData:
+                getCount(sessions?.groups, SessionFieldWithOperation.SESSIONS) > 0,
               releaseBounds,
             }}
           >
             {this.props.children}
           </ReleaseContext.Provider>
-        </StyledPageContent>
-      </NoProjectMessage>
+        </NoProjectMessage>
+      </Layout.Page>
     );
   }
 }
@@ -252,6 +260,7 @@ class ReleasesDetailContainer extends AsyncComponent<
 
   componentDidMount() {
     this.removeGlobalDateTimeFromUrl();
+    this.props.setRouteAnalyticsParams({release: this.props.params.release});
   }
 
   componentDidUpdate(
@@ -265,6 +274,7 @@ class ReleasesDetailContainer extends AsyncComponent<
       prevProps.params.release !== params.release ||
       prevProps.organization.slug !== organization.slug
     ) {
+      this.props.setRouteAnalyticsParams({release: this.props.params.release});
       super.componentDidUpdate(prevProps, prevState);
     }
   }
@@ -287,11 +297,11 @@ class ReleasesDetailContainer extends AsyncComponent<
     if (has404Errors) {
       // This catches a 404 coming from the release endpoint and displays a custom error message.
       return (
-        <PageContent>
+        <Layout.Page withPadding>
           <Alert type="error" showIcon>
             {t('This release could not be found.')}
           </Alert>
-        </PageContent>
+        </Layout.Page>
       );
     }
 
@@ -306,9 +316,9 @@ class ReleasesDetailContainer extends AsyncComponent<
 
   renderLoading() {
     return (
-      <PageContent>
+      <Layout.Page>
         <LoadingIndicator />
-      </PageContent>
+      </Layout.Page>
     );
   }
 
@@ -350,27 +360,17 @@ class ReleasesDetailContainer extends AsyncComponent<
 
     return (
       <PageFiltersContainer
-        lockedMessageSubject={t('release')}
         shouldForceProject={projects.length === 1}
         forceProject={
           projects.length === 1 ? {...projects[0], id: String(projects[0].id)} : undefined
         }
         specificProjectSlugs={projects.map(p => p.slug)}
-        disableMultipleProjectSelection
-        showProjectSettingsLink
-        projectsFooterMessage={this.renderProjectsFooterMessage()}
-        showDateSelector={false}
-        hideGlobalHeader
       >
         <ReleasesDetail {...this.props} releaseMeta={releaseMeta} />
       </PageFiltersContainer>
     );
   }
 }
-
-const StyledPageContent = styled(PageContent)`
-  padding: 0;
-`;
 
 const ProjectsFooterMessage = styled('div')`
   display: grid;
@@ -380,4 +380,6 @@ const ProjectsFooterMessage = styled('div')`
 `;
 
 export {ReleaseContext, ReleasesDetailContainer};
-export default withPageFilters(withOrganization(ReleasesDetailContainer));
+export default withRouteAnalytics(
+  withPageFilters(withOrganization(ReleasesDetailContainer))
+);

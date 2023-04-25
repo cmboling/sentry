@@ -8,8 +8,10 @@ from sentry.models import (
 )
 from sentry.testutils import APITestCase
 from sentry.testutils.helpers import with_feature
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test(stable=True)
 class OrganizationIntegrationDetailsTest(APITestCase):
     endpoint = "sentry-api-0-organization-integration-details"
 
@@ -38,12 +40,14 @@ class OrganizationIntegrationDetailsTest(APITestCase):
         )
 
 
+@region_silo_test
 class OrganizationIntegrationDetailsGetTest(OrganizationIntegrationDetailsTest):
     def test_simple(self):
         response = self.get_success_response(self.organization.slug, self.integration.id)
         assert response.data["id"] == str(self.integration.id)
 
 
+@region_silo_test
 class OrganizationIntegrationDetailsPostTest(OrganizationIntegrationDetailsTest):
     method = "post"
 
@@ -52,12 +56,13 @@ class OrganizationIntegrationDetailsPostTest(OrganizationIntegrationDetailsTest)
         self.get_success_response(self.organization.slug, self.integration.id, **config)
 
         org_integration = OrganizationIntegration.objects.get(
-            integration=self.integration, organization=self.organization
+            integration=self.integration, organization_id=self.organization.id
         )
 
         assert org_integration.config == config
 
 
+@region_silo_test
 class OrganizationIntegrationDetailsDeleteTest(OrganizationIntegrationDetailsTest):
     method = "delete"
 
@@ -66,13 +71,14 @@ class OrganizationIntegrationDetailsDeleteTest(OrganizationIntegrationDetailsTes
         assert Integration.objects.filter(id=self.integration.id).exists()
 
         org_integration = OrganizationIntegration.objects.get(
-            integration=self.integration, organization=self.organization
+            integration=self.integration, organization_id=self.organization.id
         )
         assert ScheduledDeletion.objects.filter(
             model_name="OrganizationIntegration", object_id=org_integration.id
         )
 
 
+@region_silo_test
 class OrganizationIntegrationDetailsPutTest(OrganizationIntegrationDetailsTest):
     method = "put"
 

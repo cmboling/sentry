@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import styled from '@emotion/styled';
 import classNames from 'classnames';
 
@@ -10,8 +10,7 @@ import {Hovercard} from 'sentry/components/hovercard';
 import Link from 'sentry/components/links/link';
 import TimeSince from 'sentry/components/timeSince';
 import {t} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Group} from 'sentry/types';
 import {getMessage} from 'sentry/utils/events';
 
@@ -23,7 +22,7 @@ type Props = {
   to: string;
 };
 
-const IssueLink = ({children, orgId, issue, to, card = true}: Props) => {
+function IssueLink({children, orgId, issue, to, card = true}: Props) {
   if (!card) {
     return <Link to={to}>{children}</Link>;
   }
@@ -42,7 +41,7 @@ const IssueLink = ({children, orgId, issue, to, card = true}: Props) => {
     <div className={className}>
       <Section>
         <Title>
-          <EventOrGroupTitle data={issue} />
+          <StyledEventOrGroupTitle data={issue} />
         </Title>
 
         <HovercardEventMessage
@@ -50,13 +49,13 @@ const IssueLink = ({children, orgId, issue, to, card = true}: Props) => {
           levelIndicatorSize="9px"
           message={message}
           annotations={
-            <React.Fragment>
+            <Fragment>
               {issue.logger && (
                 <EventAnnotation>
                   <Link
                     to={{
                       pathname: streamPath,
-                      query: {query: `logger:${issue.logger}`},
+                      query: {query: `logger:${issue.logger}`, referrer: 'issue-link'},
                     }}
                   >
                     {issue.logger}
@@ -66,7 +65,7 @@ const IssueLink = ({children, orgId, issue, to, card = true}: Props) => {
               {issue.annotations.map((annotation, i) => (
                 <EventAnnotation key={i} dangerouslySetInnerHTML={{__html: annotation}} />
               ))}
-            </React.Fragment>
+            </Fragment>
           }
         />
       </Section>
@@ -97,20 +96,23 @@ const IssueLink = ({children, orgId, issue, to, card = true}: Props) => {
       <Link to={to}>{children}</Link>
     </Hovercard>
   );
-};
+}
 
 export default IssueLink;
 
-const Title = styled('h3')`
-  font-size: ${p => p.theme.fontSizeMedium};
+const Title = styled('div')`
+  ${p => p.theme.overflowEllipsis};
   margin: 0 0 ${space(0.5)};
-  ${overflowEllipsis};
+`;
+
+const StyledEventOrGroupTitle = styled(EventOrGroupTitle)`
+  font-weight: 600;
+  font-size: ${p => p.theme.fontSizeMedium};
 
   em {
     font-style: normal;
     font-weight: 400;
-    color: ${p => p.theme.gray300};
-    font-size: 90%;
+    font-size: ${p => p.theme.fontSizeSmall};
   }
 `;
 

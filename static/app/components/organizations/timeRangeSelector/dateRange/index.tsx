@@ -1,38 +1,30 @@
-import * as React from 'react';
-import type {OnChangeProps, RangeWithKey} from 'react-date-range';
-import {withRouter, WithRouterProps} from 'react-router';
-import {withTheme} from '@emotion/react';
+import {Component} from 'react';
+import type {Range} from 'react-date-range';
+import {WithRouterProps} from 'react-router';
+import {Theme, withTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 import moment from 'moment';
 
+import {DateRangePicker} from 'sentry/components/calendar';
 import Checkbox from 'sentry/components/checkbox';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
 import TimePicker from 'sentry/components/organizations/timeRangeSelector/timePicker';
-import Placeholder from 'sentry/components/placeholder';
 import {MAX_PICKABLE_DAYS} from 'sentry/constants';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
-import {analytics} from 'sentry/utils/analytics';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import {
   getEndOfDay,
   getStartOfPeriodAgo,
   isValidTime,
   setDateToTime,
 } from 'sentry/utils/dates';
+import domId from 'sentry/utils/domId';
 import getRouteStringFromRoutes from 'sentry/utils/getRouteStringFromRoutes';
-import {Theme} from 'sentry/utils/theme';
-
-const DateRangePicker = React.lazy(() => import('./dateRangeWrapper'));
+// eslint-disable-next-line no-restricted-imports
+import withSentryRouter from 'sentry/utils/withSentryRouter';
 
 const getTimeStringFromDate = (date: Date) => moment(date).local().format('HH:mm');
-
-// react.date-range doesn't export this as a type.
-type RangeSelection = {selection: RangeWithKey};
-
-function isRangeSelection(maybe: OnChangeProps): maybe is RangeSelection {
-  return (maybe as RangeSelection).selection !== undefined;
-}
 
 type ChangeData = {end?: Date; hasDateRangeErrors?: boolean; start?: Date};
 
@@ -90,7 +82,7 @@ type State = {
   hasStartErrors: boolean;
 };
 
-class BaseDateRange extends React.Component<Props, State> {
+class BaseDateRange extends Component<Props, State> {
   static defaultProps = defaultProps;
 
   state: State = {
@@ -98,13 +90,11 @@ class BaseDateRange extends React.Component<Props, State> {
     hasEndErrors: false,
   };
 
-  handleSelectDateRange = (changeProps: OnChangeProps) => {
-    if (!isRangeSelection(changeProps)) {
-      return;
-    }
-    const {selection} = changeProps;
+  private readonly utcInputId = domId('utc-picker-');
+
+  handleSelectDateRange = (range: Range) => {
     const {onChange} = this.props;
-    const {startDate, endDate} = selection;
+    const {startDate, endDate} = range;
 
     const end = endDate ? getEndOfDay(endDate) : endDate;
 
@@ -131,11 +121,11 @@ class BaseDateRange extends React.Component<Props, State> {
     }
     const newTime = setDateToTime(start, startTime, {local: true});
 
-    analytics('dateselector.time_changed', {
+    trackAnalytics('dateselector.time_changed', {
+      organization,
       field_changed: 'start',
       time: startTime,
       path: getRouteStringFromRoutes(router.routes),
-      org_id: parseInt(organization.id, 10),
     });
 
     onChange({
@@ -160,12 +150,11 @@ class BaseDateRange extends React.Component<Props, State> {
     }
 
     const newTime = setDateToTime(end, endTime, {local: true});
-
-    analytics('dateselector.time_changed', {
+    trackAnalytics('dateselector.time_changed', {
+      organization,
       field_changed: 'end',
       time: endTime,
       path: getRouteStringFromRoutes(router.routes),
-      org_id: parseInt(organization.id, 10),
     });
 
     onChange({
@@ -178,8 +167,7 @@ class BaseDateRange extends React.Component<Props, State> {
   };
 
   render() {
-    const {className, maxPickableDays, utc, showTimePicker, onChangeUtc, theme} =
-      this.props;
+    const {className, maxPickableDays, utc, showTimePicker, onChangeUtc} = this.props;
     const start = this.props.start ?? '';
     const end = this.props.end ?? '';
 
@@ -201,44 +189,28 @@ class BaseDateRange extends React.Component<Props, State> {
 
     return (
       <div className={className} data-test-id="date-range">
-        <React.Suspense
-          fallback={
-            <Placeholder width="342px" height="254px">
-              <LoadingIndicator />
-            </Placeholder>
-          }
-        >
-          <DateRangePicker
-            rangeColors={[theme.purple300]}
-            ranges={[
-              {
-                startDate: moment(start).local().toDate(),
-                endDate: moment(end).local().toDate(),
-                key: 'selection',
-              },
-            ]}
-            minDate={minDate}
-            maxDate={maxDate}
-            onChange={this.handleSelectDateRange}
-          />
-        </React.Suspense>
+        <DateRangePicker
+          startDate={moment(start).local().toDate()}
+          endDate={moment(end).local().toDate()}
+          minDate={minDate}
+          maxDate={maxDate}
+          onChange={this.handleSelectDateRange}
+        />
         {showTimePicker && (
           <TimeAndUtcPicker>
-            <TimePicker
+            <StyledTimePicker
               start={startTime}
               end={endTime}
               onChangeStart={this.handleChangeStart}
               onChangeEnd={this.handleChangeEnd}
             />
             <UtcPicker>
-              {t('Use UTC')}
               <Checkbox
                 onChange={onChangeUtc}
                 checked={utc || false}
-                style={{
-                  margin: '0 0 0 0.5em',
-                }}
+                id={this.utcInputId}
               />
+              <UtcPickerLabel htmlFor={this.utcInputId}>{t('UTC')}</UtcPickerLabel>
             </UtcPicker>
           </TimeAndUtcPicker>
         )}
@@ -247,7 +219,7 @@ class BaseDateRange extends React.Component<Props, State> {
   }
 }
 
-const DateRange = styled(withTheme(withRouter(BaseDateRange)))`
+const DateRange = styled(withTheme(withSentryRouter(BaseDateRange)))`
   display: flex;
   flex-direction: column;
   border-left: 1px solid ${p => p.theme.border};
@@ -256,8 +228,15 @@ const DateRange = styled(withTheme(withRouter(BaseDateRange)))`
 const TimeAndUtcPicker = styled('div')`
   display: flex;
   align-items: center;
-  padding: ${space(0.25)} ${space(2)};
+  margin: 0 ${space(2)};
+  padding: ${space(0.5)} 0;
   border-top: 1px solid ${p => p.theme.innerBorder};
+`;
+
+const StyledTimePicker = styled(TimePicker)`
+  && {
+    margin-left: 0;
+  }
 `;
 
 const UtcPicker = styled('div')`
@@ -267,6 +246,13 @@ const UtcPicker = styled('div')`
   align-items: center;
   justify-content: flex-end;
   flex: 1;
+  gap: ${space(0.5)};
+`;
+
+const UtcPickerLabel = styled('label')`
+  margin: 0;
+  font-weight: normal;
+  color: inherit;
 `;
 
 export default DateRange;

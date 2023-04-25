@@ -1,8 +1,10 @@
 from django.utils import timezone
 
 from sentry.testutils import AcceptanceTestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class ProjectUserFeedbackTest(AcceptanceTestCase):
     def setUp(self):
         super().setUp()
@@ -13,7 +15,7 @@ class ProjectUserFeedbackTest(AcceptanceTestCase):
         )
         self.project = self.create_project(organization=self.org, teams=[self.team], name="Bengal")
         self.login_as(self.user)
-        self.path = f"/{self.org.slug}/{self.project.slug}/user-feedback/"
+        self.path = f"/organizations/{self.org.slug}/user-feedback/?project=${self.project.id}"
         self.project.update(first_event=timezone.now())
 
     def test(self):

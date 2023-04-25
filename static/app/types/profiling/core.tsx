@@ -8,6 +8,7 @@ export type Trace = {
   device_locale: string;
   device_manufacturer: string;
   device_model: string;
+  device_os_version: string;
   failed: boolean;
   id: string;
   project_id: string;
@@ -39,4 +40,31 @@ export type Span = {
     success: boolean;
   }>;
   queue_label?: string;
+};
+
+export type SuspectFunction = {
+  count: number;
+  examples: string[];
+  fingerprint: number;
+  name: string;
+  p75: number;
+  p95: number;
+  p99: number;
+  package: string;
+  sum: number;
+  worst: string;
+};
+
+export type ProfileTransaction = {
+  duration_ms: {
+    p50: number;
+    p75: number;
+    p90: number;
+    p95: number;
+    p99: number;
+  };
+  last_profile_at: string;
+  name: string;
+  profiles_count: number;
+  project_id: string;
 };

@@ -16,6 +16,7 @@ from sentry.models import (
 from sentry.models.grouphistory import GroupHistoryStatus, record_group_history
 from sentry.tasks.base import instrumented_task
 from sentry.tasks.integrations import kick_off_status_syncs
+from sentry.types.activity import ActivityType
 
 ONE_HOUR = 3600
 
@@ -71,13 +72,18 @@ def auto_resolve_project_issues(project_id, cutoff=None, chunk_size=1000, **kwar
 
     for group in queryset:
         happened = Group.objects.filter(id=group.id, status=GroupStatus.UNRESOLVED).update(
-            status=GroupStatus.RESOLVED, resolved_at=timezone.now()
+            status=GroupStatus.RESOLVED,
+            resolved_at=timezone.now(),
+            substatus=None,
         )
         remove_group_from_inbox(group, action=GroupInboxRemoveAction.RESOLVED)
 
         if happened:
             Activity.objects.create(
-                group=group, project=project, type=Activity.SET_RESOLVED_BY_AGE, data={"age": age}
+                group=group,
+                project=project,
+                type=ActivityType.SET_RESOLVED_BY_AGE.value,
+                data={"age": age},
             )
             record_group_history(group, GroupHistoryStatus.AUTO_RESOLVED)
 

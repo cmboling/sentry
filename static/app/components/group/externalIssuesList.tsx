@@ -1,4 +1,5 @@
-import styled from '@emotion/styled';
+import {Fragment} from 'react';
+import {WithRouterProps} from 'react-router';
 
 import AlertLink from 'sentry/components/alertLink';
 import AsyncComponent from 'sentry/components/asyncComponent';
@@ -8,12 +9,11 @@ import PluginActions from 'sentry/components/group/pluginActions';
 import SentryAppExternalIssueActions from 'sentry/components/group/sentryAppExternalIssueActions';
 import IssueSyncListElement from 'sentry/components/issueSyncListElement';
 import Placeholder from 'sentry/components/placeholder';
+import * as SidebarSection from 'sentry/components/sidebarSection';
 import {t} from 'sentry/locale';
 import ExternalIssueStore from 'sentry/stores/externalIssueStore';
-import SentryAppComponentsStore from 'sentry/stores/sentryAppComponentsStore';
 import SentryAppInstallationStore from 'sentry/stores/sentryAppInstallationsStore';
-import space from 'sentry/styles/space';
-import {
+import type {
   Group,
   GroupIntegration,
   Organization,
@@ -22,23 +22,39 @@ import {
   SentryAppComponent,
   SentryAppInstallation,
 } from 'sentry/types';
-import {Event} from 'sentry/types/event';
+import type {Event} from 'sentry/types/event';
+import localStorage from 'sentry/utils/localStorage';
 import withOrganization from 'sentry/utils/withOrganization';
+import withSentryAppComponents from 'sentry/utils/withSentryAppComponents';
+import withSentryRouter from 'sentry/utils/withSentryRouter';
 
-import SidebarSection from './sidebarSection';
-
-type Props = AsyncComponent['props'] & {
-  event: Event;
-  group: Group;
-  organization: Organization;
-  project: Project;
-};
+type Props = AsyncComponent['props'] &
+  WithRouterProps & {
+    components: SentryAppComponent[];
+    event: Event;
+    group: Group;
+    organization: Organization;
+    project: Project;
+  };
 
 type State = AsyncComponent['state'] & {
-  components: SentryAppComponent[];
   externalIssues: PlatformExternalIssue[];
   integrations: GroupIntegration[];
   sentryAppInstallations: SentryAppInstallation[];
+  /**
+   * Filter external issues by integration key
+   * Used for demos to limit the number of integrations shown
+   */
+  issueTrackingFilter?: string;
+};
+
+const issueTrackingFilterKey = 'issueTrackingFilter';
+
+type ExternalIssueComponent = {
+  component: React.ReactNode;
+  key: string;
+  disabled?: boolean;
+  hasLinkedIssue?: boolean;
 };
 
 class ExternalIssueList extends AsyncComponent<Props, State> {
@@ -51,10 +67,21 @@ class ExternalIssueList extends AsyncComponent<Props, State> {
 
   constructor(props: Props) {
     super(props, {});
+
+    // Check for issueTracking query parameter and save to localStorage
+    const issueTracking =
+      this.props.location.query.issueTracking ??
+      localStorage.getItem(issueTrackingFilterKey);
+    if (typeof issueTracking === 'string') {
+      localStorage.setItem(issueTrackingFilterKey, issueTracking.toLowerCase());
+    }
+
     this.state = Object.assign({}, this.state, {
-      components: SentryAppComponentsStore.getInitialState(),
       sentryAppInstallations: SentryAppInstallationStore.getInitialState(),
       externalIssues: ExternalIssueStore.getInitialState(),
+      issueTrackingFilter: ['', 'all'].includes(issueTracking)
+        ? undefined
+        : issueTracking,
     });
   }
 
@@ -64,7 +91,6 @@ class ExternalIssueList extends AsyncComponent<Props, State> {
     this.unsubscribables = [
       SentryAppInstallationStore.listen(this.onSentryAppInstallationChange, this),
       ExternalIssueStore.listen(this.onExternalIssueChange, this),
-      SentryAppComponentsStore.listen(this.onSentryAppComponentsChange, this),
     ];
 
     this.fetchSentryAppData();
@@ -81,11 +107,6 @@ class ExternalIssueList extends AsyncComponent<Props, State> {
 
   onExternalIssueChange = (externalIssues: PlatformExternalIssue[]) => {
     this.setState({externalIssues});
-  };
-
-  onSentryAppComponentsChange = (sentryAppComponents: SentryAppComponent[]) => {
-    const components = sentryAppComponents.filter(c => c.type === 'issue-link');
-    this.setState({components});
   };
 
   // We want to do this explicitly so that we can handle errors gracefully,
@@ -121,8 +142,9 @@ class ExternalIssueList extends AsyncComponent<Props, State> {
     }
   }
 
-  renderIntegrationIssues(integrations: GroupIntegration[] = []) {
+  renderIntegrationIssues(): ExternalIssueComponent[] {
     const {group} = this.props;
+    const integrations = this.state.integrations ?? [];
 
     const activeIntegrations = integrations.filter(
       integration => integration.status === 'active'
@@ -132,7 +154,7 @@ class ExternalIssueList extends AsyncComponent<Props, State> {
       activeIntegrations.reduce((acc, curr) => {
         const items = acc.get(curr.provider.key);
 
-        if (!!items) {
+        if (items) {
           acc.set(curr.provider.key, [...items, curr]);
         } else {
           acc.set(curr.provider.key, [curr]);
@@ -140,112 +162,144 @@ class ExternalIssueList extends AsyncComponent<Props, State> {
         return acc;
       }, new Map());
 
-    return activeIntegrations.length
-      ? [...activeIntegrationsByProvider.entries()].map(([provider, configurations]) => (
+    return [...activeIntegrationsByProvider.entries()].map(
+      ([provider, configurations]) => ({
+        key: provider,
+        disabled: false,
+        hasLinkedIssue: configurations.some(x => x.externalIssues.length > 0),
+        component: (
           <ExternalIssueActions
-            key={provider}
             configurations={configurations}
             group={group}
             onChange={this.updateIntegrations.bind(this)}
           />
-        ))
-      : null;
+        ),
+      })
+    );
   }
 
-  renderSentryAppIssues() {
-    const {externalIssues, sentryAppInstallations, components} = this.state;
-    const {group} = this.props;
-    if (components.length === 0) {
-      return null;
-    }
+  renderSentryAppIssues(): ExternalIssueComponent[] {
+    const {externalIssues, sentryAppInstallations} = this.state;
+    const {components, group, organization} = this.props;
 
-    return components.map(component => {
-      const {sentryApp} = component;
-      const installation = sentryAppInstallations.find(
-        i => i.app.uuid === sentryApp.uuid
-      );
-      // should always find a match but TS complains if we don't handle this case
-      if (!installation) {
-        return null;
-      }
+    return components
+      .map<ExternalIssueComponent | null>(component => {
+        const {sentryApp, error: disabled} = component;
+        const installation = sentryAppInstallations.find(
+          i => i.app.uuid === sentryApp.uuid
+        );
+        // should always find a match but TS complains if we don't handle this case
+        if (!installation) {
+          return null;
+        }
 
-      const issue = (externalIssues || []).find(i => i.serviceType === sentryApp.slug);
+        const issue = (externalIssues || []).find(i => i.serviceType === sentryApp.slug);
 
-      return (
-        <ErrorBoundary key={sentryApp.slug} mini>
-          <SentryAppExternalIssueActions
-            key={sentryApp.slug}
-            group={group}
-            event={this.props.event}
-            sentryAppComponent={component}
-            sentryAppInstallation={installation}
-            externalIssue={issue}
-          />
-        </ErrorBoundary>
-      );
-    });
+        return {
+          key: sentryApp.slug,
+          disabled,
+          hasLinkedIssue: !!issue,
+          component: (
+            <ErrorBoundary key={sentryApp.slug} mini>
+              <SentryAppExternalIssueActions
+                group={group}
+                organization={organization}
+                event={this.props.event}
+                sentryAppComponent={component}
+                sentryAppInstallation={installation}
+                externalIssue={issue}
+                disabled={disabled}
+              />
+            </ErrorBoundary>
+          ),
+        };
+      })
+      .filter((x): x is ExternalIssueComponent => x !== null);
   }
 
-  renderPluginIssues() {
+  renderPluginIssues(): ExternalIssueComponent[] {
     const {group, project} = this.props;
 
-    return group.pluginIssues && group.pluginIssues.length
-      ? group.pluginIssues.map((plugin, i) => (
-          <PluginActions group={group} project={project} plugin={plugin} key={i} />
-        ))
-      : null;
+    return group.pluginIssues?.map((plugin, i) => ({
+      key: `plugin-issue-${i}`,
+      disabled: false,
+      hasLinkedIssue: true,
+      component: <PluginActions group={group} project={project} plugin={plugin} />,
+    }));
   }
 
-  renderPluginActions() {
+  renderPluginActions(): ExternalIssueComponent[] {
     const {group} = this.props;
 
-    return group.pluginActions && group.pluginActions.length
-      ? group.pluginActions.map((plugin, i) => (
-          <IssueSyncListElement externalIssueLink={plugin[1]} key={i}>
+    return (
+      group.pluginActions?.map((plugin, i) => ({
+        key: `plugin-action-${i}`,
+        disabled: false,
+        hasLinkedIssue: false,
+        component: (
+          <IssueSyncListElement externalIssueLink={plugin[1]}>
             {plugin[0]}
           </IssueSyncListElement>
-        ))
-      : null;
+        ),
+      })) ?? []
+    );
   }
 
   renderLoading() {
     return (
-      <SidebarSection data-test-id="linked-issues" title={t('Linked Issues')}>
-        <Placeholder height="120px" />
-      </SidebarSection>
+      <SidebarSection.Wrap data-test-id="linked-issues">
+        <SidebarSection.Title>{t('Linked Issues')}</SidebarSection.Title>
+        <SidebarSection.Content>
+          <Placeholder height="120px" />
+        </SidebarSection.Content>
+      </SidebarSection.Wrap>
     );
   }
 
   renderBody() {
+    const {issueTrackingFilter} = this.state;
     const sentryAppIssues = this.renderSentryAppIssues();
-    const integrationIssues = this.renderIntegrationIssues(this.state.integrations);
+    const integrationIssues = this.renderIntegrationIssues();
     const pluginIssues = this.renderPluginIssues();
     const pluginActions = this.renderPluginActions();
-    const showSetup =
-      !sentryAppIssues && !integrationIssues && !pluginIssues && !pluginActions;
+    const actions = [
+      ...sentryAppIssues,
+      ...integrationIssues,
+      ...pluginIssues,
+      ...pluginActions,
+    ].filter(action => !issueTrackingFilter || action.key === issueTrackingFilter);
+    const showSetup = actions.length === 0;
 
     return (
-      <SidebarSection secondary data-test-id="linked-issues" title={t('Issue Tracking')}>
-        {showSetup && (
-          <AlertLink
-            priority="muted"
-            size="small"
-            to={`/settings/${this.props.organization.slug}/integrations/?category=issue%20tracking`}
-          >
-            {t('Track this issue in Jira, GitHub, etc.')}
-          </AlertLink>
-        )}
-        {sentryAppIssues && <Wrapper>{sentryAppIssues}</Wrapper>}
-        {integrationIssues && <Wrapper>{integrationIssues}</Wrapper>}
-        {pluginIssues && <Wrapper>{pluginIssues}</Wrapper>}
-        {pluginActions && <Wrapper>{pluginActions}</Wrapper>}
-      </SidebarSection>
+      <SidebarSection.Wrap data-test-id="linked-issues">
+        <SidebarSection.Title>{t('Issue Tracking')}</SidebarSection.Title>
+        <SidebarSection.Content>
+          {showSetup && (
+            <AlertLink
+              priority="muted"
+              size="small"
+              to={`/settings/${this.props.organization.slug}/integrations/?category=issue%20tracking`}
+            >
+              {t('Track this issue in Jira, GitHub, etc.')}
+            </AlertLink>
+          )}
+          {actions
+            // Put disabled actions last
+            .sort((a, b) => Number(a.disabled) - Number(b.disabled))
+            // Put actions with linked issues first
+            .sort((a, b) => Number(b.hasLinkedIssue) - Number(a.hasLinkedIssue))
+            .map(({component, key}) => (
+              <Fragment key={key}>{component}</Fragment>
+            ))}
+        </SidebarSection.Content>
+      </SidebarSection.Wrap>
     );
   }
 }
 
-const Wrapper = styled('div')`
-  margin-bottom: ${space(2)};
-`;
-
-export default withOrganization(ExternalIssueList);
+export default withSentryAppComponents(
+  withOrganization(withSentryRouter(ExternalIssueList)),
+  {
+    componentType: 'issue-link',
+  }
+);

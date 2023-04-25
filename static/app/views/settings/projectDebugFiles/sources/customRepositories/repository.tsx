@@ -1,12 +1,12 @@
 import {useState} from 'react';
 import styled from '@emotion/styled';
 
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import {PanelItem} from 'sentry/components/panels';
 import {IconChevron} from 'sentry/icons/iconChevron';
 import {IconRefresh} from 'sentry/icons/iconRefresh';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {CustomRepo, CustomRepoType} from 'sentry/types/debugFiles';
 
 import CustomRepositoryActions from './actions';
@@ -63,7 +63,7 @@ function Repository({
           disabled={repository.details === undefined}
           syncNowButton={
             <Button
-              size="small"
+              size="sm"
               onClick={() => onSyncNow(id)}
               icon={<IconRefresh />}
               disabled={!detailsAvailable || !authenticated || !hasFeature || !hasAccess}
@@ -115,7 +115,7 @@ const StyledPanelItem = styled(PanelItem)`
 
   grid-template-columns: max-content 1fr;
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     grid-template-columns: max-content 1fr max-content;
   }
 `;
@@ -123,7 +123,7 @@ const StyledPanelItem = styled(PanelItem)`
 const Name = styled('div')`
   grid-column: 2/2;
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     grid-column: 2/3;
     grid-row: 1/2;
   }
@@ -139,7 +139,7 @@ const TypeAndStatus = styled('div')`
   grid-column: 2/2;
   gap: ${space(1.5)};
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     grid-column: 2/3;
     grid-row: 2/2;
     gap: ${space(1)};

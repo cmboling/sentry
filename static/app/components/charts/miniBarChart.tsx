@@ -1,23 +1,14 @@
 // Import to ensure echarts components are loaded.
 import './components/markPoint';
 
-import * as React from 'react';
 import {useTheme} from '@emotion/react';
+import type {GridComponentOption} from 'echarts';
 import set from 'lodash/set';
 
-import {getFormattedDate} from 'sentry/utils/dates';
 import {formatAbbreviatedNumber} from 'sentry/utils/formatters';
 
 import {BarChart, BarChartProps, BarChartSeries} from './barChart';
 import type BaseChart from './baseChart';
-import {truncationFormatter} from './utils';
-
-type Marker = {
-  color: string;
-  name: string;
-  value: string | number | Date;
-  symbolSize?: number;
-};
 
 type ChartProps = React.ComponentProps<typeof BaseChart>;
 
@@ -39,6 +30,11 @@ interface Props extends Omit<ChartProps, 'css' | 'colors' | 'series' | 'height'>
   emphasisColors?: string[];
 
   /**
+   * Override the default grid padding
+   */
+  grid?: GridComponentOption;
+
+  /**
    * Delay time for hiding tooltip, in ms.
    */
   hideDelay?: number;
@@ -47,12 +43,6 @@ interface Props extends Omit<ChartProps, 'css' | 'colors' | 'series' | 'height'>
    * Show max/min values on yAxis
    */
   labelYAxisExtents?: boolean;
-
-  /**
-   * A list of series to be rendered as markLine components on the chart
-   * This is often used to indicate start/end markers on the xAxis
-   */
-  markers?: Marker[];
 
   series?: BarChartProps['series'];
 
@@ -81,8 +71,20 @@ interface Props extends Omit<ChartProps, 'css' | 'colors' | 'series' | 'height'>
   utc?: boolean;
 }
 
+export function getYAxisMaxFn(height: number) {
+  return (value: {max: number; min: number}) => {
+    // This keeps small datasets from looking 'scary'
+    // by having full bars for < 10 values.
+    if (value.max < 10) {
+      return 10;
+    }
+    // Adds extra spacing at the top of the chart canvas, ensuring the series doesn't hit the ceiling, leaving more empty space.
+    // When the user hovers over an empty space, a tooltip with all series information is displayed.
+    return (value.max * (height + 10)) / height;
+  };
+}
+
 function MiniBarChart({
-  markers,
   emphasisColors,
   series,
   hideDelay,
@@ -92,6 +94,7 @@ function MiniBarChart({
   labelYAxisExtents = false,
   showMarkLineLabel = false,
   height,
+  grid,
   ...props
 }: Props) {
   const {ref: _ref, ...barChartProps} = props;
@@ -103,7 +106,7 @@ function MiniBarChart({
   let chartSeries: BarChartSeries[] = [];
 
   // Ensure bars overlap and that empty values display as we're disabling the axis lines.
-  if (!!series?.length) {
+  if (series?.length) {
     chartSeries = series.map((original, i: number) => {
       const updated: BarChartSeries = {
         ...original,
@@ -122,49 +125,11 @@ function MiniBarChart({
       }
       set(updated, 'itemStyle.color', colorList[i]);
       set(updated, 'itemStyle.opacity', 0.6);
-      set(updated, 'itemStyle.emphasis.opacity', 1.0);
-      set(updated, 'itemStyle.emphasis.color', emphasisColors?.[i] ?? colorList[i]);
+      set(updated, 'emphasis.itemStyle.opacity', 1.0);
+      set(updated, 'emphasis.itemStyle.color', emphasisColors?.[i] ?? colorList[i]);
 
       return updated;
     });
-  }
-
-  if (markers) {
-    const markerTooltip = {
-      show: true,
-      trigger: 'item',
-      formatter: ({data}) => {
-        const time = getFormattedDate(data.coord[0], 'MMM D, YYYY LT', {
-          local: !props.utc,
-        });
-        const name = truncationFormatter(data.name, props?.xAxis?.truncate);
-        return [
-          '<div class="tooltip-series">',
-          `<div><span class="tooltip-label"><strong>${name}</strong></span></div>`,
-          '</div>',
-          '<div class="tooltip-date">',
-          time,
-          '</div>',
-          '</div>',
-          '<div class="tooltip-arrow"></div>',
-        ].join('');
-      },
-    };
-
-    const markPoint = {
-      data: markers.map((marker: Marker) => ({
-        name: marker.name,
-        coord: [marker.value, 0],
-        tooltip: markerTooltip,
-        symbol: 'circle',
-        symbolSize: marker.symbolSize ?? 8,
-        itemStyle: {
-          color: marker.color,
-          borderColor: theme.background,
-        },
-      })),
-    };
-    chartSeries[0].markPoint = markPoint;
   }
 
   const yAxisOptions = labelYAxisExtents
@@ -196,28 +161,19 @@ function MiniBarChart({
         : undefined,
     },
     yAxis: {
-      max(value: {max: number; min: number}) {
-        // This keeps small datasets from looking 'scary'
-        // by having full bars for < 10 values.
-        if (value.max < 10) {
-          return 10;
-        }
-        // Adds extra spacing at the top of the chart canvas, ensuring the series doesn't hit the ceiling, leaving more empty space.
-        // When the user hovers over an empty space, a tooltip with all series information is displayed.
-        return (value.max * (height + 10)) / height;
-      },
+      max: getYAxisMaxFn(height),
       splitLine: {
         show: false,
       },
       ...yAxisOptions,
     },
-    grid: {
+    grid: grid ?? {
       // Offset to ensure there is room for the marker symbols at the
       // default size.
       top: labelYAxisExtents || showMarkLineLabel ? 6 : 0,
-      bottom: markers || labelYAxisExtents || showMarkLineLabel ? 4 : 0,
-      left: markers ? 8 : showMarkLineLabel ? 35 : 4,
-      right: markers ? 4 : 0,
+      bottom: labelYAxisExtents || showMarkLineLabel ? 4 : 0,
+      left: showMarkLineLabel ? 35 : 4,
+      right: 0,
     },
     xAxis: {
       axisLine: {

@@ -1,10 +1,10 @@
-import * as React from 'react';
+import {useState} from 'react';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 
 import {IconChevron, IconList} from 'sentry/icons';
 import {tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 
 export const COLLAPSE_COUNT = 5;
 
@@ -35,7 +35,7 @@ function CollapsePanel({
   collapseCount = COLLAPSE_COUNT,
   disableBorder = true,
 }: Props) {
-  const [isExpanded, setIsExpanded] = React.useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   function expandResults() {
     setIsExpanded(true);
   }

@@ -1,5 +1,3 @@
-import * as React from 'react';
-
 import ContextBlock from 'sentry/components/events/contexts/contextBlock';
 import {Event} from 'sentry/types/event';
 
@@ -19,6 +17,6 @@ function getKnownData(data: Props['data']) {
     }));
 }
 
-const DefaultContextType = ({data}: Props) => <ContextBlock data={getKnownData(data)} />;
-
-export default DefaultContextType;
+export function DefaultContext({data}: Props) {
+  return <ContextBlock data={getKnownData(data)} />;
+}

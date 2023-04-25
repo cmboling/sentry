@@ -1,13 +1,14 @@
-from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.paginator import DateTimePaginator
 from sentry.api.serializers import serialize
 from sentry.models import EventUser
 
 
+@region_silo_endpoint
 class ProjectUsersEndpoint(ProjectEndpoint):
     def get(self, request: Request, project) -> Response:
         """
@@ -29,27 +30,12 @@ class ProjectUsersEndpoint(ProjectEndpoint):
         if request.GET.get("query"):
             try:
                 field, identifier = request.GET["query"].strip().split(":", 1)
-            except ValueError:
-                return Response([])
-            # username and ip can return multiple eventuser objects
-            if field in ("ip", "username"):
                 queryset = queryset.filter(
                     project_id=project.id,
                     **{EventUser.attr_from_keyword(field): identifier},
                 )
-            else:
-                try:
-                    queryset = [
-                        queryset.get(
-                            project_id=project.id,
-                            **{EventUser.attr_from_keyword(field): identifier},
-                        )
-                    ]
-                except EventUser.DoesNotExist:
-                    return Response(status=status.HTTP_404_NOT_FOUND)
-                except KeyError:
-                    return Response([])
-                return Response(serialize(queryset, request.user))
+            except (ValueError, KeyError):
+                return Response([])
 
         return self.paginate(
             request=request,

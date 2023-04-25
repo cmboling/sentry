@@ -1,4 +1,5 @@
-import * as React from 'react';
+import {useEffect, useRef} from 'react';
+import {useReducedMotion} from 'framer-motion';
 
 interface AutoplayVideoProps extends React.VideoHTMLAttributes<HTMLVideoElement> {
   'aria-label': string;
@@ -13,9 +14,11 @@ interface AutoplayVideoProps extends React.VideoHTMLAttributes<HTMLVideoElement>
  * See https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video
  */
 function AutoplayVideo(props: AutoplayVideoProps) {
-  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  React.useEffect(() => {
+  const prefersReducedMotion = useReducedMotion();
+
+  useEffect(() => {
     if (videoRef.current) {
       // Set muted as more browsers allow autoplay with muted video.
       // We can't use the muted prop because of a react bug.
@@ -23,12 +26,14 @@ function AutoplayVideo(props: AutoplayVideoProps) {
       // So we need to set the muted property then trigger play.
       videoRef.current.muted = true;
 
-      // non-chromium Edge and jsdom don't return a promise.
-      videoRef.current.play()?.catch(() => {
-        // Do nothing. Interrupting this playback is fine.
-      });
+      if (!prefersReducedMotion) {
+        // non-chromium Edge and jsdom don't return a promise.
+        videoRef.current.play()?.catch(() => {
+          // Do nothing. Interrupting this playback is fine.
+        });
+      }
     }
-  }, []);
+  }, [prefersReducedMotion]);
 
   return <video ref={videoRef} playsInline disablePictureInPicture loop {...props} />;
 }

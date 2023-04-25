@@ -2,11 +2,14 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import eventstore
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import OrganizationEventsEndpointBase
 from sentry.api.serializers import serialize
+from sentry.api.serializers.models.event import SqlFormatEventSerializer
 from sentry.models.project import Project, ProjectStatus
 
 
+@region_silo_endpoint
 class OrganizationEventDetailsEndpoint(OrganizationEventsEndpointBase):
     def get(self, request: Request, organization, project_slug, event_id) -> Response:
         """event_id is validated by a regex in the URL"""
@@ -33,7 +36,11 @@ class OrganizationEventDetailsEndpoint(OrganizationEventsEndpointBase):
         if event is None:
             return Response({"detail": "Event not found"}, status=404)
 
-        data = serialize(event)
+        # TODO: Remove `for_group` check once performance issues are moved to the issue platform
+        if hasattr(event, "for_group") and event.group:
+            event = event.for_group(event.group)
+
+        data = serialize(event, request.user, SqlFormatEventSerializer())
         data["projectSlug"] = project_slug
 
         return Response(data)

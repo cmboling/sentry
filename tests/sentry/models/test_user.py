@@ -1,7 +1,21 @@
-from sentry.models import Authenticator, OrganizationMember, OrganizationMemberTeam, User, UserEmail
+import pytest
+from django.db import ProgrammingError, transaction
+
+from sentry.models import (
+    Authenticator,
+    OrganizationMember,
+    OrganizationMemberTeam,
+    SavedSearch,
+    User,
+    UserEmail,
+)
+from sentry.tasks.deletion.hybrid_cloud import schedule_hybrid_cloud_foreign_key_jobs
 from sentry.testutils import TestCase
+from sentry.testutils.outbox import outbox_runner
+from sentry.testutils.silo import control_silo_test
 
 
+@control_silo_test
 class UserTest(TestCase):
     def test_get_orgs(self):
         user = self.create_user()
@@ -12,6 +26,31 @@ class UserTest(TestCase):
 
         organizations = user.get_orgs()
         assert {_.id for _ in organizations} == {org.id}
+
+    def test_cannot_delete_with_queryset(self):
+        user = self.create_user()
+        assert User.objects.count() == 1
+        with pytest.raises(ProgrammingError), transaction.atomic():
+            User.objects.filter(id=user.id).delete()
+        assert User.objects.count() == 1
+
+    def test_hybrid_cloud_deletion(self):
+        user = self.create_user()
+        user_id = user.id
+        self.create_saved_search(name="some-search", owner=user)
+
+        with outbox_runner():
+            user.delete()
+
+        assert not User.objects.filter(id=user_id).exists()
+
+        # cascade is asynchronous, ensure there is still related search,
+        assert SavedSearch.objects.filter(owner_id=user_id).exists()
+        with self.tasks():
+            schedule_hybrid_cloud_foreign_key_jobs()
+
+        # Ensure they are all now gone.
+        assert not SavedSearch.objects.filter(owner_id=user_id).exists()
 
     def test_get_projects(self):
         user = self.create_user()
@@ -24,7 +63,12 @@ class UserTest(TestCase):
         projects = user.get_projects()
         assert {_.id for _ in projects} == {project.id}
 
+    def test_get_full_name(self):
+        user = self.create_user(name="foo bar")
+        assert user.name == user.get_full_name() == "foo bar"
 
+
+@control_silo_test
 class UserDetailsTest(TestCase):
     def test_salutation(self):
         user = self.create_user(email="a@example.com", username="a@example.com")
@@ -37,6 +81,7 @@ class UserDetailsTest(TestCase):
         assert user.get_salutation_name() == "Hello"
 
 
+@control_silo_test
 class UserMergeToTest(TestCase):
     def test_simple(self):
         from_user = self.create_user("foo@example.com")

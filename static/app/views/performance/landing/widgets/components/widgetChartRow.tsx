@@ -4,7 +4,7 @@ import styled from '@emotion/styled';
 import {Location} from 'history';
 
 import {PerformanceLayoutBodyRow} from 'sentry/components/performance/layouts';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import EventView from 'sentry/utils/discover/eventView';
 import {usePerformanceDisplayType} from 'sentry/utils/performance/contexts/performanceDisplayContext';
 import {PROJECT_PERFORMANCE_TYPE} from 'sentry/views/performance/utils';
@@ -20,6 +20,7 @@ export type ChartRowProps = {
   chartHeight: number;
   eventView: EventView;
   location: Location;
+  withStaticFilters: boolean;
 };
 
 function getInitialChartSettings(
@@ -35,7 +36,7 @@ function getInitialChartSettings(
     );
 }
 
-const ChartRow = (props: ChartRowProps) => {
+function ChartRow(props: ChartRowProps) {
   const {chartCount, chartHeight, allowedCharts} = props;
   const theme = useTheme();
   const performanceType = usePerformanceDisplayType();
@@ -65,16 +66,20 @@ const ChartRow = (props: ChartRowProps) => {
       ))}
     </StyledRow>
   );
-};
+}
 
-export const TripleChartRow = (props: ChartRowProps) => <ChartRow {...props} />;
+export function TripleChartRow(props: ChartRowProps) {
+  return <ChartRow {...props} />;
+}
 
 TripleChartRow.defaultProps = {
   chartCount: 3,
   chartHeight: 100,
 };
 
-export const DoubleChartRow = (props: ChartRowProps) => <ChartRow {...props} />;
+export function DoubleChartRow(props: ChartRowProps) {
+  return <ChartRow {...props} />;
+}
 
 DoubleChartRow.defaultProps = {
   chartCount: 2,

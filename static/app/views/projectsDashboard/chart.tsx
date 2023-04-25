@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import {useTheme} from '@emotion/react';
 
 import BaseChart from 'sentry/components/charts/baseChart';
@@ -16,7 +16,7 @@ type Props = {
   transactionStats?: Project['transactionStats'];
 };
 
-const Chart = ({firstEvent, stats, transactionStats}: Props) => {
+function Chart({firstEvent, stats, transactionStats}: Props) {
   const series: BaseChartProps['series'] = [];
   const hasTransactions = transactionStats !== undefined;
 
@@ -106,7 +106,6 @@ const Chart = ({firstEvent, stats, transactionStats}: Props) => {
     },
     xAxes: Array.from(new Array(series.length)).map((_i, index) => ({
       gridIndex: index,
-      boundaryGap: true,
       axisLine: {
         show: false,
       },
@@ -142,7 +141,7 @@ const Chart = ({firstEvent, stats, transactionStats}: Props) => {
         fontFamily: theme.text.family,
         inside: true,
         lineHeight: 12,
-        formatter: (value: number) => axisLabelFormatter(value, 'count()', true),
+        formatter: (value: number) => axisLabelFormatter(value, 'number', true),
         textBorderColor: theme.backgroundSecondary,
         textBorderWidth: 1,
       },
@@ -161,11 +160,11 @@ const Chart = ({firstEvent, stats, transactionStats}: Props) => {
   };
 
   return (
-    <React.Fragment>
+    <Fragment>
       <BaseChart {...chartOptions} />
       {!firstEvent && <NoEvents seriesCount={series.length} />}
-    </React.Fragment>
+    </Fragment>
   );
-};
+}
 
 export default Chart;

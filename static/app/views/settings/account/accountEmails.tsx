@@ -1,13 +1,13 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
 import {addErrorMessage} from 'sentry/actionCreators/indicator';
 import {RequestOptions} from 'sentry/api';
 import AlertLink from 'sentry/components/alertLink';
 import AsyncComponent from 'sentry/components/asyncComponent';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
-import Form from 'sentry/components/forms/form';
+import Form, {FormProps} from 'sentry/components/forms/form';
 import JsonForm from 'sentry/components/forms/jsonForm';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
@@ -15,7 +15,7 @@ import Tag from 'sentry/components/tag';
 import accountEmailsFields from 'sentry/data/forms/accountEmails';
 import {IconDelete, IconStack} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {UserEmail} from 'sentry/types';
 import AsyncView from 'sentry/views/asyncView';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
@@ -37,7 +37,7 @@ class AccountEmails extends AsyncView<Props, State> {
     return [];
   }
 
-  handleSubmitSuccess: Form['props']['onSubmitSuccess'] = (_change, model, id) => {
+  handleSubmitSuccess: FormProps['onSubmitSuccess'] = (_change, model, id) => {
     if (id === undefined) {
       return;
     }
@@ -47,7 +47,7 @@ class AccountEmails extends AsyncView<Props, State> {
 
   renderBody() {
     return (
-      <React.Fragment>
+      <Fragment>
         <SettingsPageHeader title={t('Email Addresses')} />
         <EmailAddresses />
         <Form
@@ -63,7 +63,7 @@ class AccountEmails extends AsyncView<Props, State> {
         <AlertLink to="/settings/account/notifications" icon={<IconStack />}>
           {t('Want to change how many emails you get? Use the notifications panel.')}
         </AlertLink>
-      </React.Fragment>
+      </Fragment>
     );
   }
 }
@@ -158,7 +158,7 @@ type EmailRowProps = {
   onSetPrimary?: (email: string, e: React.MouseEvent) => void;
 };
 
-const EmailRow = ({
+function EmailRow({
   email,
   onRemove,
   onVerify,
@@ -166,37 +166,39 @@ const EmailRow = ({
   isVerified,
   isPrimary,
   hideRemove,
-}: EmailRowProps) => (
-  <EmailItem>
-    <EmailTags>
-      {email}
-      {!isVerified && <Tag type="warning">{t('Unverified')}</Tag>}
-      {isPrimary && <Tag type="success">{t('Primary')}</Tag>}
-    </EmailTags>
-    <ButtonBar gap={1}>
-      {!isPrimary && isVerified && (
-        <Button size="small" onClick={e => onSetPrimary?.(email, e)}>
-          {t('Set as primary')}
-        </Button>
-      )}
-      {!isVerified && (
-        <Button size="small" onClick={e => onVerify(email, e)}>
-          {t('Resend verification')}
-        </Button>
-      )}
-      {!hideRemove && !isPrimary && (
-        <Button
-          aria-label={t('Remove email')}
-          data-test-id="remove"
-          priority="danger"
-          size="small"
-          icon={<IconDelete />}
-          onClick={e => onRemove(email, e)}
-        />
-      )}
-    </ButtonBar>
-  </EmailItem>
-);
+}: EmailRowProps) {
+  return (
+    <EmailItem>
+      <EmailTags>
+        {email}
+        {!isVerified && <Tag type="warning">{t('Unverified')}</Tag>}
+        {isPrimary && <Tag type="success">{t('Primary')}</Tag>}
+      </EmailTags>
+      <ButtonBar gap={1}>
+        {!isPrimary && isVerified && (
+          <Button size="sm" onClick={e => onSetPrimary?.(email, e)}>
+            {t('Set as primary')}
+          </Button>
+        )}
+        {!isVerified && (
+          <Button size="sm" onClick={e => onVerify(email, e)}>
+            {t('Resend verification')}
+          </Button>
+        )}
+        {!hideRemove && !isPrimary && (
+          <Button
+            aria-label={t('Remove email')}
+            data-test-id="remove"
+            priority="danger"
+            size="sm"
+            icon={<IconDelete />}
+            onClick={e => onRemove(email, e)}
+          />
+        )}
+      </ButtonBar>
+    </EmailItem>
+  );
+}
 
 const EmailTags = styled('div')`
   display: grid;

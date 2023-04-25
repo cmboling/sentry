@@ -2,13 +2,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import tsdb
-from sentry.api.base import EnvironmentMixin, StatsMixin
+from sentry.api.base import EnvironmentMixin, StatsMixin, region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.models import Environment, Project, Team
-from sentry.utils.compat import map
 
 
+@region_silo_endpoint
 class OrganizationStatsEndpoint(OrganizationEndpoint, EnvironmentMixin, StatsMixin):
     def get(self, request: Request, organization) -> Response:
         """
@@ -89,7 +89,10 @@ class OrganizationStatsEndpoint(OrganizationEndpoint, EnvironmentMixin, StatsMix
         if stat_model is None:
             raise ValueError(f"Invalid group: {group}, stat: {stat}")
         data = tsdb.get_range(
-            model=stat_model, keys=keys, **self._parse_args(request, **query_kwargs)
+            model=stat_model,
+            keys=keys,
+            **self._parse_args(request, **query_kwargs),
+            tenant_ids={"organization_id": organization.id},
         )
 
         if group == "organization":

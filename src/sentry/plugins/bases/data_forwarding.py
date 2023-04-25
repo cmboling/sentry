@@ -6,14 +6,11 @@ from sentry.api.serializers import serialize
 from sentry.eventstore.models import Event
 from sentry.plugins.base import Plugin
 from sentry.plugins.base.configuration import react_plugin_config
-from sentry.plugins.status import PluginStatus
 
 logger = logging.getLogger(__name__)
 
 
 class DataForwardingPlugin(Plugin):
-    status = PluginStatus.BETA
-
     def configure(self, project, request):
         return react_plugin_config(self, project, request)
 
@@ -21,7 +18,9 @@ class DataForwardingPlugin(Plugin):
         return True
 
     def get_rate_limit(self):
-        # number of requests, number of seconds (window)
+        """
+        Returns a tuple of (Number of Requests, Window in Seconds)
+        """
         return (50, 1)
 
     def forward_event(self, event: Event, payload: MutableMapping[str, Any]) -> bool:

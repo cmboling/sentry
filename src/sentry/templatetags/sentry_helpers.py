@@ -1,9 +1,10 @@
 import functools
 import os.path
+import random
 from collections import namedtuple
 from datetime import datetime, timedelta
 from random import randint
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from django import template
 from django.template.defaultfilters import stringfilter
@@ -11,7 +12,7 @@ from django.utils import timezone
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext as _
-from pkg_resources import parse_version as Version
+from packaging.version import parse as parse_version
 
 from sentry import options
 from sentry.api.serializers import serialize as serialize_func
@@ -100,6 +101,33 @@ def absolute_uri(parser, token):
 
 
 @register.simple_tag
+def org_url(organization, path, query=None, fragment=None) -> str:
+    """
+    Generate an absolute url for an organization
+    """
+    if not hasattr(organization, "absolute_url"):
+        raise RuntimeError("organization parameter is not an Organization instance")
+    return organization.absolute_url(path, query=query, fragment=fragment)
+
+
+@register.simple_tag
+def loading_message():
+    options = [
+        "Please wait while we load an obnoxious amount of JavaScript.",
+        "Escaping node_modules gravity well.",
+        "Parallelizing webpack builders.",
+        "Awaiting solution to the halting problem.",
+        "Collapsing wavefunctions.",
+    ]
+    return random.choice(options)
+
+
+@register.simple_tag
+def querystring(**kwargs):
+    return urlencode(kwargs, doseq=False)
+
+
+@register.simple_tag
 def system_origin():
     from sentry.utils.http import absolute_uri, origin_from_url
 
@@ -180,7 +208,7 @@ def get_sentry_version(context):
     current = sentry.VERSION
 
     latest = options.get("sentry:latest_version") or current
-    update_available = Version(latest) > Version(current)
+    update_available = parse_version(latest) > parse_version(current)
     build = sentry.__build__ or current
 
     context["sentry_version"] = SentryVersion(current, latest, update_available, build)

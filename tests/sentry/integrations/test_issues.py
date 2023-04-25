@@ -7,9 +7,12 @@ from sentry.models import (
     Integration,
     OrganizationIntegration,
 )
+from sentry.services.hybrid_cloud.integration import integration_service
 from sentry.testutils import TestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class IssueSyncIntegration(TestCase):
     def test_status_sync_inbound_resolve(self):
         group = self.group
@@ -55,6 +58,7 @@ class IssueSyncIntegration(TestCase):
     def test_status_sync_inbound_unresolve(self):
         group = self.group
         group.status = GroupStatus.RESOLVED
+        group.substatus = None
         group.save()
         assert group.status == GroupStatus.RESOLVED
 
@@ -96,13 +100,16 @@ class IssueSyncIntegration(TestCase):
             assert Group.objects.get(id=group.id).status == GroupStatus.UNRESOLVED
 
 
+@region_silo_test
 class IssueDefaultTest(TestCase):
     def setUp(self):
         self.group.status = GroupStatus.RESOLVED
+        self.group.substatus = None
         self.group.save()
 
-        integration = Integration.objects.create(provider="example", external_id="123456")
-        integration.add_organization(self.group.organization, self.user)
+        integration = self.create_integration(
+            organization=self.group.organization, provider="example", external_id="123456"
+        )
 
         self.external_issue = ExternalIssue.objects.create(
             organization_id=self.group.organization.id, integration_id=integration.id, key="APP-123"
@@ -116,7 +123,9 @@ class IssueDefaultTest(TestCase):
             relationship=GroupLink.Relationship.references,
         )
 
-        self.installation = integration.get_installation(self.group.organization.id)
+        self.installation = integration_service.get_installation(
+            integration=integration, organization_id=self.group.organization.id
+        )
 
     def test_get_repository_choices(self):
         default_repo, repo_choice = self.installation.get_repository_choices(self.group)
@@ -130,10 +139,10 @@ class IssueDefaultTest(TestCase):
         assert repo_choice == []
 
     def test_get_repository_choices_default_repo(self):
-        self.installation.org_integration.config = {
-            "project_issue_defaults": {str(self.group.project_id): {"repo": "user/repo2"}}
-        }
-        self.installation.org_integration.save()
+        self.installation.org_integration = integration_service.update_organization_integration(
+            org_integration_id=self.installation.org_integration.id,
+            config={"project_issue_defaults": {str(self.group.project_id): {"repo": "user/repo2"}}},
+        )
         self.installation.get_repositories = lambda: [
             {"name": "repo1", "identifier": "user/repo1"},
             {"name": "repo2", "identifier": "user/repo2"},

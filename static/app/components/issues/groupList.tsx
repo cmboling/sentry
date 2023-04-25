@@ -1,5 +1,5 @@
-import * as React from 'react';
-import {browserHistory, withRouter, WithRouterProps} from 'react-router';
+import {Component} from 'react';
+import {browserHistory, WithRouterProps} from 'react-router';
 import isEqual from 'lodash/isEqual';
 import omit from 'lodash/omit';
 import * as qs from 'query-string';
@@ -11,6 +11,7 @@ import LoadingError from 'sentry/components/loadingError';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import Pagination from 'sentry/components/pagination';
 import {Panel, PanelBody} from 'sentry/components/panels';
+import IssuesReplayCountProvider from 'sentry/components/replays/issuesReplayCountProvider';
 import {parseSearch, Token} from 'sentry/components/searchSyntax/parser';
 import {treeResultLocator} from 'sentry/components/searchSyntax/utils';
 import StreamGroup, {
@@ -19,11 +20,11 @@ import StreamGroup, {
 import {t} from 'sentry/locale';
 import GroupStore from 'sentry/stores/groupStore';
 import {Group} from 'sentry/types';
-import {callIfFunction} from 'sentry/utils/callIfFunction';
-import StreamManager from 'sentry/utils/streamManager';
 import withApi from 'sentry/utils/withApi';
-import {TimePeriodType} from 'sentry/views/alerts/rules/details/constants';
-import {RELATED_ISSUES_BOOLEAN_QUERY_ERROR} from 'sentry/views/alerts/rules/details/relatedIssuesNotAvailable';
+// eslint-disable-next-line no-restricted-imports
+import withSentryRouter from 'sentry/utils/withSentryRouter';
+import {TimePeriodType} from 'sentry/views/alerts/rules/metric/details/constants';
+import {RELATED_ISSUES_BOOLEAN_QUERY_ERROR} from 'sentry/views/alerts/rules/metric/details/relatedIssuesNotAvailable';
 
 import GroupListHeader from './groupListHeader';
 
@@ -54,7 +55,9 @@ type Props = WithRouterProps & {
   queryFilterDescription?: string;
   queryParams?: Record<string, number | string | string[] | undefined | null>;
   renderEmptyMessage?: () => React.ReactNode;
-  renderErrorMessage?: ({detail: string}, retry: () => void) => React.ReactNode;
+  renderErrorMessage?: (props: {detail: string}, retry: () => void) => React.ReactNode;
+  // where the group list is rendered
+  source?: string;
 } & Partial<typeof defaultProps>;
 
 type State = {
@@ -66,7 +69,7 @@ type State = {
   memberList?: ReturnType<typeof indexMembersByProject>;
 };
 
-class GroupList extends React.Component<Props, State> {
+class GroupList extends Component<Props, State> {
   static defaultProps = defaultProps;
 
   state: State = {
@@ -108,11 +111,10 @@ class GroupList extends React.Component<Props, State> {
 
   componentWillUnmount() {
     GroupStore.reset();
-    callIfFunction(this.listener);
+    this.listener?.();
   }
 
   listener = GroupStore.listen(() => this.onGroupChange(), undefined);
-  private _streamManager = new StreamManager(GroupStore);
 
   fetchData = async () => {
     GroupStore.loadInitialData([]);
@@ -154,7 +156,7 @@ class GroupList extends React.Component<Props, State> {
         includeAllArgs: true,
       });
 
-      this._streamManager.push(data);
+      GroupStore.add(data);
 
       this.setState(
         {
@@ -217,7 +219,7 @@ class GroupList extends React.Component<Props, State> {
   }
 
   onGroupChange() {
-    const groups = this._streamManager.getAllItems();
+    const groups = GroupStore.getAllItems() as Group[];
     if (!isEqual(groups, this.state.groups)) {
       this.setState({groups});
     }
@@ -236,6 +238,7 @@ class GroupList extends React.Component<Props, State> {
       queryParams,
       queryFilterDescription,
       narrowGroups,
+      source,
     } = this.props;
     const {loading, error, errorData, groups, memberList, pageLinks} = this.state;
 
@@ -272,7 +275,7 @@ class GroupList extends React.Component<Props, State> {
         : DEFAULT_STREAM_GROUP_STATS_PERIOD;
 
     return (
-      <React.Fragment>
+      <IssuesReplayCountProvider groupIds={groups.map(({id}) => id)}>
         <Panel>
           <GroupListHeader withChart={!!withChart} narrowGroups={narrowGroups} />
           <PanelBody>
@@ -294,6 +297,7 @@ class GroupList extends React.Component<Props, State> {
                   statsPeriod={statsPeriod}
                   queryFilterDescription={queryFilterDescription}
                   narrowGroups={narrowGroups}
+                  source={source}
                 />
               );
             })}
@@ -302,11 +306,11 @@ class GroupList extends React.Component<Props, State> {
         {withPagination && (
           <Pagination pageLinks={pageLinks} onCursor={this.handleCursorChange} />
         )}
-      </React.Fragment>
+      </IssuesReplayCountProvider>
     );
   }
 }
 
 export {GroupList};
 
-export default withApi(withRouter(GroupList));
+export default withApi(withSentryRouter(GroupList));

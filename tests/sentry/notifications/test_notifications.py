@@ -1,6 +1,7 @@
 import logging
 import uuid
 from time import time
+from unittest.mock import patch
 from urllib.parse import parse_qs
 
 import responses
@@ -20,6 +21,7 @@ from sentry.models import (
     Rule,
     UserOption,
 )
+from sentry.models.actor import Actor
 from sentry.tasks.post_process import post_process_group
 from sentry.testutils import APITestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
@@ -47,6 +49,16 @@ def get_attachment():
 
     assert len(attachments) == 1
     return attachments[0], data["text"][0]
+
+
+# The analytics event `name` was called with `kwargs` being a subset of its properties
+def analytics_called_with_args(fn, name, **kwargs):
+    for call_args, call_kwargs in fn.call_args_list:
+        event_name = call_args[0]
+        if event_name == name:
+            assert all(call_kwargs.get(key, None) == val for key, val in kwargs.items())
+            return True
+    return False
 
 
 class ActivityNotificationTest(APITestCase):
@@ -119,39 +131,12 @@ class ActivityNotificationTest(APITestCase):
         assert attachment["title"] == f"{self.group.title}"
         assert (
             attachment["title_link"]
-            == f"http://testserver/organizations/{self.organization.slug}/issues/{self.group.id}/?referrer=note-activity-slack"
+            == f"http://testserver/organizations/{self.organization.slug}/issues/{self.group.id}/?referrer=note_activity-slack"
         )
         assert attachment["text"] == "blah blah"
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=note-activity-slack-user|Notification Settings>"
-        )
-
-    @responses.activate
-    def test_sends_assignment_notification(self):
-        """
-        Test that an email AND Slack notification are sent with
-        the expected values when an issue is assigned.
-        """
-
-        url = f"/api/0/issues/{self.group.id}/"
-        with self.tasks():
-            response = self.client.put(url, format="json", data={"assignedTo": self.user.username})
-        assert response.status_code == 200, response.content
-
-        msg = mail.outbox[0]
-        # check the txt version
-        assert f"assigned {self.short_id} to themselves" in msg.body
-        # check the html version
-        assert f"{self.short_id}</a> to themselves</p>" in msg.alternatives[0][0]
-
-        attachment, text = get_attachment()
-
-        assert text == f"Issue assigned to {self.name} by themselves"
-        assert attachment["title"] == self.group.title
-        assert (
-            attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=assigned-activity-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=note_activity-slack-user|Notification Settings>"
         )
 
     @responses.activate
@@ -162,7 +147,7 @@ class ActivityNotificationTest(APITestCase):
         """
         url = f"/api/0/issues/{self.group.id}/"
         GroupAssignee.objects.create(
-            group=self.group, project=self.project, user=self.user, date_added=timezone.now()
+            group=self.group, project=self.project, user_id=self.user.id, date_added=timezone.now()
         )
         with self.tasks():
             response = self.client.put(url, format="json", data={"assignedTo": ""})
@@ -180,11 +165,12 @@ class ActivityNotificationTest(APITestCase):
         assert attachment["title"] == self.group.title
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=unassigned-activity-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=unassigned_activity-slack-user|Notification Settings>"
         )
 
     @responses.activate
-    def test_sends_resolution_notification(self):
+    @patch("sentry.analytics.record")
+    def test_sends_resolution_notification(self, record_analytics):
         """
         Test that an email AND Slack notification are sent with
         the expected values when an issue is resolved.
@@ -209,11 +195,28 @@ class ActivityNotificationTest(APITestCase):
         assert attachment["title"] == self.group.title
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=resolved-activity-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=resolved_activity-slack-user|Notification Settings>"
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.email.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=self.group.id,
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.slack.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=self.group.id,
         )
 
     @responses.activate
-    def test_sends_deployment_notification(self):
+    @patch("sentry.analytics.record")
+    def test_sends_deployment_notification(self, record_analytics):
         """
         Test that an email AND Slack notification are sent with
         the expected values when a release is deployed.
@@ -245,15 +248,32 @@ class ActivityNotificationTest(APITestCase):
         )
         assert (
             attachment["actions"][0]["url"]
-            == f"http://testserver/organizations/{self.organization.slug}/releases/{release.version}/?project={self.project.id}&unselectedSeries=Healthy/"
+            == f"http://testserver/organizations/{self.organization.slug}/releases/{release.version}/?project={self.project.id}&unselectedSeries=Healthy"
         )
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/deploy/?referrer=release-activity-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/deploy/?referrer=release_activity-slack-user|Notification Settings>"
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.email.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=None,
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.slack.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=None,
         )
 
     @responses.activate
-    def test_sends_regression_notification(self):
+    @patch("sentry.analytics.record")
+    def test_sends_regression_notification(self, record_analytics):
         """
         Test that an email AND Slack notification are sent with
         the expected values when an issue regresses.
@@ -266,6 +286,7 @@ class ActivityNotificationTest(APITestCase):
 
         group = Group.objects.get(id=event.group_id)
         group.status = GroupStatus.RESOLVED
+        group.substatus = None
         group.save()
         assert group.is_resolved()
 
@@ -288,11 +309,28 @@ class ActivityNotificationTest(APITestCase):
         assert text == "Issue marked as regression"
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=regression-activity-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=regression_activity-slack-user|Notification Settings>"
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.email.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=group.id,
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.slack.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=group.id,
         )
 
     @responses.activate
-    def test_sends_resolved_in_release_notification(self):
+    @patch("sentry.analytics.record")
+    def test_sends_resolved_in_release_notification(self, record_analytics):
         """
         Test that an email AND Slack notification are sent with
         the expected values when an issue is resolved by a release.
@@ -323,7 +361,23 @@ class ActivityNotificationTest(APITestCase):
         assert attachment["title"] == self.group.title
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=resolved-in-release-activity-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=resolved_in_release_activity-slack-user|Notification Settings>"
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.email.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=self.group.id,
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.slack.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=self.group.id,
         )
 
     @responses.activate
@@ -335,7 +389,8 @@ class ActivityNotificationTest(APITestCase):
         pass
 
     @responses.activate
-    def test_sends_issue_notification(self):
+    @patch("sentry.analytics.record")
+    def test_sends_issue_notification(self, record_analytics):
         """
         Test that an email AND Slack notification are sent with
         the expected values when an issue comes in that triggers an alert rule.
@@ -383,5 +438,21 @@ class ActivityNotificationTest(APITestCase):
         assert attachment["title"] == "Hello world"
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/alerts/?referrer=alert-rule-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/alerts/?referrer=issue_alert-slack-user|Notification Settings>"
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.email.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=event.group_id,
+        )
+        assert analytics_called_with_args(
+            record_analytics,
+            "integrations.slack.notification_sent",
+            user_id=self.user.id,
+            actor_id=Actor.objects.get(user_id=self.user.id).id,
+            organization_id=self.organization.id,
+            group_id=event.group_id,
         )

@@ -17,6 +17,7 @@ from rest_framework.request import Request
 
 from sentry import options
 from sentry.constants import ObjectStatus
+from sentry.integrations.utils.cleanup import clear_tags_and_context
 from sentry.models import (
     Commit,
     CommitAuthor,
@@ -31,6 +32,7 @@ from sentry.shared_integrations.exceptions import ApiError
 from sentry.utils import json
 from sentry.utils.json import JSONData
 
+from ...services.hybrid_cloud.integration import RpcIntegration, integration_service
 from .repository import GitHubRepositoryProvider
 
 logger = logging.getLogger("sentry.webhooks")
@@ -50,13 +52,14 @@ class Webhook:
         raise NotImplementedError
 
     def __call__(self, event: Mapping[str, Any], host: str | None = None) -> None:
-        external_id = event["installation"]["id"]
+        external_id = event.get("installation", {}).get("id")
         if host:
-            external_id = "{}:{}".format(host, event["installation"]["id"])
+            external_id = f"{host}:{external_id}"
 
-        try:
-            integration = Integration.objects.get(external_id=external_id, provider=self.provider)
-        except Integration.DoesNotExist:
+        integration, installs = integration_service.get_organization_contexts(
+            external_id=external_id, provider=self.provider
+        )
+        if integration is None or not installs:
             # It seems possible for the GH or GHE app to be installed on their
             # end, but the integration to not exist. Possibly from deleting in
             # Sentry first or from a failed install flow (where the integration
@@ -69,11 +72,16 @@ class Webhook:
                     "external_id": str(external_id),
                 },
             )
+            logger.exception("Integration does not exist.")
             return
 
         if "repository" in event:
-
-            orgs = {org.id: org for org in integration.organizations.all()}
+            orgs = {
+                org.id: org
+                for org in Organization.objects.filter(
+                    id__in=[install.organization_id for install in installs]
+                )
+            }
 
             repos = Repository.objects.filter(
                 organization_id__in=orgs.keys(),
@@ -137,9 +145,15 @@ class InstallationEventWebhook(Webhook):
                         "external_id": str(external_id),
                     },
                 )
+                logger.exception("Installation is missing.")
 
     def _handle_delete(self, event: Mapping[str, Any], integration: Integration) -> None:
-        organizations = integration.organizations.all()
+        org_integrations = integration_service.get_organization_integrations(
+            integration_id=integration.id
+        )
+        organizations = Organization.objects.filter(
+            id__in=[oi.organization_id for oi in org_integrations]
+        )
 
         logger.info(
             "InstallationEventWebhook._handle_delete",
@@ -193,14 +207,16 @@ class PushEventWebhook(Webhook):
 
     def _handle(
         self,
-        integration: Integration,
+        integration: Integration | RpcIntegration,
         event: Mapping[str, Any],
         organization: Organization,
         repo: Repository,
         host: str | None = None,
     ) -> None:
         authors = {}
-        client = integration.get_installation(organization_id=organization.id).get_client()
+        client = integration_service.get_installation(
+            integration=integration, organization_id=organization.id
+        ).get_client()
         gh_username_cache: MutableMapping[str, str | None] = {}
 
         for commit in event["commits"]:
@@ -237,8 +253,8 @@ class PushEventWebhook(Webhook):
                         else:
                             try:
                                 gh_user = client.get_user(gh_username)
-                            except ApiError as exc:
-                                logger.exception(str(exc))
+                            except ApiError:
+                                logger.exception("Github user is missing.")
                             else:
                                 # even if we can't find a user, set to none so we
                                 # don't re-query
@@ -454,6 +470,7 @@ class GitHubWebhookBase(View):  # type: ignore
         raise NotImplementedError
 
     def handle(self, request: Request) -> HttpResponse:
+        clear_tags_and_context()
         secret = self.get_secret()
 
         if secret is None:
@@ -469,6 +486,7 @@ class GitHubWebhookBase(View):  # type: ignore
             handler = self.get_handler(request.META["HTTP_X_GITHUB_EVENT"])
         except KeyError:
             logger.error("github.webhook.missing-event", extra=self.get_logging_data())
+            logger.exception("Missing Github event in webhook.")
             return HttpResponse(status=400)
 
         if not handler:
@@ -478,6 +496,7 @@ class GitHubWebhookBase(View):  # type: ignore
             method, signature = request.META["HTTP_X_HUB_SIGNATURE"].split("=", 1)
         except (KeyError, IndexError):
             logger.error("github.webhook.missing-signature", extra=self.get_logging_data())
+            logger.exception("Missing webhook secret.")
             return HttpResponse(status=400)
 
         if not self.is_valid_signature(method, body, secret, signature):
@@ -490,6 +509,7 @@ class GitHubWebhookBase(View):  # type: ignore
             logger.error(
                 "github.webhook.invalid-json", extra=self.get_logging_data(), exc_info=True
             )
+            logger.exception("Invalid JSON.")
             return HttpResponse(status=400)
 
         handler()(event)

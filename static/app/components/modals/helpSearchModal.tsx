@@ -5,7 +5,7 @@ import {ModalRenderProps} from 'sentry/actionCreators/modal';
 import HelpSearch from 'sentry/components/helpSearch';
 import Hook from 'sentry/components/hook';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import withOrganization from 'sentry/utils/withOrganization';
 
@@ -30,7 +30,7 @@ function HelpSearchModal({
           <HelpSearch
             {...props}
             entryPoint="sidebar_help"
-            dropdownStyle={injectedCss`
+            dropdownClassName={injectedCss`
                 width: 100%;
                 border: transparent;
                 border-top-left-radius: 0;
@@ -41,10 +41,7 @@ function HelpSearchModal({
               `}
             renderInput={({getInputProps}) => (
               <InputWrapper>
-                <Input
-                  autoFocus
-                  {...getInputProps({type: 'text', label: placeholder, placeholder})}
-                />
+                <Input autoFocus {...getInputProps({type: 'text', placeholder})} />
               </InputWrapper>
             )}
             resultFooter={

@@ -1,11 +1,10 @@
 import responses
 from requests.exceptions import ReadTimeout
 
+from fixtures.bitbucket_server import EXAMPLE_PRIVATE_KEY
 from sentry.integrations.bitbucket_server import BitbucketServerIntegrationProvider
 from sentry.models import Identity, IdentityProvider, Integration, OrganizationIntegration
 from sentry.testutils import IntegrationTestCase
-
-from .testutils import EXAMPLE_PRIVATE_KEY
 
 
 class BitbucketServerIntegrationTest(IntegrationTestCase):
@@ -265,7 +264,7 @@ class BitbucketServerIntegrationTest(IntegrationTestCase):
         assert integration.metadata["verify_ssl"] is False
 
         org_integration = OrganizationIntegration.objects.get(
-            integration=integration, organization=self.organization
+            integration=integration, organization_id=self.organization.id
         )
         assert org_integration.config == {}
 

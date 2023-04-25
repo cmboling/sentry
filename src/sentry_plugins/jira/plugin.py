@@ -140,15 +140,15 @@ class JiraPlugin(CorePluginMixin, IssuePlugin2):
         client = self.get_jira_client(group.project)
         try:
             meta = client.get_create_meta_for_project(jira_project_key)
-        except ApiError as e:
-            raise PluginError(
-                f"JIRA responded with an error. We received a status code of {e.code}"
-            )
         except ApiUnauthorized:
             raise PluginError(
                 "JIRA returned: Unauthorized. "
                 "Please check your username, password, "
                 "instance and project in your configuration settings."
+            )
+        except ApiError as e:
+            raise PluginError(
+                f"JIRA responded with an error. We received a status code of {e.code}"
             )
 
         if not meta:
@@ -315,11 +315,11 @@ class JiraPlugin(CorePluginMixin, IssuePlugin2):
 
             if is_user_api:  # its the JSON version of the autocompleter
                 is_xml = False
-                jira_query["username"] = query.encode("utf8")
+                jira_query["username"] = query
                 jira_query.pop(
                     "issueKey", False
                 )  # some reason JIRA complains if this key is in the URL.
-                jira_query["project"] = project.encode("utf8")
+                jira_query["project"] = project
             elif is_user_picker:
                 is_xml = False
                 # for whatever reason, the create meta api returns an
@@ -329,10 +329,10 @@ class JiraPlugin(CorePluginMixin, IssuePlugin2):
                 parsed[0] = ""
                 parsed[1] = ""
                 parsed[2] = "/rest/api/2/user/picker"
-                jira_query["query"] = query.encode("utf8")
+                jira_query["query"] = query
             else:  # its the stupid XML version of the API.
                 is_xml = True
-                jira_query["query"] = query.encode("utf8")
+                jira_query["query"] = query
                 if jira_query.get("fieldName"):
                     # for some reason its a list.
                     jira_query["fieldName"] = jira_query["fieldName"][0]

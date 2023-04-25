@@ -1,5 +1,8 @@
 import type {Fuse} from 'sentry/utils/fuzzySearch';
 
+import {SpanBarProps} from './spanBar';
+import {SpanDescendantGroupBarProps} from './spanDescendantGroupBar';
+import {SpanSiblingGroupBarProps} from './spanSiblingGroupBar';
 import SpanTreeModel from './spanTreeModel';
 
 export type GapSpanType = {
@@ -12,7 +15,7 @@ export type GapSpanType = {
 };
 
 export type RawSpanType = {
-  data: Object;
+  data: Record<string, any>;
   span_id: string;
   start_timestamp: number;
   // this is essentially end_timestamp
@@ -76,12 +79,11 @@ export type SpanSiblingGroupProps = {
 type CommonEnhancedProcessedSpanType = {
   continuingTreeDepths: Array<TreeDepthType>;
   fetchEmbeddedChildrenState: FetchEmbeddedChildrenState;
+  isEmbeddedTransactionTimeAdjusted: boolean;
   isLastSibling: boolean;
   numOfSpanChildren: number;
   showEmbeddedChildren: boolean;
-  toggleEmbeddedChildren:
-    | ((props: {eventSlug: string; orgSlug: string}) => void)
-    | undefined;
+  toggleEmbeddedChildren: ((orgSlug: string, eventSlugs: string[]) => void) | undefined;
   treeDepth: number;
   groupOccurrence?: number;
   isFirstSiblingOfGroup?: boolean;
@@ -126,11 +128,6 @@ export type EnhancedProcessedSpanType =
       treeDepth: number;
       type: 'span_group_siblings';
     } & SpanSiblingGroupProps);
-
-export type SpanEntry = {
-  data: Array<RawSpanType>;
-  type: 'spans';
-};
 
 // map span_id to children whose parent_span_id is equal to span_id
 export type SpanChildrenLookupType = {[span_id: string]: Array<SpanType>};
@@ -206,3 +203,62 @@ export enum GroupType {
   DESCENDANTS,
   SIBLINGS,
 }
+
+export enum SpanTreeNodeType {
+  SPAN,
+  DESCENDANT_GROUP,
+  SIBLING_GROUP,
+  MESSAGE,
+}
+
+type SpanBarNode = {
+  props: Omit<
+    SpanBarProps,
+    | 'measure'
+    | 'didAnchoredSpanMount'
+    | 'markAnchoredSpanIsMounted'
+    | 'addExpandedSpan'
+    | 'removeExpandedSpan'
+    | 'isSpanExpanded'
+    | 'cellMeasurerCache'
+    | 'listRef'
+  >;
+  type: SpanTreeNodeType.SPAN;
+};
+
+type SpanSiblingNode = {
+  props: Omit<
+    SpanSiblingGroupBarProps,
+    | 'measure'
+    | 'didAnchoredSpanMount'
+    | 'markAnchoredSpanIsMounted'
+    | 'addExpandedSpan'
+    | 'removeExpandedSpan'
+    | 'isSpanExpanded'
+  >;
+  type: SpanTreeNodeType.SIBLING_GROUP;
+};
+
+type SpanDescendantNode = {
+  props: Omit<
+    SpanDescendantGroupBarProps,
+    | 'measure'
+    | 'didAnchoredSpanMount'
+    | 'markAnchoredSpanIsMounted'
+    | 'addExpandedSpan'
+    | 'removeExpandedSpan'
+    | 'isSpanExpanded'
+  >;
+  type: SpanTreeNodeType.DESCENDANT_GROUP;
+};
+
+type SpanMessageNode = {
+  element: JSX.Element;
+  type: SpanTreeNodeType.MESSAGE;
+};
+
+export type SpanTreeNode =
+  | SpanBarNode
+  | SpanSiblingNode
+  | SpanDescendantNode
+  | SpanMessageNode;

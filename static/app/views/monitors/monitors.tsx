@@ -1,31 +1,45 @@
 import {Fragment} from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
+import {WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 import * as qs from 'query-string';
 
-import Button from 'sentry/components/button';
+import onboardingImg from 'sentry-images/spot/onboarding-preview.svg';
+
+import {Button, ButtonProps} from 'sentry/components/button';
+import ButtonBar from 'sentry/components/buttonBar';
+import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import FeatureBadge from 'sentry/components/featureBadge';
-import Link from 'sentry/components/links/link';
+import * as Layout from 'sentry/components/layouts/thirds';
+import OnboardingPanel from 'sentry/components/onboardingPanel';
+import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
 import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
-import PageHeading from 'sentry/components/pageHeading';
+import {PageHeadingQuestionTooltip} from 'sentry/components/pageHeadingQuestionTooltip';
 import Pagination from 'sentry/components/pagination';
-import {Panel, PanelBody, PanelItem} from 'sentry/components/panels';
+import {PanelTable} from 'sentry/components/panels';
 import ProjectPageFilter from 'sentry/components/projectPageFilter';
 import SearchBar from 'sentry/components/searchBar';
-import TimeSince from 'sentry/components/timeSince';
+import {IconAdd} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {PageHeader} from 'sentry/styles/organization';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import {decodeScalar} from 'sentry/utils/queryString';
+import withRouteAnalytics, {
+  WithRouteAnalyticsProps,
+} from 'sentry/utils/routeAnalytics/withRouteAnalytics';
+import useOrganization from 'sentry/utils/useOrganization';
+import usePageFilters from 'sentry/utils/usePageFilters';
 import withOrganization from 'sentry/utils/withOrganization';
+// eslint-disable-next-line no-restricted-imports
+import withSentryRouter from 'sentry/utils/withSentryRouter';
 import AsyncView from 'sentry/views/asyncView';
 
-import MonitorIcon from './monitorIcon';
-import {Monitor} from './types';
+import CronsFeedbackButton from './components/cronsFeedbackButton';
+import {MonitorRow} from './components/row';
+import {Monitor, MonitorEnvironment} from './types';
 
 type Props = AsyncView['props'] &
-  WithRouterProps<{orgId: string}> & {
+  WithRouteAnalyticsProps &
+  WithRouterProps<{}> & {
     organization: Organization;
   };
 
@@ -33,22 +47,51 @@ type State = AsyncView['state'] & {
   monitorList: Monitor[] | null;
 };
 
+function NewMonitorButton(props: ButtonProps) {
+  const organization = useOrganization();
+  const {selection} = usePageFilters();
+
+  return (
+    <Button
+      to={{
+        pathname: `/organizations/${organization.slug}/crons/create/`,
+        query: {project: selection.projects},
+      }}
+      priority="primary"
+      {...props}
+    >
+      {props.children}
+    </Button>
+  );
+}
+
 class Monitors extends AsyncView<Props, State> {
+  get orgSlug() {
+    return this.props.organization.slug;
+  }
+
   getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
-    const {params, location} = this.props;
+    const {location} = this.props;
     return [
       [
         'monitorList',
-        `/organizations/${params.orgId}/monitors/`,
+        `/organizations/${this.orgSlug}/monitors/`,
         {
-          query: location.query,
+          query: {...location.query, includeNew: true},
         },
       ],
     ];
   }
 
   getTitle() {
-    return `Monitors - ${this.props.params.orgId}`;
+    return `Crons - ${this.orgSlug}`;
+  }
+
+  onRequestSuccess(response): void {
+    this.props.setEventNames('monitors.page_viewed', 'Monitors: Page Viewed');
+    this.props.setRouteAnalyticsParams({
+      empty_state: response.data.length === 0,
+    });
   }
 
   handleSearch = (query: string) => {
@@ -66,84 +109,122 @@ class Monitors extends AsyncView<Props, State> {
     const {monitorList, monitorListPageLinks} = this.state;
     const {organization} = this.props;
 
+    const renderMonitorRow = (monitor: Monitor, monitorEnv?: MonitorEnvironment) => (
+      <MonitorRow
+        key={monitor.slug}
+        monitor={monitor}
+        monitorEnv={monitorEnv}
+        onDelete={() => {
+          if (monitorList) {
+            this.setState({
+              monitorList: monitorList.filter(m => m.slug !== monitor.slug),
+            });
+          }
+        }}
+        organization={organization}
+      />
+    );
+
     return (
-      <Fragment>
-        <PageHeader>
-          <HeaderTitle>
-            <div>
-              {t('Monitors')} <FeatureBadge type="beta" />
-            </div>
-            <Button
-              to={`/organizations/${organization.slug}/monitors/create/`}
-              priority="primary"
-            >
-              {t('New Monitor')}
-            </Button>
-          </HeaderTitle>
-        </PageHeader>
-        <Filters>
-          <ProjectPageFilter />
-          <SearchBar
-            query={decodeScalar(qs.parse(location.search)?.query, '')}
-            placeholder={t('Search for monitors.')}
-            onSearch={this.handleSearch}
-          />
-        </Filters>
-        <Panel>
-          <PanelBody>
-            {monitorList?.map(monitor => (
-              <PanelItemCentered key={monitor.id}>
-                <MonitorIcon status={monitor.status} size={16} />
-                <StyledLink
-                  to={`/organizations/${organization.slug}/monitors/${monitor.id}/`}
-                >
-                  {monitor.name}
-                </StyledLink>
-                {monitor.nextCheckIn ? (
-                  <StyledTimeSince date={monitor.lastCheckIn} />
-                ) : (
-                  t('n/a')
+      <Layout.Page>
+        <Layout.Header>
+          <Layout.HeaderContent>
+            <Layout.Title>
+              {t('Cron Monitors')}
+              <PageHeadingQuestionTooltip
+                title={t(
+                  'Scheduled monitors that check in on recurring jobs and tell you if they’re running on schedule, failing, or succeeding.'
                 )}
-              </PanelItemCentered>
-            ))}
-          </PanelBody>
-        </Panel>
-        {monitorListPageLinks && (
-          <Pagination pageLinks={monitorListPageLinks} {...this.props} />
-        )}
-      </Fragment>
+                docsUrl="https://docs.sentry.io/product/crons/"
+              />
+              <FeatureBadge type="beta" />
+            </Layout.Title>
+          </Layout.HeaderContent>
+          <Layout.HeaderActions>
+            <ButtonBar gap={1}>
+              <CronsFeedbackButton />
+              <NewMonitorButton size="sm" icon={<IconAdd isCircled size="xs" />}>
+                {t('Add Monitor')}
+              </NewMonitorButton>
+            </ButtonBar>
+          </Layout.HeaderActions>
+        </Layout.Header>
+        <Layout.Body>
+          <Layout.Main fullWidth>
+            <Filters>
+              <PageFilterBar>
+                <ProjectPageFilter resetParamsOnChange={['cursor']} />
+                <EnvironmentPageFilter resetParamsOnChange={['cursor']} />
+              </PageFilterBar>
+              <SearchBar
+                query={decodeScalar(qs.parse(location.search)?.query, '')}
+                placeholder={t('Search by name')}
+                onSearch={this.handleSearch}
+              />
+            </Filters>
+            {monitorList?.length ? (
+              <Fragment>
+                <StyledPanelTable
+                  headers={[
+                    t('Monitor Name'),
+                    t('Status'),
+                    t('Schedule'),
+                    t('Next Checkin'),
+                    t('Project'),
+                    t('Environment'),
+                    t('Actions'),
+                  ]}
+                >
+                  {monitorList
+                    ?.map(monitor =>
+                      monitor.environments.length > 0
+                        ? monitor.environments.map(monitorEnv =>
+                            renderMonitorRow(monitor, monitorEnv)
+                          )
+                        : renderMonitorRow(monitor)
+                    )
+                    .flat()}
+                </StyledPanelTable>
+                {monitorListPageLinks && (
+                  <Pagination pageLinks={monitorListPageLinks} {...this.props} />
+                )}
+              </Fragment>
+            ) : (
+              <OnboardingPanel image={<img src={onboardingImg} />}>
+                <h3>{t('Let Sentry monitor your recurring jobs')}</h3>
+                <p>
+                  {t(
+                    "We'll tell you if your recurring jobs are running on schedule, failing, or succeeding."
+                  )}
+                </p>
+                <ButtonList gap={1}>
+                  <NewMonitorButton>{t('Set up first cron monitor')}</NewMonitorButton>
+                  <Button href="https://docs.sentry.io/product/crons" external>
+                    {t('Read docs')}
+                  </Button>
+                </ButtonList>
+              </OnboardingPanel>
+            )}
+          </Layout.Main>
+        </Layout.Body>
+      </Layout.Page>
     );
   }
 }
 
-const HeaderTitle = styled(PageHeading)`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 1;
-`;
-
-const PanelItemCentered = styled(PanelItem)`
-  align-items: center;
-  padding: 0;
-  padding-left: ${space(2)};
-  padding-right: ${space(2)};
-`;
-
-const StyledLink = styled(Link)`
-  flex: 1;
-  padding: ${space(2)};
-`;
-
-const StyledTimeSince = styled(TimeSince)`
-  font-variant-numeric: tabular-nums;
-`;
-
 const Filters = styled('div')`
   display: grid;
-  grid-template-columns: minmax(auto, 300px) 1fr;
+  grid-template-columns: max-content 1fr;
   gap: ${space(1.5)};
   margin-bottom: ${space(2)};
 `;
 
-export default withRouter(withOrganization(Monitors));
+const StyledPanelTable = styled(PanelTable)`
+  grid-template-columns: 1fr max-content 1fr max-content max-content max-content max-content;
+`;
+
+const ButtonList = styled(ButtonBar)`
+  grid-template-columns: repeat(auto-fit, minmax(130px, max-content));
+`;
+
+export default withRouteAnalytics(withSentryRouter(withOrganization(Monitors)));

@@ -1,10 +1,11 @@
 import unittest
 
+from fixtures.schema_validation import invalid_schema
 from sentry.api.validators.sentry_apps.schema import validate_component
+from sentry.testutils.silo import region_silo_test
 
-from .util import invalid_schema
 
-
+@region_silo_test
 class TestIssueLinkSchemaValidation(unittest.TestCase):
     def setUp(self):
         self.schema = {

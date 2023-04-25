@@ -1,110 +1,112 @@
-import {Component} from 'react';
 import {RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
 
-import {Client} from 'sentry/api';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ClippedBox from 'sentry/components/clippedBox';
 import Confirm from 'sentry/components/confirm';
 import Link from 'sentry/components/links/link';
 import {Panel, PanelBody, PanelHeader} from 'sentry/components/panels';
 import {IconDelete} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {Scope} from 'sentry/types';
+import {space} from 'sentry/styles/space';
+import {Project, Scope} from 'sentry/types';
 import recreateRoute from 'sentry/utils/recreateRoute';
 import ProjectKeyCredentials from 'sentry/views/settings/project/projectKeys/projectKeyCredentials';
 import {ProjectKey} from 'sentry/views/settings/project/projectKeys/types';
 
 type Props = {
   access: Set<Scope>;
-  api: Client;
   data: ProjectKey;
   onRemove: (data: ProjectKey) => void;
   onToggle: (isActive: boolean, data: ProjectKey) => void;
   orgId: string;
+  project: Project;
   projectId: string;
 } & Pick<RouteComponentProps<{}, {}>, 'routes' | 'location' | 'params'>;
 
-class KeyRow extends Component<Props> {
-  handleRemove = () => {
-    const {data, onRemove} = this.props;
-    onRemove(data);
-  };
+function KeyRow({
+  data,
+  onRemove,
+  onToggle,
+  access,
+  routes,
+  location,
+  params,
+  project,
+}: Props) {
+  const handleEnable = () => onToggle(true, data);
+  const handleDisable = () => onToggle(false, data);
 
-  handleEnable = () => {
-    const {onToggle, data} = this.props;
-    onToggle(true, data);
-  };
+  const editUrl = recreateRoute(`${data.id}/`, {routes, params, location});
+  const controlActive = access.has('project:write');
 
-  handleDisable = () => {
-    const {onToggle, data} = this.props;
-    onToggle(false, data);
-  };
+  const platform = project.platform || 'other';
+  const isJsPlatform = platform === 'javascript' || platform.startsWith('javascript-');
 
-  render() {
-    const {access, data, routes, location, params} = this.props;
-    const editUrl = recreateRoute(`${data.id}/`, {routes, params, location});
-    const controlActive = access.has('project:write');
-
-    const controls = [
-      <Button key="edit" to={editUrl} size="small">
-        {t('Configure')}
-      </Button>,
-      <Button
-        key="toggle"
-        size="small"
-        onClick={data.isActive ? this.handleDisable : this.handleEnable}
-        disabled={!controlActive}
-      >
-        {data.isActive ? t('Disable') : t('Enable')}
-      </Button>,
-      <Confirm
-        key="remove"
-        priority="danger"
-        disabled={!controlActive}
-        onConfirm={this.handleRemove}
-        confirmText={t('Remove Key')}
-        message={t(
-          'Are you sure you want to remove this key? This action is irreversible.'
-        )}
-      >
-        <Button
-          size="small"
-          disabled={!controlActive}
-          icon={<IconDelete />}
-          aria-label={t('Delete')}
-        />
-      </Confirm>,
-    ];
-
-    return (
-      <Panel>
-        <PanelHeader hasButtons>
-          <Title disabled={!data.isActive}>
-            <PanelHeaderLink to={editUrl}>{data.label}</PanelHeaderLink>
-            {!data.isActive && (
-              <small>
-                {' \u2014  '}
-                {t('Disabled')}
-              </small>
+  return (
+    <Panel>
+      <PanelHeader hasButtons>
+        <Title disabled={!data.isActive}>
+          <PanelHeaderLink to={editUrl}>{data.label}</PanelHeaderLink>
+          {!data.isActive && (
+            <small>
+              {' \u2014  '}
+              {t('Disabled')}
+            </small>
+          )}
+        </Title>
+        <Controls>
+          <Button to={editUrl} size="sm">
+            {t('Configure')}
+          </Button>
+          <Confirm
+            onConfirm={data.isActive ? handleDisable : handleEnable}
+            confirmText={data.isActive ? t('Disable Key') : t('Enable Key')}
+            message={
+              data.isActive
+                ? t('Are you sure you want to disable this key?')
+                : t('Are you sure you want to enable this key?')
+            }
+          >
+            <Button size="sm" disabled={!controlActive}>
+              {data.isActive ? t('Disable') : t('Enable')}
+            </Button>
+          </Confirm>
+          <Confirm
+            priority="danger"
+            onConfirm={() => onRemove(data)}
+            confirmText={t('Remove Key')}
+            message={t(
+              'Are you sure you want to remove this key? This action is irreversible.'
             )}
-          </Title>
-          <Controls>
-            {controls.map((c, n) => (
-              <span key={n}> {c}</span>
-            ))}
-          </Controls>
-        </PanelHeader>
+          >
+            <Button
+              size="sm"
+              disabled={!controlActive}
+              icon={<IconDelete />}
+              aria-label={t('Delete')}
+            />
+          </Confirm>
+        </Controls>
+      </PanelHeader>
 
-        <StyledClippedBox clipHeight={300} defaultClipped btnText={t('Expand')}>
-          <StyledPanelBody disabled={!data.isActive}>
-            <ProjectKeyCredentials projectId={`${data.projectId}`} data={data} />
-          </StyledPanelBody>
-        </StyledClippedBox>
-      </Panel>
-    );
-  }
+      <StyledClippedBox
+        clipHeight={300}
+        defaultClipped={!isJsPlatform}
+        btnText={t('Expand')}
+      >
+        <StyledPanelBody disabled={!data.isActive}>
+          <ProjectKeyCredentials
+            projectId={`${data.projectId}`}
+            data={data}
+            showMinidump={!isJsPlatform}
+            showUnreal={!isJsPlatform}
+            showSecurityEndpoint={!isJsPlatform}
+          />
+        </StyledPanelBody>
+      </StyledClippedBox>
+    </Panel>
+  );
 }
 
 export default KeyRow;

@@ -8,6 +8,8 @@ import NavTabs from 'sentry/components/navTabs';
 import {t, tct} from 'sentry/locale';
 import plugins from 'sentry/plugins';
 import {Group, Organization, Plugin, Project} from 'sentry/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import {getAnalyticsDataForGroup} from 'sentry/utils/events';
 import withApi from 'sentry/utils/withApi';
 import withOrganization from 'sentry/utils/withOrganization';
 
@@ -46,9 +48,9 @@ class PluginActions extends Component<Props, State> {
     this.loadPlugin(this.props.plugin);
   }
 
-  UNSAFE_componentWillReceiveProps(nextProps: Props) {
-    if (this.props.plugin.id !== nextProps.plugin.id) {
-      this.loadPlugin(nextProps.plugin);
+  componentDidUpdate(prevProps: Props) {
+    if (this.props.plugin.id !== prevProps.plugin.id) {
+      this.loadPlugin(this.props.plugin);
     }
   }
 
@@ -97,6 +99,13 @@ class PluginActions extends Component<Props, State> {
     const {issue} = this.state;
     const {project, group, organization} = this.props;
     const plugin = {...this.props.plugin, issue};
+
+    trackAnalytics('issue_details.external_issue_modal_opened', {
+      organization,
+      ...getAnalyticsDataForGroup(group),
+      external_issue_provider: plugin.slug,
+      external_issue_type: 'plugin',
+    });
 
     openModal(
       deps => (
@@ -154,7 +163,7 @@ class PluginActionsModal extends Component<ModalProps, ModalState> {
     return (
       <Fragment>
         <Header closeButton>
-          {tct('[name] Issue', {name: plugin.name || plugin.title})}
+          <h4>{tct('[name] Issue', {name: plugin.name || plugin.title})}</h4>
         </Header>
         <NavTabs underlined>
           <li className={actionType === 'create' ? 'active' : ''}>

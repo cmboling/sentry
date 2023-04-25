@@ -11,16 +11,12 @@ from django_zero_downtime_migrations.backends.postgres.schema import (
 
 unsafe_mapping = {
     Unsafe.ADD_COLUMN_DEFAULT: (
-        "Adding {}.{} as column with a default is unsafe.\n"
-        "More info: https://develop.sentry.dev/database-migrations/#adding-columns-with-a-default"
+        "Adding {}.{} as column with a default is safe, but you need to take additional steps.\n"
+        "Follow this guide: https://develop.sentry.dev/database-migrations/#adding-columns-with-a-default"
     ),
     Unsafe.ADD_COLUMN_NOT_NULL: (
         "Adding {}.{} as a not null column is unsafe.\n"
         "More info: https://develop.sentry.dev/database-migrations/#adding-not-null-to-columns"
-    ),
-    Unsafe.ADD_COLUMN_DEFAULT: (
-        "Adding {}.{} as column with a default is unsafe.\n"
-        "More info: https://develop.sentry.dev/database-migrations/#adding-columns-with-a-default"
     ),
     Unsafe.ALTER_COLUMN_TYPE: (
         "Altering the type of column {}.{} in this way is unsafe\n"

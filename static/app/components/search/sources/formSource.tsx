@@ -1,15 +1,17 @@
-import * as React from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
+import {Component} from 'react';
+import {WithRouterProps} from 'react-router';
 
 import {loadSearchMap} from 'sentry/actionCreators/formSearch';
 import FormSearchStore, {FormSearchField} from 'sentry/stores/formSearchStore';
 import {createFuzzySearch, Fuse} from 'sentry/utils/fuzzySearch';
 import replaceRouterParams from 'sentry/utils/replaceRouterParams';
+// eslint-disable-next-line no-restricted-imports
+import withSentryRouter from 'sentry/utils/withSentryRouter';
 
 import {ChildProps, Result, ResultItem} from './types';
 import {strGetFn} from './utils';
 
-type Props = WithRouterProps<{orgId: string}> & {
+type Props = WithRouterProps<{}> & {
   children: (props: ChildProps) => React.ReactElement;
   /**
    * search term
@@ -29,7 +31,7 @@ type State = {
   fuzzy: null | Fuse<FormSearchField>;
 };
 
-class FormSource extends React.Component<Props, State> {
+class FormSource extends Component<Props, State> {
   static defaultProps = {
     searchOptions: {},
   };
@@ -87,7 +89,7 @@ class FormSource extends React.Component<Props, State> {
 type ContainerProps = Omit<Props, 'searchMap'>;
 type ContainerState = Pick<Props, 'searchMap'>;
 
-class FormSourceContainer extends React.Component<ContainerProps, ContainerState> {
+class FormSourceContainer extends Component<ContainerProps, ContainerState> {
   state = {
     searchMap: FormSearchStore.get(),
   };
@@ -110,4 +112,4 @@ class FormSourceContainer extends React.Component<ContainerProps, ContainerState
     return <FormSource searchMap={this.state.searchMap} {...this.props} />;
   }
 }
-export default withRouter(FormSourceContainer);
+export default withSentryRouter(FormSourceContainer);

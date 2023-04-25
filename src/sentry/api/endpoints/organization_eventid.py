@@ -2,6 +2,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import eventstore
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.serializers import serialize
@@ -10,6 +11,7 @@ from sentry.types.ratelimit import RateLimit, RateLimitCategory
 from sentry.utils.validators import INVALID_ID_DETAILS, is_event_id
 
 
+@region_silo_endpoint
 class EventIdLookupEndpoint(OrganizationEndpoint):
     enforce_rate_limit = True
     rate_limits = {
@@ -46,7 +48,9 @@ class EventIdLookupEndpoint(OrganizationEndpoint):
                 project_ids=list(project_slugs_by_id.keys()),
                 event_ids=[event_id],
             )
-            event = eventstore.get_events(filter=snuba_filter, limit=1)[0]
+            event = eventstore.get_events(
+                filter=snuba_filter, limit=1, tenant_ids={"organization_id": organization.id}
+            )[0]
         except IndexError:
             raise ResourceDoesNotExist()
         else:

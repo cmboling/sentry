@@ -1,7 +1,9 @@
 import dompurify from 'dompurify';
 import marked from 'marked'; // eslint-disable-line no-restricted-imports
+import Prism from 'prismjs';
 
 import {IS_ACCEPTANCE_TEST, NODE_ENV} from 'sentry/constants';
+import {loadPrismLanguage} from 'sentry/utils/loadPrismLanguage';
 
 // Only https and mailto, (e.g. no javascript, vbscript, data protocols)
 const safeLinkPattern = /^(https?:|mailto:)/i;
@@ -49,6 +51,24 @@ class NoParagraphRenderer extends SafeRenderer {
 marked.setOptions({
   renderer: new SafeRenderer(),
   sanitize: true,
+
+  highlight: (code, lang, callback) => {
+    if (!lang) {
+      return code;
+    }
+
+    if (lang in Prism.languages) {
+      return Prism.highlight(code, Prism.languages[lang], lang);
+    }
+
+    loadPrismLanguage(lang, {
+      onLoad: () => callback?.(null, Prism.highlight(code, Prism.languages[lang], lang)),
+      onError: error => callback?.(error, code),
+      suppressExistenceWarning: true,
+    });
+
+    return code;
+  },
 
   // Silence sanitize deprecation warning in test / ci (CI sets NODE_NV
   // to production, but specifies `CI`).

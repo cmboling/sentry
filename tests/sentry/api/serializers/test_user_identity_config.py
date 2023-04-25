@@ -5,9 +5,11 @@ from sentry.api.serializers import serialize
 from sentry.api.serializers.models.user_identity_config import Status, UserIdentityConfig
 from sentry.models import AuthIdentity, AuthProvider, Identity, IdentityProvider
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 from social_auth.models import UserSocialAuth
 
 
+@control_silo_test
 class UserIdentityConfigSerializerTest(TestCase):
     def setUp(self) -> None:
         self.user = self.create_user()
@@ -79,7 +81,7 @@ class UserIdentityConfigSerializerTest(TestCase):
 
     def test_auth_identity(self):
         org = self.create_organization()
-        provider = AuthProvider.objects.create(organization=org, provider="dummy")
+        provider = AuthProvider.objects.create(organization_id=org.id, provider="dummy")
 
         identity = AuthIdentity.objects.create(
             user=self.user, auth_provider=provider, ident="hhyjzna1"

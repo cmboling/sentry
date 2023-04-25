@@ -4,6 +4,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint, ProjectSettingPermission
 from sentry.api.serializers import serialize
 from sentry.models.transaction_threshold import (
@@ -38,6 +39,7 @@ class ProjectTransactionThresholdSerializer(serializers.Serializer):
         return threshold
 
 
+@region_silo_endpoint
 class ProjectTransactionThresholdEndpoint(ProjectEndpoint):
     permission_classes = (ProjectSettingPermission,)
 
@@ -88,7 +90,7 @@ class ProjectTransactionThresholdEndpoint(ProjectEndpoint):
                 )
                 project_threshold.threshold = data.get("threshold") or project_threshold.threshold
                 project_threshold.metric = data.get("metric") or project_threshold.metric
-                project_threshold.edited_by = request.user
+                project_threshold.edited_by_id = request.user.id
                 project_threshold.save()
 
                 created = False
@@ -99,7 +101,7 @@ class ProjectTransactionThresholdEndpoint(ProjectEndpoint):
                     organization=project.organization,
                     threshold=data.get("threshold", 300),
                     metric=data.get("metric", TransactionMetric.DURATION.value),
-                    edited_by=request.user,
+                    edited_by_id=request.user.id,
                 )
 
                 created = True

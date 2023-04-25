@@ -17,11 +17,13 @@ from sentry.constants import (
 from sentry.db.models import (
     ArrayField,
     BoundedPositiveIntegerField,
-    EncryptedJsonField,
     FlexibleForeignKey,
     ParanoidManager,
     ParanoidModel,
+    control_silo_only_model,
 )
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
+from sentry.db.models.fields.jsonfield import JSONField
 from sentry.models.apiscopes import HasApiScopes
 from sentry.utils import metrics
 
@@ -68,7 +70,7 @@ def default_uuid():
     return str(uuid.uuid4())
 
 
-def generate_slug(name, is_internal=False):
+def generate_slug(name: str, is_internal=False) -> str:
     slug = slugify(name)
     # for internal, add some uuid to make it unique
     if is_internal:
@@ -103,6 +105,7 @@ class SentryAppManager(ParanoidManager):
         return self.filter(status=SentryAppStatus.PUBLISHED)
 
 
+@control_silo_only_model
 class SentryApp(ParanoidModel, HasApiScopes):
     __include_in_export__ = True
 
@@ -118,7 +121,7 @@ class SentryApp(ParanoidModel, HasApiScopes):
 
     # The Organization the Sentry App was created in "owns" it. Members of that
     # Org have differing access, dependent on their role within the Org.
-    owner = FlexibleForeignKey("sentry.Organization", related_name="owned_sentry_apps")
+    owner_id = HybridCloudForeignKey("sentry.Organization", on_delete="CASCADE")
 
     name = models.TextField()
     slug = models.CharField(max_length=SENTRY_APP_SLUG_MAX_LENGTH, unique=True)
@@ -142,7 +145,7 @@ class SentryApp(ParanoidModel, HasApiScopes):
     events = ArrayField(of=models.TextField, null=True)
 
     overview = models.TextField(null=True)
-    schema = EncryptedJsonField(default=dict)
+    schema = JSONField(default=dict)
 
     date_added = models.DateTimeField(default=timezone.now)
     date_updated = models.DateTimeField(default=timezone.now)
@@ -193,7 +196,7 @@ class SentryApp(ParanoidModel, HasApiScopes):
         from sentry.models import SentryAppInstallation
 
         return SentryAppInstallation.objects.filter(
-            organization=organization,
+            organization_id=organization.id,
             sentry_app=self,
         ).exists()
 

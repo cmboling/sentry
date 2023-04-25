@@ -8,11 +8,22 @@ from django.utils import timezone
 from sentry import roles
 from sentry.auth import manager
 from sentry.exceptions import UnableToAcceptMemberInvitationException
-from sentry.models import INVITE_DAYS_VALID, InviteStatus, OrganizationMember, OrganizationOption
+from sentry.models import (
+    INVITE_DAYS_VALID,
+    AuthIdentity,
+    InviteStatus,
+    OrganizationMember,
+    OrganizationOption,
+)
+from sentry.models.authprovider import AuthProvider
+from sentry.models.organizationmemberteam import OrganizationMemberTeam
 from sentry.testutils import TestCase
 from sentry.testutils.helpers import with_feature
+from sentry.testutils.outbox import outbox_runner
+from sentry.testutils.silo import exempt_from_silo_limits, region_silo_test
 
 
+@region_silo_test(stable=True)
 class OrganizationMemberTest(TestCase):
     def test_legacy_token_generation(self):
         member = OrganizationMember(id=1, organization_id=1, email="foo@example.com")
@@ -30,16 +41,22 @@ class OrganizationMemberTest(TestCase):
             assert member.legacy_token == "df41d9dfd4ba25d745321e654e15b5d0"
 
     def test_send_invite_email(self):
-        organization = self.create_organization()
-        member = OrganizationMember(id=1, organization=organization, email="foo@example.com")
+        member = OrganizationMember(id=1, organization=self.organization, email="foo@example.com")
         with self.options({"system.url-prefix": "http://example.com"}), self.tasks():
             member.send_invite_email()
 
         assert len(mail.outbox) == 1
 
         msg = mail.outbox[0]
-
         assert msg.to == ["foo@example.com"]
+
+    @with_feature("organizations:customer-domains")
+    def test_send_invite_email_customer_domains(self):
+        member = OrganizationMember(id=1, organization=self.organization, email="admin@example.com")
+        with self.tasks():
+            member.send_invite_email()
+        assert len(mail.outbox) == 1
+        assert self.organization.absolute_url("/accept/") in mail.outbox[0].body
 
     def test_send_sso_link_email(self):
         organization = self.create_organization()
@@ -55,12 +72,12 @@ class OrganizationMemberTest(TestCase):
 
     @patch("sentry.utils.email.MessageBuilder")
     def test_send_sso_unlink_email(self, builder):
-        user = self.create_user(email="foo@example.com")
-        user.password = ""
-        user.save()
+        with exempt_from_silo_limits():
+            user = self.create_user(email="foo@example.com")
+            user.password = ""
+            user.save()
 
-        organization = self.create_organization()
-        member = self.create_member(user=user, organization=organization)
+        member = self.create_member(user=user, organization=self.organization)
         provider = manager.get("dummy")
 
         with self.options({"system.url-prefix": "http://example.com"}), self.tasks():
@@ -68,15 +85,14 @@ class OrganizationMemberTest(TestCase):
 
         context = builder.call_args[1]["context"]
 
-        assert context["organization"] == organization
+        assert context["organization"] == self.organization
         assert context["provider"] == provider
 
         assert not context["has_password"]
         assert "set_password_url" in context
 
     def test_token_expires_at_set_on_save(self):
-        organization = self.create_organization()
-        member = OrganizationMember(organization=organization, email="foo@example.com")
+        member = OrganizationMember(organization=self.organization, email="foo@example.com")
         member.token = member.generate_token()
         member.save()
 
@@ -85,8 +101,7 @@ class OrganizationMemberTest(TestCase):
         assert member.token_expires_at.date() == expires_at.date()
 
     def test_token_expiration(self):
-        organization = self.create_organization()
-        member = OrganizationMember(organization=organization, email="foo@example.com")
+        member = OrganizationMember(organization=self.organization, email="foo@example.com")
         member.token = member.generate_token()
         member.save()
 
@@ -97,8 +112,7 @@ class OrganizationMemberTest(TestCase):
         assert member.token_expired
 
     def test_set_user(self):
-        organization = self.create_organization()
-        member = OrganizationMember(organization=organization, email="foo@example.com")
+        member = OrganizationMember(organization=self.organization, email="foo@example.com")
         member.token = member.generate_token()
         member.save()
 
@@ -111,8 +125,7 @@ class OrganizationMemberTest(TestCase):
         assert member.email is None
 
     def test_regenerate_token(self):
-        organization = self.create_organization()
-        member = OrganizationMember(organization=organization, email="foo@example.com")
+        member = OrganizationMember(organization=self.organization, email="foo@example.com")
         assert member.token is None
         assert member.token_expires_at is None
 
@@ -123,10 +136,9 @@ class OrganizationMemberTest(TestCase):
         assert member.token_expires_at.date() == expires_at.date()
 
     def test_delete_expired_clear(self):
-        organization = self.create_organization()
         ninety_one_days = timezone.now() - timedelta(days=1)
         member = OrganizationMember.objects.create(
-            organization=organization,
+            organization=self.organization,
             role="member",
             email="test@example.com",
             token="abc-def",
@@ -135,11 +147,69 @@ class OrganizationMemberTest(TestCase):
         OrganizationMember.objects.delete_expired(timezone.now())
         assert OrganizationMember.objects.filter(id=member.id).first() is None
 
-    def test_delete_expired_miss(self):
+    def test_delete_identities(self):
+        org = self.create_organization()
+        user = self.create_user()
+        member = self.create_member(user_id=user.id, organization_id=org.id)
+        with exempt_from_silo_limits():
+            ap = AuthProvider.objects.create(
+                organization_id=org.id, provider="sentry_auth_provider", config={}
+            )
+            AuthIdentity.objects.create(user=user, auth_provider=ap)
+            qs = AuthIdentity.objects.filter(auth_provider__organization_id=org.id, user_id=user.id)
+            assert qs.exists()
+
+        with outbox_runner():
+            member.outbox_for_update().save()
+
+        # ensure that even if the outbox sends a general, non delete update, it doesn't cascade
+        # the delete to auth identity objects.
+        with exempt_from_silo_limits():
+            assert qs.exists()
+
+        with outbox_runner():
+            member.delete()
+
+        with exempt_from_silo_limits():
+            assert not qs.exists()
+
+    def test_delete_expired_SCIM_enabled(self):
         organization = self.create_organization()
-        tomorrow = timezone.now() + timedelta(days=1)
+        org3 = self.create_organization()
+        with exempt_from_silo_limits():
+            AuthProvider.objects.create(
+                provider="saml2",
+                organization_id=organization.id,
+                flags=AuthProvider.flags["scim_enabled"],
+            )
+            AuthProvider.objects.create(
+                provider="saml2",
+                organization_id=org3.id,
+                flags=AuthProvider.flags["allow_unlinked"],
+            )
+        ninety_one_days = timezone.now() - timedelta(days=91)
         member = OrganizationMember.objects.create(
             organization=organization,
+            role="member",
+            email="test@example.com",
+            token="abc-def",
+            token_expires_at=ninety_one_days,
+        )
+        member2 = OrganizationMember.objects.create(
+            organization=org3,
+            role="member",
+            email="test2@example.com",
+            token="abc-defg",
+            token_expires_at=ninety_one_days,
+        )
+        OrganizationMember.objects.delete_expired(timezone.now())
+        assert OrganizationMember.objects.filter(id=member.id).exists()
+        assert not OrganizationMember.objects.filter(id=member2.id).exists()
+
+    def test_delete_expired_miss(self):
+        tomorrow = timezone.now() + timedelta(days=1)
+        member = OrganizationMember.objects.create(
+            organization=self.organization,
             role="member",
             email="test@example.com",
             token="abc-def",
@@ -150,12 +220,10 @@ class OrganizationMemberTest(TestCase):
 
     def test_delete_expired_leave_claimed(self):
         user = self.create_user()
-        organization = self.create_organization()
         member = OrganizationMember.objects.create(
-            organization=organization,
+            organization=self.organization,
             role="member",
             user=user,
-            email="test@example.com",
             token="abc-def",
             token_expires_at="2018-01-01 10:00:00",
         )
@@ -163,9 +231,8 @@ class OrganizationMemberTest(TestCase):
         assert OrganizationMember.objects.get(id=member.id)
 
     def test_delete_expired_leave_null_expires(self):
-        organization = self.create_organization()
         member = OrganizationMember.objects.create(
-            organization=organization,
+            organization=self.organization,
             role="member",
             email="test@example.com",
             token="abc-def",
@@ -175,9 +242,8 @@ class OrganizationMemberTest(TestCase):
         assert OrganizationMember.objects.get(id=member.id)
 
     def test_approve_invite(self):
-        organization = self.create_organization()
         member = OrganizationMember.objects.create(
-            organization=organization,
+            organization=self.organization,
             role="member",
             email="test@example.com",
             invite_status=InviteStatus.REQUESTED_TO_BE_INVITED.value,
@@ -189,32 +255,30 @@ class OrganizationMemberTest(TestCase):
         assert member.invite_status == InviteStatus.APPROVED.value
 
     def test_scopes_with_member_admin_config(self):
-        organization = self.create_organization()
         member = OrganizationMember.objects.create(
-            organization=organization,
+            organization=self.organization,
             role="member",
             email="test@example.com",
         )
 
         assert "event:admin" in member.get_scopes()
 
-        organization.update_option("sentry:events_member_admin", True)
+        self.organization.update_option("sentry:events_member_admin", True)
 
         assert "event:admin" in member.get_scopes()
 
-        organization.update_option("sentry:events_member_admin", False)
+        self.organization.update_option("sentry:events_member_admin", False)
 
         assert "event:admin" not in member.get_scopes()
 
     def test_scopes_with_member_alert_write(self):
-        organization = self.create_organization()
         member = OrganizationMember.objects.create(
-            organization=organization,
+            organization=self.organization,
             role="member",
             email="test@example.com",
         )
         admin = OrganizationMember.objects.create(
-            organization=organization,
+            organization=self.organization,
             role="admin",
             email="admin@example.com",
         )
@@ -222,15 +286,33 @@ class OrganizationMemberTest(TestCase):
         assert "alerts:write" in member.get_scopes()
         assert "alerts:write" in admin.get_scopes()
 
-        organization.update_option("sentry:alerts_member_write", True)
+        self.organization.update_option("sentry:alerts_member_write", True)
 
         assert "alerts:write" in member.get_scopes()
         assert "alerts:write" in admin.get_scopes()
 
-        organization.update_option("sentry:alerts_member_write", False)
+        self.organization.update_option("sentry:alerts_member_write", False)
 
         assert "alerts:write" not in member.get_scopes()
         assert "alerts:write" in admin.get_scopes()
+
+    def test_scopes_with_team_org_role(self):
+        member = OrganizationMember.objects.create(
+            organization=self.organization,
+            role="member",
+            email="test@example.com",
+        )
+        owner = OrganizationMember.objects.create(
+            organization=self.organization,
+            role="owner",
+            email="owner@example.com",
+        )
+        owner_member_scopes = member.get_scopes() | owner.get_scopes()
+
+        team = self.create_team(organization=self.organization, org_role="owner")
+        OrganizationMemberTeam.objects.create(organizationmember=member, team=team)
+
+        assert member.get_scopes() == owner_member_scopes
 
     def test_get_contactable_members_for_org(self):
         organization = self.create_organization()
@@ -303,9 +385,27 @@ class OrganizationMemberTest(TestCase):
         user = self.create_user()
         with pytest.raises(
             UnableToAcceptMemberInvitationException,
-            match="You do not have permission approve a member invitation with the role admin.",
+            match="You do not have permission to approve a member invitation with the role admin.",
         ):
             member.validate_invitation(user, [roles.get("member")])
+
+    def test_validate_invitation_with_org_role_from_team(self):
+        team = self.create_team(org_role="admin")
+        member = self.create_member(
+            organization=self.organization,
+            invite_status=InviteStatus.REQUESTED_TO_BE_INVITED.value,
+            email="hello@sentry.io",
+            role="member",
+            teams=[team],
+        )
+        user = self.create_user()
+        assert member.validate_invitation(user, [roles.get("admin"), roles.get("member")])
+
+        with pytest.raises(
+            UnableToAcceptMemberInvitationException,
+            match="You do not have permission to approve a member invitation with the role admin.",
+        ):
+            member.validate_invitation(user, [roles.get("manager")])
 
     def test_approve_member_invitation(self):
         member = self.create_member(
@@ -329,11 +429,27 @@ class OrganizationMemberTest(TestCase):
         member.reject_member_invitation(user)
         assert not OrganizationMember.objects.filter(id=member.id).exists()
 
-    def test_get_allowed_roles_to_invite(self):
+    def test_get_allowed_org_roles_to_invite(self):
         member = OrganizationMember.objects.get(user=self.user, organization=self.organization)
         member.update(role="manager")
-        assert member.get_allowed_roles_to_invite() == [
+        assert member.get_allowed_org_roles_to_invite() == [
             roles.get("member"),
             roles.get("admin"),
             roles.get("manager"),
         ]
+
+    def test_org_roles_by_source(self):
+        manager_team = self.create_team(organization=self.organization, org_role="manager")
+        owner_team = self.create_team(organization=self.organization, org_role="owner")
+        owner_team2 = self.create_team(organization=self.organization, org_role="owner")
+        member = self.create_member(
+            organization=self.organization,
+            teams=[manager_team, owner_team, owner_team2],
+            user=self.create_user(),
+            role="member",
+        )
+
+        roles = member.get_org_roles_from_teams_by_source()
+        assert roles[0][1].id == "owner"
+        assert roles[-1][0] == manager_team.slug
+        assert roles[-1][1].id == "manager"

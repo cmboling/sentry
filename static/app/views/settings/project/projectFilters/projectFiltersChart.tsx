@@ -2,19 +2,19 @@ import {Component} from 'react';
 
 import {Client} from 'sentry/api';
 import MiniBarChart from 'sentry/components/charts/miniBarChart';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import LoadingError from 'sentry/components/loadingError';
 import {Panel, PanelBody, PanelHeader} from 'sentry/components/panels';
 import Placeholder from 'sentry/components/placeholder';
 import {t} from 'sentry/locale';
-import {Project} from 'sentry/types';
+import {Organization, Project} from 'sentry/types';
 import {Series} from 'sentry/types/echarts';
 import theme from 'sentry/utils/theme';
 import withApi from 'sentry/utils/withApi';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 
 type Props = {
   api: Client;
-  params: {orgId: string; projectId: string};
+  organization: Organization;
   project: Project;
 };
 
@@ -79,13 +79,12 @@ class ProjectFiltersChart extends Component<Props, State> {
 
   getFilterStats() {
     const statOptions = Object.keys(STAT_OPS);
-    const {project} = this.props;
-    const {orgId} = this.props.params;
+    const {organization, project} = this.props;
 
     const until = Math.floor(new Date().getTime() / 1000);
     const since = until - 3600 * 24 * 30;
 
-    const statEndpoint = `/projects/${orgId}/${project.slug}/stats/`;
+    const statEndpoint = `/projects/${organization.slug}/${project.slug}/stats/`;
     const query = {
       since,
       until,

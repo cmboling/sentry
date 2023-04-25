@@ -4,16 +4,18 @@ from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry.api.base import Endpoint
+from sentry.api.base import Endpoint, region_silo_endpoint
 from sentry.api.bases.project import ProjectPermission
 from sentry.api.paginator import DateTimePaginator
 from sentry.api.serializers import ProjectWithOrganizationSerializer, serialize
 from sentry.auth.superuser import is_active_superuser
 from sentry.db.models.query import in_iexact
-from sentry.models import Project, ProjectPlatform, ProjectStatus, SentryAppInstallationToken
+from sentry.models import Project, ProjectPlatform, ProjectStatus
+from sentry.models.integrations.sentry_app_installation import SentryAppInstallation
 from sentry.search.utils import tokenize_query
 
 
+@region_silo_endpoint
 class ProjectIndexEndpoint(Endpoint):
     permission_classes = (ProjectPermission,)
 
@@ -40,13 +42,13 @@ class ProjectIndexEndpoint(Endpoint):
         if request.auth and not request.user.is_authenticated:
             if hasattr(request.auth, "project"):
                 queryset = queryset.filter(id=request.auth.project_id)
-            elif request.auth.organization is not None:
-                queryset = queryset.filter(organization=request.auth.organization.id)
+            elif request.auth.organization_id is not None:
+                queryset = queryset.filter(organization_id=request.auth.organization_id)
             else:
                 queryset = queryset.none()
         elif not (is_active_superuser(request) and request.GET.get("show") == "all"):
             if request.user.is_sentry_app:
-                queryset = SentryAppInstallationToken.objects.get_projects(request.auth)
+                queryset = SentryAppInstallation.objects.get_projects(request.auth)
                 if isinstance(queryset, EmptyQuerySet):
                     raise AuthenticationFailed("Token not found")
             else:
@@ -69,6 +71,8 @@ class ProjectIndexEndpoint(Endpoint):
                             "project_id"
                         )
                     )
+                elif key == "dsn":
+                    queryset = queryset.filter(key_set__public_key__in=value)
                 elif key == "id":
                     queryset = queryset.filter(id__in=value)
                 else:

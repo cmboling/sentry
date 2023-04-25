@@ -5,12 +5,25 @@ import responses
 
 from sentry.models import Activity, Identity, IdentityProvider, IdentityStatus, Integration
 from sentry.notifications.notifications.activity import AssignedActivityNotification
-from sentry.testutils.cases import SlackActivityNotificationTest
+from sentry.testutils.cases import PerformanceIssueTestCase, SlackActivityNotificationTest
+from sentry.testutils.helpers.notifications import TEST_ISSUE_OCCURRENCE
 from sentry.testutils.helpers.slack import get_attachment, send_notification
 from sentry.types.activity import ActivityType
+from sentry.types.integrations import ExternalProviders
 
 
-class SlackAssignedNotificationTest(SlackActivityNotificationTest):
+class SlackAssignedNotificationTest(SlackActivityNotificationTest, PerformanceIssueTestCase):
+    def create_notification(self, group, notification):
+        return notification(
+            Activity(
+                project=self.project,
+                group=group,
+                user_id=self.user.id,
+                type=ActivityType.ASSIGNED,
+                data={"assignee": self.user.id},
+            )
+        )
+
     @responses.activate
     @mock.patch("sentry.notifications.notify.notify", side_effect=send_notification)
     def test_multiple_identities(self, mock_func):
@@ -44,17 +57,8 @@ class SlackAssignedNotificationTest(SlackActivityNotificationTest):
             content_type="application/json",
         )
 
-        notification = AssignedActivityNotification(
-            Activity(
-                project=self.project,
-                group=self.group,
-                user=self.user,
-                type=ActivityType.ASSIGNED,
-                data={"assignee": self.user.id},
-            )
-        )
         with self.tasks():
-            notification.send()
+            self.create_notification(self.group, AssignedActivityNotification).send()
 
         assert len(responses.calls) >= 2
         data = parse_qs(responses.calls[0].request.body)
@@ -102,17 +106,8 @@ class SlackAssignedNotificationTest(SlackActivityNotificationTest):
             content_type="application/json",
         )
 
-        notification = AssignedActivityNotification(
-            Activity(
-                project=self.project,
-                group=self.group,
-                user=self.user,
-                type=ActivityType.ASSIGNED,
-                data={"assignee": self.user.id},
-            )
-        )
         with self.tasks():
-            notification.send()
+            self.create_notification(self.group, AssignedActivityNotification).send()
 
         assert len(responses.calls) == 1
         data = parse_qs(responses.calls[0].request.body)
@@ -126,21 +121,66 @@ class SlackAssignedNotificationTest(SlackActivityNotificationTest):
         """
         Test that a Slack message is sent with the expected payload when an issue is assigned
         """
-        notification = AssignedActivityNotification(
-            Activity(
-                project=self.project,
-                group=self.group,
-                user=self.user,
-                type=ActivityType.ASSIGNED,
-                data={"assignee": self.user.id},
-            )
-        )
         with self.tasks():
-            notification.send()
+            self.create_notification(self.group, AssignedActivityNotification).send()
         attachment, text = get_attachment()
         assert text == f"Issue assigned to {self.name} by themselves"
         assert attachment["title"] == self.group.title
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=assigned-activity-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/workflow/?referrer=assigned_activity-slack-user|Notification Settings>"
+        )
+
+    @responses.activate
+    @mock.patch(
+        "sentry.eventstore.models.GroupEvent.occurrence",
+        return_value=TEST_ISSUE_OCCURRENCE,
+        new_callable=mock.PropertyMock,
+    )
+    @mock.patch("sentry.notifications.notify.notify", side_effect=send_notification)
+    def test_assignment_generic_issue(self, mock_func, occurrence):
+        """
+        Test that a Slack message is sent with the expected payload when a generic issue type is assigned
+        """
+        event = self.store_event(
+            data={"message": "Hellboy's world", "level": "error"}, project_id=self.project.id
+        )
+        event = event.for_group(event.groups[0])
+
+        with self.tasks():
+            self.create_notification(event.group, AssignedActivityNotification).send()
+        attachment, text = get_attachment()
+        assert text == f"Issue assigned to {self.name} by themselves"
+        self.assert_generic_issue_attachments(
+            attachment, self.project.slug, "assigned_activity-slack-user"
+        )
+
+    @responses.activate
+    @mock.patch("sentry.notifications.notify.notify", side_effect=send_notification)
+    def test_assignment_performance_issue(self, mock_func):
+        """
+        Test that a Slack message is sent with the expected payload when a performance issue is assigned
+        """
+        event = self.create_performance_issue()
+        with self.tasks():
+            self.create_notification(event.group, AssignedActivityNotification).send()
+
+        attachment, text = get_attachment()
+        assert text == f"Issue assigned to {self.name} by themselves"
+        self.assert_performance_issue_attachments(
+            attachment, self.project.slug, "assigned_activity-slack-user"
+        )
+
+    def test_automatic_assignment(self):
+        notification = AssignedActivityNotification(
+            Activity(
+                project=self.project,
+                group=self.group,
+                type=ActivityType.ASSIGNED,
+                data={"assignee": self.user.id},
+            )
+        )
+        assert (
+            notification.get_notification_title(ExternalProviders.SLACK)
+            == f"Issue automatically assigned to {self.user.get_display_name()}"
         )

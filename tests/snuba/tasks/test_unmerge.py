@@ -3,15 +3,13 @@ import hashlib
 import itertools
 import logging
 import uuid
-from collections import OrderedDict
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytz
 from django.utils import timezone
 
-from sentry import eventstream, tagstore
-from sentry.app import tsdb
+from sentry import eventstream, tagstore, tsdb
 from sentry.models import Environment, Group, GroupHash, GroupRelease, Release, UserReport
 from sentry.similarity import _make_index_backend, features
 from sentry.tasks.merge import merge_groups
@@ -216,7 +214,7 @@ class UnmergeTestCase(TestCase, SnubaTestCase):
 
             return event
 
-        events = OrderedDict()
+        events = {}
 
         for event in (
             create_message_event(
@@ -264,9 +262,7 @@ class UnmergeTestCase(TestCase, SnubaTestCase):
 
         assert {
             (gtv.value, gtv.times_seen)
-            for gtv in tagstore.get_group_tag_values(
-                project.id, source.id, production_environment.id, "color"
-            )
+            for gtv in tagstore.get_group_tag_values(source, production_environment.id, "color")
         } == {("red", 6), ("green", 5), ("blue", 5)}
 
         similar_items = features.compare(source)
@@ -322,7 +318,7 @@ class UnmergeTestCase(TestCase, SnubaTestCase):
         assert {
             (gtv.value, gtv.times_seen)
             for gtv in tagstore.get_group_tag_values(
-                project.id, destination.id, production_environment.id, "color"
+                destination, production_environment.id, "color"
             )
         } == {("red", 4), ("green", 3), ("blue", 3)}
 
@@ -350,7 +346,7 @@ class UnmergeTestCase(TestCase, SnubaTestCase):
         assert {
             (gtk.value, gtk.times_seen)
             for gtk in tagstore.get_group_tag_values(
-                project.id, destination.id, production_environment.id, "color"
+                destination, production_environment.id, "color"
             )
         } == {("red", 4), ("blue", 3), ("green", 3)}
 

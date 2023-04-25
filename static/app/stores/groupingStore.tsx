@@ -7,11 +7,10 @@ import {
   addLoadingMessage,
   addSuccessMessage,
 } from 'sentry/actionCreators/indicator';
-import GroupingActions from 'sentry/actions/groupingActions';
 import {Client} from 'sentry/api';
 import {Group, Organization, Project} from 'sentry/types';
 import {Event} from 'sentry/types/event';
-import {makeSafeRefluxStore} from 'sentry/utils/makeSafeRefluxStore';
+import toArray from 'sentry/utils/toArray';
 
 import {CommonStoreDefinition} from './types';
 
@@ -28,15 +27,15 @@ type State = {
   // "Compare" button state
   enableFingerprintCompare: boolean;
   error: boolean;
-  filteredSimilarItems: [];
+  filteredSimilarItems: SimilarItem[];
   loading: boolean;
   mergeDisabled: boolean;
   mergeList: Array<string>;
   mergeState: Map<any, any>;
   // List of fingerprints that belong to issue
-  mergedItems: [];
+  mergedItems: Fingerprint[];
   mergedLinks: string;
-  similarItems: [];
+  similarItems: SimilarItem[];
   similarLinks: string;
   // Disabled state of "Unmerge" button in "Merged" tab (for Issues)
   unmergeDisabled: boolean;
@@ -83,6 +82,20 @@ export type Fingerprint = {
   state?: string;
 };
 
+export type SimilarItem = {
+  isBelowThreshold: boolean;
+  issue: Group;
+  aggregate?: {
+    exception: number;
+    message: number;
+  };
+  score?: Record<string, number | null>;
+  scoresByInterface?: {
+    exception: Array<[string, number | null]>;
+    message: Array<[string, any | null]>;
+  };
+};
+
 type ResponseProcessors = {
   merged: (item: ApiFingerprint[]) => Fingerprint[];
   similar: (data: [Group, ScoreMap]) => {
@@ -116,6 +129,15 @@ type InternalDefinition = {
   api: Client;
 };
 
+type UnmergeResponse = Pick<
+  State,
+  | 'unmergeDisabled'
+  | 'unmergeState'
+  | 'unmergeList'
+  | 'enableFingerprintCompare'
+  | 'unmergeLastCollapsed'
+>;
+
 interface GroupingStoreDefinition
   extends CommonStoreDefinition<State>,
     InternalDefinition {
@@ -130,12 +152,11 @@ interface GroupingStoreDefinition
     }>
   ): Promise<any>;
   onMerge(props: {
+    projectId: Project['id'];
     params?: {
       groupId: Group['id'];
       orgId: Organization['id'];
-      projectId: Project['id'];
     };
-    projectId?: Project['id'];
     query?: string;
   }): undefined | Promise<any>;
   onToggleCollapseFingerprint(fingerprint: string): void;
@@ -147,7 +168,7 @@ interface GroupingStoreDefinition
     errorMessage?: string;
     loadingMessage?: string;
     successMessage?: string;
-  }): void;
+  }): Promise<UnmergeResponse>;
   setStateForId(
     map: Map<string, IdState>,
     idOrIds: Array<string> | string,
@@ -166,21 +187,16 @@ interface GroupingStoreDefinition
     | 'error'
   >;
   triggerMergeState(): Pick<State, 'mergeState' | 'mergeDisabled' | 'mergeList'>;
-  triggerUnmergeState(): Pick<
-    State,
-    | 'unmergeDisabled'
-    | 'unmergeState'
-    | 'unmergeList'
-    | 'enableFingerprintCompare'
-    | 'unmergeLastCollapsed'
-  >;
+  triggerUnmergeState(): UnmergeResponse;
 }
 
 const storeConfig: GroupingStoreDefinition = {
-  listenables: [GroupingActions],
   api: new Client(),
 
   init() {
+    // XXX: Do not use `this.listenTo` in this store. We avoid usage of reflux
+    // listeners due to their leaky nature in tests.
+
     const state = this.getInitialState();
 
     Object.entries(state).forEach(([key, value]) => {
@@ -215,7 +231,7 @@ const storeConfig: GroupingStoreDefinition = {
   },
 
   setStateForId(map, idOrIds, newState) {
-    const ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
+    const ids = toArray(idOrIds);
 
     return ids.map(id => {
       const state = (map.has(id) && map.get(id)) || {};
@@ -437,6 +453,7 @@ const storeConfig: GroupingStoreDefinition = {
       this.mergedItems.size <= 1 ||
       this.unmergeList.size === 0 ||
       this.isAllUnmergedSelected();
+
     this.enableFingerprintCompare = this.unmergeList.size === 2;
 
     this.triggerUnmergeState();
@@ -517,8 +534,8 @@ const storeConfig: GroupingStoreDefinition = {
         this.api,
         {
           orgId,
-          projectId: projectId || params.projectId,
-          itemIds: [...ids, groupId] as Array<number>,
+          projectId,
+          itemIds: [...ids, groupId],
           query,
         },
         {
@@ -621,9 +638,28 @@ const storeConfig: GroupingStoreDefinition = {
   },
 
   getState(): State {
-    return this.state;
+    return {
+      ...pick(this, [
+        'enableFingerprintCompare',
+        'error',
+        'filteredSimilarItems',
+        'loading',
+        'mergeDisabled',
+        'mergeList',
+        'mergeState',
+        'mergeState',
+        'mergedItems',
+        'mergedLinks',
+        'similarItems',
+        'similarLinks',
+        'unmergeDisabled',
+        'unmergeLastCollapsed',
+        'unmergeList',
+        'unmergeState',
+      ]),
+    };
   },
 };
 
-const GroupingStore = createStore(makeSafeRefluxStore(storeConfig));
+const GroupingStore = createStore(storeConfig);
 export default GroupingStore;

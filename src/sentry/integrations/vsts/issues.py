@@ -1,4 +1,3 @@
-from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
 from django.urls import reverse
@@ -8,6 +7,7 @@ from rest_framework.response import Response
 
 from sentry.integrations.mixins import IssueSyncMixin, ResolveSyncAction
 from sentry.models import Activity, IntegrationExternalProject, OrganizationIntegration, User
+from sentry.services.hybrid_cloud.user import RpcUser
 from sentry.shared_integrations.exceptions import ApiError, ApiUnauthorized
 
 if TYPE_CHECKING:
@@ -79,8 +79,7 @@ class VstsIssueSync(IssueSyncMixin):  # type: ignore
         except (ApiError, ApiUnauthorized, KeyError) as e:
             raise self.raise_error(e)
 
-        # we want to maintain ordering of the items
-        item_type_map = OrderedDict()
+        item_type_map = {}
         for item in item_categories:
             for item_type_object in item["workItemTypes"]:
                 # the type is the last part of the url
@@ -211,7 +210,7 @@ class VstsIssueSync(IssueSyncMixin):  # type: ignore
     def sync_assignee_outbound(
         self,
         external_issue: "ExternalIssue",
-        user: Optional["User"],
+        user: Optional[RpcUser],
         assign: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -219,7 +218,7 @@ class VstsIssueSync(IssueSyncMixin):  # type: ignore
         assignee = None
 
         if user and assign is True:
-            sentry_emails = [email.email.lower() for email in user.get_verified_emails()]
+            sentry_emails = [email.lower() for email in user.emails]
             continuation_token = None
             while True:
                 vsts_users = client.get_users(self.model.name, continuation_token)

@@ -2,26 +2,27 @@ import {Fragment} from 'react';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
 import {LocationDescriptorObject} from 'history';
+import isEqual from 'lodash/isEqual';
 
 import AsyncComponent from 'sentry/components/asyncComponent';
 import {DateTimeObject, getSeriesApiInterval} from 'sentry/components/charts/utils';
 import SortLink, {Alignments, Directions} from 'sentry/components/gridEditable/sortLink';
 import Pagination from 'sentry/components/pagination';
 import SearchBar from 'sentry/components/searchBar';
-import {DEFAULT_STATS_PERIOD} from 'sentry/constants';
+import {DATA_CATEGORY_INFO, DEFAULT_STATS_PERIOD} from 'sentry/constants';
+import {ALL_ACCESS_PROJECTS} from 'sentry/constants/pageFilters';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {DataCategory, Organization, Project} from 'sentry/types';
+import {space} from 'sentry/styles/space';
+import {DataCategoryInfo, Organization, Outcome, Project} from 'sentry/types';
 import withProjects from 'sentry/utils/withProjects';
 
-import {Outcome, UsageSeries} from './types';
+import {UsageSeries} from './types';
 import UsageTable, {CellProject, CellStat, TableStat} from './usageTable';
 
 type Props = {
-  dataCategory: DataCategory;
+  dataCategory: DataCategoryInfo['plural'];
   dataCategoryName: string;
   dataDatetime: DateTimeObject;
-
   getNextLocations: (project: Project) => Record<string, LocationDescriptorObject>;
   handleChangeState: (
     nextState: {
@@ -31,8 +32,10 @@ type Props = {
     },
     options?: {willUpdateRouter?: boolean}
   ) => LocationDescriptorObject;
+  isSingleProject: boolean;
   loadingProjects: boolean;
   organization: Organization;
+  projectIds: number[];
   projects: Project[];
   tableCursor?: string;
   tableQuery?: string;
@@ -57,15 +60,24 @@ class UsageStatsProjects extends AsyncComponent<Props, State> {
   static MAX_ROWS_USAGE_TABLE = 25;
 
   componentDidUpdate(prevProps: Props) {
-    const {dataDatetime: prevDateTime, dataCategory: prevDataCategory} = prevProps;
-    const {dataDatetime: currDateTime, dataCategory: currDataCategory} = this.props;
+    const {
+      dataDatetime: prevDateTime,
+      dataCategory: prevDataCategory,
+      projectIds: prevProjectIds,
+    } = prevProps;
+    const {
+      dataDatetime: currDateTime,
+      dataCategory: currDataCategory,
+      projectIds: currProjectIds,
+    } = this.props;
 
     if (
       prevDateTime.start !== currDateTime.start ||
       prevDateTime.end !== currDateTime.end ||
       prevDateTime.period !== currDateTime.period ||
       prevDateTime.utc !== currDateTime.utc ||
-      currDataCategory !== prevDataCategory
+      prevDataCategory !== currDataCategory ||
+      !isEqual(prevProjectIds, currProjectIds)
     ) {
       this.reloadData();
     }
@@ -81,7 +93,7 @@ class UsageStatsProjects extends AsyncComponent<Props, State> {
   }
 
   get endpointQuery() {
-    const {dataDatetime, dataCategory} = this.props;
+    const {dataDatetime, dataCategory, projectIds, isSingleProject} = this.props;
 
     const queryDatetime =
       dataDatetime.start && dataDatetime.end
@@ -100,7 +112,8 @@ class UsageStatsProjects extends AsyncComponent<Props, State> {
       interval: getSeriesApiInterval(dataDatetime),
       groupBy: ['outcome', 'project'],
       field: ['sum(quantity)'],
-      project: '-1', // get all project user has access to
+      // If only one project is in selected, display the entire project list
+      project: isSingleProject ? [ALL_ACCESS_PROJECTS] : projectIds,
       category: dataCategory.slice(0, -1), // backend is singular
     };
   }
@@ -172,14 +185,27 @@ class UsageStatsProjects extends AsyncComponent<Props, State> {
     }"; cursor="0:${nextOffset}:0"`;
   }
 
+  get projectSelectionFilter(): (p: Project) => boolean {
+    const {projectIds, isSingleProject} = this.props;
+    const selectedProjects = new Set(projectIds.map(id => `${id}`));
+
+    // If 'My Projects' or 'All Projects' are selected
+    return selectedProjects.size === 0 || selectedProjects.has('-1') || isSingleProject
+      ? _p => true
+      : p => selectedProjects.has(p.id);
+  }
+
   /**
    * Filter projects if there's a query
    */
   get filteredProjects() {
     const {projects, tableQuery} = this.props;
     return tableQuery
-      ? projects.filter(p => p.slug.includes(tableQuery) && p.hasAccess)
-      : projects.filter(p => p.hasAccess);
+      ? projects.filter(
+          p =>
+            p.slug.includes(tableQuery) && p.hasAccess && this.projectSelectionFilter(p)
+        )
+      : projects.filter(p => p.hasAccess && this.projectSelectionFilter(p));
   }
 
   get tableHeader() {
@@ -251,7 +277,7 @@ class UsageStatsProjects extends AsyncComponent<Props, State> {
     const {performance, projectDetail, settings} = getNextLocations(project);
 
     if (
-      dataCategory === DataCategory.TRANSACTIONS &&
+      dataCategory === DATA_CATEGORY_INFO.transaction.plural &&
       organization.features.includes('performance-view')
     ) {
       return {
@@ -382,7 +408,7 @@ class UsageStatsProjects extends AsyncComponent<Props, State> {
     } catch (err) {
       Sentry.withScope(scope => {
         scope.setContext('query', this.endpointQuery);
-        scope.setContext('body', projectStats);
+        scope.setContext('body', {...projectStats});
         Sentry.captureException(err);
       });
 
@@ -395,21 +421,27 @@ class UsageStatsProjects extends AsyncComponent<Props, State> {
 
   renderComponent() {
     const {error, errors, loading} = this.state;
-    const {dataCategory, loadingProjects, tableQuery} = this.props;
+    const {dataCategory, loadingProjects, tableQuery, isSingleProject} = this.props;
     const {headers, tableStats} = this.tableData;
 
     return (
       <Fragment>
-        <Container>
-          <SearchBar
-            defaultQuery=""
-            query={tableQuery}
-            placeholder={t('Filter your projects')}
-            onSearch={this.handleSearch}
-          />
-        </Container>
-
-        <Container>
+        {isSingleProject && (
+          <PanelHeading>
+            <Title>{t('All Projects')}</Title>
+          </PanelHeading>
+        )}
+        {!isSingleProject && (
+          <Container>
+            <SearchBar
+              defaultQuery=""
+              query={tableQuery}
+              placeholder={t('Filter your projects')}
+              onSearch={this.handleSearch}
+            />
+          </Container>
+        )}
+        <Container data-test-id="usage-stats-table">
           <UsageTable
             isLoading={loading || loadingProjects}
             isError={error}
@@ -430,4 +462,19 @@ export default withProjects(UsageStatsProjects);
 
 const Container = styled('div')`
   margin-bottom: ${space(2)};
+`;
+
+const Title = styled('div')`
+  font-weight: bold;
+  font-size: ${p => p.theme.fontSizeLarge};
+  color: ${p => p.theme.gray400};
+  display: flex;
+  flex: 1;
+  align-items: center;
+`;
+
+const PanelHeading = styled('div')`
+  display: flex;
+  margin-bottom: ${space(2)};
+  align-items: center;
 `;

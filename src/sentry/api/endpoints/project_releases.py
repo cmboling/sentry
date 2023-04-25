@@ -1,22 +1,30 @@
+from __future__ import annotations
+
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import analytics
-from sentry.api.base import EnvironmentMixin
+from sentry.api.base import EnvironmentMixin, region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint, ProjectReleasePermission
 from sentry.api.paginator import OffsetPaginator
 from sentry.api.serializers import serialize
 from sentry.api.serializers.rest_framework import ReleaseWithVersionSerializer
 from sentry.models import Activity, Environment, Release, ReleaseStatus
 from sentry.plugins.interfaces.releasehook import ReleaseHook
+from sentry.ratelimits.config import SENTRY_RATELIMITER_GROUP_DEFAULTS, RateLimitConfig
 from sentry.signals import release_created
+from sentry.types.activity import ActivityType
 from sentry.utils.sdk import bind_organization_context, configure_scope
 
 
+@region_silo_endpoint
 class ProjectReleasesEndpoint(ProjectEndpoint, EnvironmentMixin):
     permission_classes = (ProjectReleasePermission,)
+    rate_limits = RateLimitConfig(
+        group="CLI", limit_overrides={"GET": SENTRY_RATELIMITER_GROUP_DEFAULTS["default"]}
+    )
 
     def get(self, request: Request, project) -> Response:
         """
@@ -39,14 +47,10 @@ class ProjectReleasesEndpoint(ProjectEndpoint, EnvironmentMixin):
             queryset = Release.objects.none()
             environment = None
         else:
-            queryset = (
-                Release.objects.filter(
-                    projects=project,
-                    organization_id=project.organization_id,
-                )
-                .filter(Q(status=ReleaseStatus.OPEN) | Q(status=None))
-                .select_related("owner")
-            )
+            queryset = Release.objects.filter(
+                projects=project,
+                organization_id=project.organization_id,
+            ).filter(Q(status=ReleaseStatus.OPEN) | Q(status=None))
             if environment is not None:
                 queryset = queryset.filter(
                     releaseprojectenvironment__project=project,
@@ -114,6 +118,10 @@ class ProjectReleasesEndpoint(ProjectEndpoint, EnvironmentMixin):
 
                 # release creation is idempotent to simplify user
                 # experiences
+                owner_id: int | None = None
+                if owner := result.get("owner"):
+                    owner_id = owner.id
+
                 try:
                     with transaction.atomic():
                         release, created = (
@@ -122,9 +130,10 @@ class ProjectReleasesEndpoint(ProjectEndpoint, EnvironmentMixin):
                                 version=result["version"],
                                 ref=result.get("ref"),
                                 url=result.get("url"),
-                                owner=result.get("owner"),
+                                owner_id=owner_id,
                                 date_released=result.get("dateReleased"),
                                 status=new_status or ReleaseStatus.OPEN,
+                                user_agent=request.META.get("HTTP_USER_AGENT", ""),
                             ),
                             True,
                         )
@@ -154,7 +163,7 @@ class ProjectReleasesEndpoint(ProjectEndpoint, EnvironmentMixin):
 
                 if not was_released and release.date_released:
                     Activity.objects.create(
-                        type=Activity.RELEASE,
+                        type=ActivityType.RELEASE.value,
                         project=project,
                         ident=Activity.get_version_ident(result["version"]),
                         data={"version": result["version"]},
@@ -175,7 +184,7 @@ class ProjectReleasesEndpoint(ProjectEndpoint, EnvironmentMixin):
                     user_id=request.user.id if request.user and request.user.id else None,
                     organization_id=project.organization_id,
                     project_ids=[project.id],
-                    user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                    user_agent=request.META.get("HTTP_USER_AGENT", "")[:256],
                     created_status=status,
                 )
                 scope.set_tag("success_status", status)

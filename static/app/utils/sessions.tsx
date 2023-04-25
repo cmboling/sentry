@@ -1,3 +1,4 @@
+import {Theme} from '@emotion/react';
 import compact from 'lodash/compact';
 import mean from 'lodash/mean';
 import moment from 'moment';
@@ -8,12 +9,11 @@ import {
   SIX_HOURS,
   SIXTY_DAYS,
   THIRTY_DAYS,
+  TWENTY_FOUR_HOURS,
 } from 'sentry/components/charts/utils';
-import {IconCheckmark, IconFire, IconWarning} from 'sentry/icons';
-import {SessionApiResponse, SessionField, SessionStatus} from 'sentry/types';
+import {SessionApiResponse, SessionFieldWithOperation, SessionStatus} from 'sentry/types';
 import {SeriesDataUnit} from 'sentry/types/echarts';
 import {defined, percent} from 'sentry/utils';
-import {IconSize, Theme} from 'sentry/utils/theme';
 import {getCrashFreePercent, getSessionStatusPercent} from 'sentry/views/releases/utils';
 import {sessionTerm} from 'sentry/views/releases/utils/sessionTerm';
 
@@ -22,16 +22,16 @@ import {sessionTerm} from 'sentry/views/releases/utils/sessionTerm';
  */
 export const MINUTES_THRESHOLD_TO_DISPLAY_SECONDS = 10;
 
-const CRASH_FREE_DANGER_THRESHOLD = 98;
-const CRASH_FREE_WARNING_THRESHOLD = 99.5;
-
-export function getCount(groups: SessionApiResponse['groups'] = [], field: SessionField) {
+export function getCount(
+  groups: SessionApiResponse['groups'] = [],
+  field: SessionFieldWithOperation
+) {
   return groups.reduce((acc, group) => acc + group.totals[field], 0);
 }
 
 export function getCountAtIndex(
   groups: SessionApiResponse['groups'] = [],
-  field: SessionField,
+  field: SessionFieldWithOperation,
   index: number
 ) {
   return groups.reduce((acc, group) => acc + group.series[field][index], 0);
@@ -39,7 +39,7 @@ export function getCountAtIndex(
 
 export function getCrashFreeRate(
   groups: SessionApiResponse['groups'] = [],
-  field: SessionField
+  field: SessionFieldWithOperation
 ) {
   const crashedRate = getSessionStatusRate(groups, field, SessionStatus.CRASHED);
 
@@ -48,7 +48,7 @@ export function getCrashFreeRate(
 
 export function getSeriesAverage(
   groups: SessionApiResponse['groups'] = [],
-  field: SessionField
+  field: SessionFieldWithOperation
 ) {
   const totalCount = getCount(groups, field);
 
@@ -61,7 +61,7 @@ export function getSeriesAverage(
 
 export function getSeriesSum(
   groups: SessionApiResponse['groups'] = [],
-  field: SessionField,
+  field: SessionFieldWithOperation,
   intervals: SessionApiResponse['intervals'] = []
 ) {
   const dataPointsSums: number[] = Array(intervals.length).fill(0);
@@ -76,7 +76,7 @@ export function getSeriesSum(
 
 export function getSessionStatusRate(
   groups: SessionApiResponse['groups'] = [],
-  field: SessionField,
+  field: SessionFieldWithOperation,
   status: SessionStatus
 ) {
   const totalCount = getCount(groups, field);
@@ -94,18 +94,18 @@ export function getSessionStatusRate(
 export function getCrashFreeRateSeries(
   groups: SessionApiResponse['groups'] = [],
   intervals: SessionApiResponse['intervals'] = [],
-  field: SessionField
+  field: SessionFieldWithOperation
 ): SeriesDataUnit[] {
   return compact(
     intervals.map((interval, i) => {
       const intervalTotalSessions = groups.reduce(
-        (acc, group) => acc + group.series[field][i],
+        (acc, group) => acc + (group.series[field]?.[i] ?? 0),
         0
       );
 
       const intervalCrashedSessions =
         groups.find(group => group.by['session.status'] === SessionStatus.CRASHED)
-          ?.series[field][i] ?? 0;
+          ?.series[field]?.[i] ?? 0;
 
       const crashedSessionsPercent = percent(
         intervalCrashedSessions,
@@ -127,7 +127,7 @@ export function getCrashFreeRateSeries(
 export function getSessionStatusRateSeries(
   groups: SessionApiResponse['groups'] = [],
   intervals: SessionApiResponse['intervals'] = [],
-  field: SessionField,
+  field: SessionFieldWithOperation,
   status: SessionStatus
 ): SeriesDataUnit[] {
   return compact(
@@ -158,36 +158,11 @@ export function getSessionStatusRateSeries(
   );
 }
 
-export function getSessionP50Series(
-  groups: SessionApiResponse['groups'] = [],
-  intervals: SessionApiResponse['intervals'] = [],
-  field: SessionField,
-  valueFormatter?: (value: number) => number
-): SeriesDataUnit[] {
-  return compact(
-    intervals.map((interval, i) => {
-      const meanValue = mean(
-        groups.map(group => group.series[field][i]).filter(v => !!v)
-      );
-
-      if (!meanValue) {
-        return null;
-      }
-
-      return {
-        name: interval,
-        value:
-          typeof valueFormatter === 'function' ? valueFormatter(meanValue) : meanValue,
-      };
-    })
-  );
-}
-
 export function getAdoptionSeries(
   releaseGroups: SessionApiResponse['groups'] = [],
   allGroups: SessionApiResponse['groups'] = [],
   intervals: SessionApiResponse['intervals'] = [],
-  field: SessionField
+  field: SessionFieldWithOperation
 ): SeriesDataUnit[] {
   return intervals.map((interval, i) => {
     const intervalReleaseSessions = releaseGroups.reduce(
@@ -209,7 +184,7 @@ export function getAdoptionSeries(
 }
 
 export function getCountSeries(
-  field: SessionField,
+  field: SessionFieldWithOperation,
   group?: SessionApiResponse['groups'][0],
   intervals: SessionApiResponse['intervals'] = []
 ): SeriesDataUnit[] {
@@ -278,18 +253,23 @@ export function initSessionsChart(theme: Theme) {
 }
 
 type GetSessionsIntervalOptions = {
+  dailyInterval?: boolean;
   highFidelity?: boolean;
 };
 
 export function getSessionsInterval(
   datetimeObj: DateTimeObject,
-  {highFidelity}: GetSessionsIntervalOptions = {}
+  {highFidelity, dailyInterval}: GetSessionsIntervalOptions = {}
 ) {
   const diffInMinutes = getDiffInMinutes(datetimeObj);
 
   if (moment(datetimeObj.start).isSameOrBefore(moment().subtract(30, 'days'))) {
     // we cannot use sub-hour session resolution on buckets older than 30 days
     highFidelity = false;
+  }
+
+  if (dailyInterval === true && diffInMinutes > TWENTY_FOUR_HOURS) {
+    return '1d';
   }
 
   if (diffInMinutes >= SIXTY_DAYS) {
@@ -380,16 +360,4 @@ export function filterSessionsInTimeWindow(
     intervals,
     groups,
   };
-}
-
-export function getCrashFreeIcon(crashFreePercent: number, iconSize: IconSize = 'sm') {
-  if (crashFreePercent < CRASH_FREE_DANGER_THRESHOLD) {
-    return <IconFire color="red300" size={iconSize} />;
-  }
-
-  if (crashFreePercent < CRASH_FREE_WARNING_THRESHOLD) {
-    return <IconWarning color="yellow300" size={iconSize} />;
-  }
-
-  return <IconCheckmark isCircled color="green300" size={iconSize} />;
 }

@@ -1,9 +1,11 @@
 from django.test.client import RequestFactory
 from django.urls import reverse
 
-from tests.apidocs.util import APIDocsTestCase
+from fixtures.apidocs_test_case import APIDocsTestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class ProjectReleaseFileDetailsDocsTest(APIDocsTestCase):
     def setUp(self):
         self.login_as(user=self.user)

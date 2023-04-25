@@ -1,14 +1,15 @@
-import type Alert from 'sentry/components/alert';
-import type {Field} from 'sentry/components/forms/type';
+import type {Alert} from 'sentry/components/alert';
+import type {Field} from 'sentry/components/forms/types';
 import type {PlatformKey} from 'sentry/data/platformCategories';
 import type {
   DISABLED as DISABLED_STATUS,
   INSTALLED,
   NOT_INSTALLED,
   PENDING,
-} from 'sentry/views/organizationIntegrations/constants';
+} from 'sentry/views/settings/organizationIntegrations/constants';
 
-import type {Avatar, Choices, ObjectStatus, Scope} from './core';
+import type {Avatar, Choice, Choices, ObjectStatus, Scope} from './core';
+import type {ParsedOwnershipRule} from './group';
 import type {BaseRelease} from './release';
 import type {User} from './user';
 
@@ -81,13 +82,27 @@ export type Repository = {
   url: string;
 };
 
+/**
+ * Integration Repositories from OrganizationIntegrationReposEndpoint
+ */
+export type IntegrationRepository = {
+  /**
+   * ex - getsentry/sentry
+   */
+  identifier: string;
+  name: string;
+  defaultBranch?: string | null;
+};
+
 export type Commit = {
   dateCreated: string;
   id: string;
   message: string | null;
   releases: BaseRelease[];
   author?: User;
+  pullRequest?: PullRequest | null;
   repository?: Repository;
+  suspectCommitType?: string;
 };
 
 export type Committer = {
@@ -142,6 +157,41 @@ export type SentryAppSchemaStacktraceLink = {
   url: string;
   params?: Array<string>;
 };
+
+export enum Coverage {
+  NOT_APPLICABLE = -1,
+  COVERED = 0,
+  NOT_COVERED = 1,
+  PARTIAL = 2,
+}
+export type LineCoverage = [lineNo: number, coverage: Coverage];
+
+export enum CodecovStatusCode {
+  COVERAGE_EXISTS = 200,
+  NO_INTEGRATION = 404,
+  NO_COVERAGE_DATA = 400,
+}
+
+export interface CodecovResponse {
+  status: CodecovStatusCode;
+  attemptedUrl?: string;
+  coverageUrl?: string;
+  lineCoverage?: LineCoverage[];
+}
+
+export type StacktraceLinkResult = {
+  integrations: Integration[];
+  attemptedUrl?: string;
+  codecov?: CodecovResponse;
+  config?: RepositoryProjectPathConfigWithIntegration;
+  error?: StacktraceErrorMessage;
+  sourceUrl?: string;
+};
+
+export type StacktraceErrorMessage =
+  | 'file_not_found'
+  | 'stack_root_mismatch'
+  | 'integration_link_forbidden';
 
 export type SentryAppSchemaElement =
   | SentryAppSchemaIssueLink
@@ -208,6 +258,7 @@ export type SentryAppComponent = {
   };
   type: 'issue-link' | 'alert-rule-action' | 'issue-media' | 'stacktrace-link';
   uuid: string;
+  error?: boolean;
 };
 
 export type SentryAppWebhookRequest = {
@@ -274,16 +325,16 @@ type IntegrationAspects = {
   removal_dialog?: IntegrationDialog;
 };
 
-type BaseIntegrationProvider = {
+interface BaseIntegrationProvider {
   canAdd: boolean;
   canDisable: boolean;
   features: string[];
   key: string;
   name: string;
   slug: string;
-};
+}
 
-export type IntegrationProvider = BaseIntegrationProvider & {
+export interface IntegrationProvider extends BaseIntegrationProvider {
   metadata: {
     aspects: IntegrationAspects;
     author: string;
@@ -294,13 +345,13 @@ export type IntegrationProvider = BaseIntegrationProvider & {
     source_url: string;
   };
   setupDialog: {height: number; url: string; width: number};
-};
+}
 
-type OrganizationIntegrationProvider = BaseIntegrationProvider & {
+export interface OrganizationIntegrationProvider extends BaseIntegrationProvider {
   aspects: IntegrationAspects;
-};
+}
 
-export type Integration = {
+export interface Integration {
   accountType: string;
   domainName: string;
   gracePeriodEnd: string;
@@ -319,7 +370,7 @@ export type Integration = {
     };
   };
   scopes?: string[];
-};
+}
 
 type ConfigData = {
   installationType?: string;
@@ -342,10 +393,10 @@ export type OrganizationIntegration = {
 };
 
 // we include the configOrganization when we need it
-export type IntegrationWithConfig = Integration & {
+export interface IntegrationWithConfig extends Integration {
   configData: ConfigData;
   configOrganization: Field[];
-};
+}
 
 /**
  * Integration & External issue links
@@ -359,9 +410,9 @@ export type IntegrationExternalIssue = {
   url: string;
 };
 
-export type GroupIntegration = Integration & {
+export interface GroupIntegration extends Integration {
   externalIssues: IntegrationExternalIssue[];
-};
+}
 
 export type PlatformExternalIssue = {
   displayName: string;
@@ -379,7 +430,7 @@ export type PlatformExternalIssue = {
 export type IssueConfigField = Field & {
   name: string;
   choices?: Choices;
-  default?: string | number;
+  default?: string | number | Choice;
   multiple?: boolean;
   url?: string;
 };
@@ -468,6 +519,11 @@ export type ServiceHook = {
  */
 export type CodeOwner = {
   codeMappingId: string;
+  /**
+   * Link to the CODEOWNERS file in source control
+   * 'unknown' if the api fails to fetch the file
+   */
+  codeOwnersUrl: string | 'unknown';
   dateCreated: string;
   dateUpdated: string;
   errors: {
@@ -482,6 +538,7 @@ export type CodeOwner = {
   raw: string;
   codeMapping?: RepositoryProjectPathConfig;
   ownershipSyntax?: string;
+  schema?: {rules: ParsedOwnershipRule[]; version: number};
 };
 
 export type CodeownersFile = {
@@ -497,7 +554,7 @@ export type FilesByRepository = {
   };
 };
 
-type BaseRepositoryProjectPathConfig = {
+interface BaseRepositoryProjectPathConfig {
   id: string;
   projectId: string;
   projectSlug: string;
@@ -506,18 +563,18 @@ type BaseRepositoryProjectPathConfig = {
   sourceRoot: string;
   stackRoot: string;
   defaultBranch?: string;
-};
+}
 
-export type RepositoryProjectPathConfig = BaseRepositoryProjectPathConfig & {
+export interface RepositoryProjectPathConfig extends BaseRepositoryProjectPathConfig {
   integrationId: string | null;
   provider: BaseIntegrationProvider | null;
-};
+}
 
-export type RepositoryProjectPathConfigWithIntegration =
-  BaseRepositoryProjectPathConfig & {
-    integrationId: string;
-    provider: BaseIntegrationProvider;
-  };
+export interface RepositoryProjectPathConfigWithIntegration
+  extends BaseRepositoryProjectPathConfig {
+  integrationId: string;
+  provider: BaseIntegrationProvider;
+}
 
 export type ServerlessFunction = {
   enabled: boolean;
@@ -525,4 +582,17 @@ export type ServerlessFunction = {
   outOfDate: boolean;
   runtime: string;
   version: number;
+};
+
+export type SentryFunction = {
+  author: string;
+  code: string;
+  name: string;
+  slug: string;
+  env_variables?: Array<{
+    name: string;
+    value: string;
+  }>;
+  events?: string[];
+  overview?: string;
 };

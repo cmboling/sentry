@@ -4,7 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry.api.base import Endpoint, SessionAuthentication
+from sentry.api.base import Endpoint, SessionAuthentication, control_silo_endpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.serializers import serialize
 from sentry.api.serializers.rest_framework import ListField
@@ -30,6 +30,7 @@ class ApiApplicationSerializer(serializers.Serializer):
     )
 
 
+@control_silo_endpoint
 class ApiApplicationDetailsEndpoint(Endpoint):
     authentication_classes = (SessionAuthentication,)
     permission_classes = (IsAuthenticated,)
@@ -37,7 +38,7 @@ class ApiApplicationDetailsEndpoint(Endpoint):
     def get(self, request: Request, app_id) -> Response:
         try:
             instance = ApiApplication.objects.get(
-                owner=request.user, client_id=app_id, status=ApiApplicationStatus.active
+                owner_id=request.user.id, client_id=app_id, status=ApiApplicationStatus.active
             )
         except ApiApplication.DoesNotExist:
             raise ResourceDoesNotExist
@@ -47,7 +48,7 @@ class ApiApplicationDetailsEndpoint(Endpoint):
     def put(self, request: Request, app_id) -> Response:
         try:
             instance = ApiApplication.objects.get(
-                owner=request.user, client_id=app_id, status=ApiApplicationStatus.active
+                owner_id=request.user.id, client_id=app_id, status=ApiApplicationStatus.active
             )
         except ApiApplication.DoesNotExist:
             raise ResourceDoesNotExist
@@ -77,7 +78,7 @@ class ApiApplicationDetailsEndpoint(Endpoint):
     def delete(self, request: Request, app_id) -> Response:
         try:
             instance = ApiApplication.objects.get(
-                owner=request.user, client_id=app_id, status=ApiApplicationStatus.active
+                owner_id=request.user.id, client_id=app_id, status=ApiApplicationStatus.active
             )
         except ApiApplication.DoesNotExist:
             raise ResourceDoesNotExist

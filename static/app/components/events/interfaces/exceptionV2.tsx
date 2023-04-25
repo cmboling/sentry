@@ -1,14 +1,11 @@
-import styled from '@emotion/styled';
-
 import {t} from 'sentry/locale';
 import {ExceptionType, Group, PlatformType, Project} from 'sentry/types';
-import {Event} from 'sentry/types/event';
+import {EntryType, Event} from 'sentry/types/event';
 import {STACK_TYPE, STACK_VIEW} from 'sentry/types/stacktrace';
 
-import TraceEventDataSection from '../traceEventDataSection';
-import {DisplayOption} from '../traceEventDataSection/displayOptions';
+import {PermalinkTitle, TraceEventDataSection} from '../traceEventDataSection';
 
-import CrashContentException from './crashContent/exception';
+import {ExceptionContent} from './crashContent/exception';
 import NoStackTraceMessage from './noStackTraceMessage';
 import {isStacktraceNewestFirst} from './utils';
 
@@ -16,21 +13,19 @@ type Props = {
   data: ExceptionType;
   event: Event;
   hasHierarchicalGrouping: boolean;
-  projectId: Project['id'];
-  type: string;
+  projectSlug: Project['slug'];
   groupingCurrentLevel?: Group['metadata']['current_level'];
   hideGuide?: boolean;
 };
 
-function Exception({
+export function ExceptionV2({
   event,
-  type,
   data,
-  projectId,
+  projectSlug,
   hasHierarchicalGrouping,
   groupingCurrentLevel,
 }: Props) {
-  const eventHasThreads = !!event.entries.some(entry => entry.type === 'threads');
+  const eventHasThreads = !!event.entries.some(entry => entry.type === EntryType.THREADS);
 
   /* in case there are threads in the event data, we don't render the
    exception block.  Instead the exception is contained within the
@@ -38,6 +33,12 @@ function Exception({
   if (eventHasThreads) {
     return null;
   }
+
+  const entryIndex = event.entries.findIndex(
+    eventEntry => eventEntry.type === EntryType.EXCEPTION
+  );
+
+  const meta = event._meta?.entries?.[entryIndex]?.data?.values;
 
   function getPlatform(): PlatformType {
     const dataValue = data.values?.find(
@@ -60,10 +61,10 @@ function Exception({
 
   return (
     <TraceEventDataSection
-      title={<Title>{t('Exception')}</Title>}
-      type={type}
+      title={<PermalinkTitle>{t('Stack Trace')}</PermalinkTitle>}
+      type={EntryType.EXCEPTION}
       stackType={STACK_TYPE.ORIGINAL}
-      projectId={projectId}
+      projectSlug={projectSlug}
       eventId={event.id}
       recentFirst={isStacktraceNewestFirst()}
       fullStackTrace={!data.hasSystemFrames}
@@ -99,42 +100,34 @@ function Exception({
         !!data.values?.some(value => (value.stacktrace?.frames ?? []).length > 1)
       }
       stackTraceNotFound={stackTraceNotFound}
-      showPermalink
       wrapTitle={false}
     >
-      {({raw, recentFirst, activeDisplayOptions}) =>
+      {({recentFirst, display, fullStackTrace}) =>
         stackTraceNotFound ? (
           <NoStackTraceMessage />
         ) : (
-          <CrashContentException
+          <ExceptionContent
             stackType={
-              activeDisplayOptions.includes(DisplayOption.MINIFIED)
-                ? STACK_TYPE.MINIFIED
-                : STACK_TYPE.ORIGINAL
+              display.includes('minified') ? STACK_TYPE.MINIFIED : STACK_TYPE.ORIGINAL
             }
             stackView={
-              raw
+              display.includes('raw-stack-trace')
                 ? STACK_VIEW.RAW
-                : activeDisplayOptions.includes(DisplayOption.FULL_STACK_TRACE)
+                : fullStackTrace
                 ? STACK_VIEW.FULL
                 : STACK_VIEW.APP
             }
-            projectId={projectId}
+            projectSlug={projectSlug}
             newestFirst={recentFirst}
             event={event}
             platform={platform}
             values={data.values}
             groupingCurrentLevel={groupingCurrentLevel}
             hasHierarchicalGrouping={hasHierarchicalGrouping}
+            meta={meta}
           />
         )
       }
     </TraceEventDataSection>
   );
 }
-
-export default Exception;
-
-const Title = styled('h3')`
-  margin-bottom: 0;
-`;

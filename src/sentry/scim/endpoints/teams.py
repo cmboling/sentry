@@ -10,6 +10,8 @@ from rest_framework.exceptions import ParseError
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry import audit_log
+from sentry.api.base import region_silo_endpoint
 from sentry.api.endpoints.organization_teams import OrganizationTeamsEndpoint
 from sentry.api.endpoints.team_details import TeamDetailsEndpoint, TeamSerializer
 from sentry.api.exceptions import ResourceDoesNotExist
@@ -26,13 +28,8 @@ from sentry.apidocs.constants import (
     RESPONSE_UNAUTHORIZED,
 )
 from sentry.apidocs.parameters import GLOBAL_PARAMS, SCIM_PARAMS
-from sentry.models import (
-    AuditLogEntryEvent,
-    OrganizationMember,
-    OrganizationMemberTeam,
-    Team,
-    TeamStatus,
-)
+from sentry.models import OrganizationMember, OrganizationMemberTeam, Team, TeamStatus
+from sentry.utils import json
 from sentry.utils.cursors import SCIMCursor
 
 from .constants import (
@@ -46,6 +43,7 @@ from .constants import (
 )
 from .utils import (
     OrganizationSCIMTeamPermission,
+    SCIMApiError,
     SCIMEndpoint,
     SCIMFilterError,
     SCIMQueryParamSerializer,
@@ -57,10 +55,17 @@ delete_logger = logging.getLogger("sentry.deletions.api")
 
 
 class SCIMTeamPatchOperationSerializer(serializers.Serializer):
-    op = serializers.ChoiceField(choices=("replace", "remove", "add"), required=True)
+    op = serializers.CharField(required=True)
     value = serializers.ListField(serializers.DictField(), allow_empty=True)
+    path = serializers.CharField(required=False)
     # TODO: define exact schema for value
     # TODO: actually use these in the patch request for validation
+
+    def validate_op(self, value: str) -> str:
+        value = value.lower()
+        if value in [TeamPatchOps.REPLACE, TeamPatchOps.REMOVE, TeamPatchOps.ADD]:
+            return value
+        raise serializers.ValidationError(f'"{value}" is not a valid choice')
 
 
 class SCIMTeamPatchRequestSerializer(serializers.Serializer):
@@ -76,6 +81,8 @@ def _team_expand(excluded_attributes):
     return None if "members" in excluded_attributes else ["members"]
 
 
+@extend_schema(tags=["SCIM"])
+@region_silo_endpoint
 class OrganizationSCIMTeamIndex(SCIMEndpoint, OrganizationTeamsEndpoint):
     permission_classes = (OrganizationSCIMTeamPermission,)
     public = {"GET", "POST"}
@@ -158,7 +165,7 @@ class OrganizationSCIMTeamIndex(SCIMEndpoint, OrganizationTeamsEndpoint):
         operation_id="Provision a New Team",
         parameters=[GLOBAL_PARAMS.ORG_SLUG],
         request=inline_serializer(
-            "SCIMTeamRequestBody",
+            name="SCIMTeamRequestBody",
             fields={
                 "schemas": serializers.ListField(serializers.CharField()),
                 "displayName": serializers.CharField(),
@@ -195,14 +202,20 @@ class OrganizationSCIMTeamIndex(SCIMEndpoint, OrganizationTeamsEndpoint):
         # shim displayName from SCIM api in order to work with
         # our regular team index POST
         request.data.update(
-            {"name": request.data["displayName"], "slug": slugify(request.data["displayName"])}
+            {
+                "name": request.data["displayName"],
+                "slug": slugify(request.data["displayName"]),
+                "idp_provisioned": True,
+            }
         ),
         return super().post(request, organization)
 
 
+@extend_schema(tags=["SCIM"])
+@region_silo_endpoint
 class OrganizationSCIMTeamDetails(SCIMEndpoint, TeamDetailsEndpoint):
     permission_classes = (OrganizationSCIMTeamPermission,)
-    public = {"GET", "PATCH"}
+    public = {"GET", "PATCH", "DELETE"}
 
     def convert_args(self, request: Request, organization_slug, team_id, *args, **kwargs):
         args, kwargs = super().convert_args(request, organization_slug)
@@ -274,7 +287,7 @@ class OrganizationSCIMTeamDetails(SCIMEndpoint, TeamDetailsEndpoint):
                     organization=team.organization,
                     target_object=omt.id,
                     target_user=member.user,
-                    event=AuditLogEntryEvent.MEMBER_JOIN_TEAM,
+                    event=audit_log.get_event_id("MEMBER_JOIN_TEAM"),
                     data=omt.get_audit_log_data(),
                 )
 
@@ -291,7 +304,7 @@ class OrganizationSCIMTeamDetails(SCIMEndpoint, TeamDetailsEndpoint):
                 organization=team.organization,
                 target_object=omt.id,
                 target_user=member.user,
-                event=AuditLogEntryEvent.MEMBER_LEAVE_TEAM,
+                event=audit_log.get_event_id("MEMBER_LEAVE_TEAM"),
                 data=omt.get_audit_log_data(),
             )
             omt.delete()
@@ -308,7 +321,7 @@ class OrganizationSCIMTeamDetails(SCIMEndpoint, TeamDetailsEndpoint):
                 request=request,
                 organization=team.organization,
                 target_object=team.id,
-                event=AuditLogEntryEvent.TEAM_EDIT,
+                event=audit_log.get_event_id("TEAM_EDIT"),
                 data=team.get_audit_log_data(),
             )
 
@@ -325,63 +338,79 @@ class OrganizationSCIMTeamDetails(SCIMEndpoint, TeamDetailsEndpoint):
     )
     def patch(self, request: Request, organization, team):
         """
-        A SCIM Group PATCH request takes a series of operations to perform on a team.
-        It does them sequentially and if any of them fail no operations should go through.
-        The operations are add members, remove members, replace members, and rename team.
-        Update a team's attributes with a SCIM Group PATCH Request. Valid Operations are:
+        Update a team's attributes with a SCIM Group PATCH Request. Valid operations are:
+
         * Renaming a team:
         ```json
         {
-            "op": "replace",
-            "value": {
-                "id": 23,
-                "displayName": "newName"
-            }
+            "Operations": [{
+                "op": "replace",
+                "value": {
+                    "id": 23,
+                    "displayName": "newName"
+                }
+            }]
         }
         ```
         * Adding a member to a team:
         ```json
         {
-            "op": "add",
-            "path": "members",
-            "value": [
-                {
-                    "value": 23,
-                    "display": "testexample@example.com"
-                }
-            ]
+            "Operations": [{
+                "op": "add",
+                "path": "members",
+                "value": [
+                    {
+                        "value": 23,
+                        "display": "testexample@example.com"
+                    }
+                ]
+            }]
         }
         ```
         * Removing a member from a team:
         ```json
         {
-            "op": "remove",
-            "path": "members[value eq \"23\"]"
+            "Operations": [{
+                "op": "remove",
+                "path": "members[value eq \"23\"]"
+            }]
         }
         ```
         * Replacing an entire member set of a team:
         ```json
         {
-            "op": "replace",
-            "path": "members",
-            "value": [
-                {
-                    "value": 23,
-                    "display": "testexample2@sentry.io"
-                },
-                {
-                    "value": 24,
-                    "display": "testexample3@sentry.io"
-                }
-            ]
+            "Operations": [{
+                "op": "replace",
+                "path": "members",
+                "value": [
+                    {
+                        "value": 23,
+                        "display": "testexample2@sentry.io"
+                    },
+                    {
+                        "value": 24,
+                        "display": "testexample3@sentry.io"
+                    }
+                ]
+            }]
         }
         ```
         """
+
+        serializer = SCIMTeamPatchRequestSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            raise SCIMApiError(detail=json.dumps(serializer.errors))
+
         operations = request.data.get("Operations", [])
+
         if len(operations) > 100:
             return Response(SCIM_400_TOO_MANY_PATCH_OPS_ERROR, status=400)
         try:
             with transaction.atomic():
+                team.idp_provisioned = True
+                team.save()
+
                 for operation in operations:
                     op = operation["op"].lower()
                     if op == TeamPatchOps.ADD and operation["path"] == "members":

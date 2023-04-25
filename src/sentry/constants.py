@@ -5,9 +5,9 @@ web-server
 
 import logging
 import os.path
-from collections import OrderedDict, namedtuple
+from collections import namedtuple
 from datetime import timedelta
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, cast
 
 import sentry_relay
 from django.conf import settings
@@ -29,7 +29,7 @@ def get_all_languages() -> List[str]:
     return results
 
 
-MODULE_ROOT = os.path.dirname(__import__("sentry").__file__)
+MODULE_ROOT = os.path.dirname(cast(str, __import__("sentry").__file__))
 DATA_ROOT = os.path.join(MODULE_ROOT, "data")
 
 BAD_RELEASE_CHARS = "\r\n\f\x0c\t/\\"
@@ -40,18 +40,18 @@ COMMIT_RANGE_DELIMITER = ".."
 # semver constants
 SEMVER_FAKE_PACKAGE = "__sentry_fake__"
 
-SORT_OPTIONS = OrderedDict(
-    (
-        ("priority", _("Priority")),
-        ("date", _("Last Seen")),
-        ("new", _("First Seen")),
-        ("freq", _("Frequency")),
-    )
-)
+SORT_OPTIONS = {
+    "priority": _("Priority"),
+    "date": _("Last Seen"),
+    "new": _("First Seen"),
+    "freq": _("Frequency"),
+}
 
-SEARCH_SORT_OPTIONS = OrderedDict(
-    (("score", _("Score")), ("date", _("Last Seen")), ("new", _("First Seen")))
-)
+SEARCH_SORT_OPTIONS = {
+    "score": _("Score"),
+    "date": _("Last Seen"),
+    "new": _("First Seen"),
+}
 
 # XXX: Deprecated: use GroupStatus instead
 STATUS_UNRESOLVED = 0
@@ -82,75 +82,110 @@ MAX_ROLLUP_POINTS = 10000
 # which we don't want to worry about conflicts on.
 RESERVED_ORGANIZATION_SLUGS = frozenset(
     (
-        "admin",
-        "manage",
-        "login",
-        "account",
-        "register",
-        "api",
-        "accept",
-        "organizations",
-        "teams",
-        "projects",
-        "help",
-        "docs",
-        "logout",
         "404",
         "500",
-        "_static",
-        "out",
-        "debug",
-        "remote",
-        "get-cli",
-        "blog",
-        "welcome",
-        "features",
-        "customers",
-        "integrations",
-        "signup",
-        "pricing",
-        "subscribe",
-        "enterprise",
-        "about",
-        "jobs",
-        "thanks",
-        "guide",
-        "privacy",
-        "security",
-        "terms",
-        "from",
-        "sponsorship",
-        "for",
-        "at",
-        "platforms",
-        "branding",
-        "vs",
-        "answers",
         "_admin",
-        "support",
+        "_experiment",
+        "_static",
+        "about",
+        "accept",
+        "access",
+        "account",
+        "accountspayable",
+        "acl",
+        "admin",
+        "answers",
+        "ap",
+        "api",
+        "app",
+        "at",
+        "au1",
+        "auth",
+        "authentication",
+        "avatar",
+        "billing",
+        "blog",
+        "branding",
+        "careers",
+        "client",
+        "clients",
+        "community",
         "contact",
-        "onboarding",
+        "corp",
+        "customers",
+        "de",
+        "debug",
+        "demo",
+        "devinfra",
+        "docs",
+        "enterprise",
+        "eu",
+        "events",
+        "expenses",
         "ext",
         "extension",
         "extensions",
-        "plugins",
-        "themonitor",
-        "settings",
-        "legal",
-        "avatar",
-        "organization-avatar",
-        "project-avatar",
-        "team-avatar",
-        "careers",
-        "_experiment",
-        "sentry-apps",
-        "resources",
+        "features",
+        "finance",
+        "for",
+        "from",
+        "get-cli",
+        "github-deployment-gate",
+        "guide",
+        "help",
+        "ingest",
         "integration-platform",
-        "trust",
+        "integrations",
+        "invoice",
+        "invoices",
+        "ja",
+        "jobs",
         "legal",
-        "community",
+        "login",
+        "logout",
+        "mail",
+        "manage",
+        "my",
+        "onboarding",
+        "organization-avatar",
+        "organizations",
+        "out",
+        "payment",
+        "payments",
+        "platforms",
+        "plugins",
+        "policy",
+        "pricing",
+        "privacy",
+        "project-avatar",
+        "projects",
+        "receipt",
+        "receipts",
         "referrals",
-        "demo",
+        "register",
+        "remote",
+        "resources",
+        "sa1",
+        "sales",
+        "security",
+        "sentry-apps",
+        "settings",
+        "signup",
+        "sponsorship",
+        "ssh",
+        "sso",
+        "staff",
+        "subscribe",
+        "support",
+        "team-avatar",
+        "teams",
+        "terms",
+        "thanks",
+        "themonitor",
+        "trust",
+        "us",
+        "vs",
+        "welcome",
     )
 )
 
@@ -220,7 +255,7 @@ _SENTRY_RULES = (
     "sentry.mail.actions.NotifyEmailAction",
     "sentry.rules.actions.notify_event.NotifyEventAction",
     "sentry.rules.actions.notify_event_service.NotifyEventServiceAction",
-    "sentry.rules.actions.notify_event_sentry_app.NotifyEventSentryAppAction",
+    "sentry.rules.actions.sentry_apps.notify_event.NotifyEventSentryAppAction",
     "sentry.rules.conditions.every_event.EveryEventCondition",
     "sentry.rules.conditions.first_seen_event.FirstSeenEventCondition",
     "sentry.rules.conditions.regression_event.RegressionEventCondition",
@@ -235,6 +270,7 @@ _SENTRY_RULES = (
     "sentry.rules.filters.issue_occurrences.IssueOccurrencesFilter",
     "sentry.rules.filters.assigned_to.AssignedToFilter",
     "sentry.rules.filters.latest_release.LatestReleaseFilter",
+    "sentry.rules.filters.issue_category.IssueCategoryFilter",
     # The following filters are duplicates of their respective conditions and are conditionally shown if the user has issue alert-filters
     "sentry.rules.filters.event_attribute.EventAttributeFilter",
     "sentry.rules.filters.tagged_event.TaggedEventFilter",
@@ -256,7 +292,7 @@ TICKET_ACTIONS = frozenset(
     ]
 )
 
-SCHEMA_FORM_ACTIONS = frozenset(
+SENTRY_APP_ACTIONS = frozenset(
     ["sentry.rules.actions.notify_event_sentry_app.NotifyEventSentryAppAction"]
 )
 
@@ -272,7 +308,7 @@ OK_PLUGIN_DISABLED = _("The {name} integration has been disabled.")
 
 OK_PLUGIN_SAVED = _("Configuration for the {name} integration has been saved.")
 
-WARN_SESSION_EXPIRED = "Your session has expired."  # TODO: translate this
+WARN_SESSION_EXPIRED = _("Your session has expired.")
 
 # Maximum length of a symbol
 MAX_SYM = 256
@@ -289,6 +325,8 @@ KNOWN_DIF_FORMATS: Dict[str, str] = {
     "application/x-sentry-bundle+zip": "sourcebundle",
     "application/x-bcsymbolmap": "bcsymbolmap",
     "application/x-debugid-map": "uuidmap",
+    "application/x-il2cpp-json": "il2cpp",
+    "application/x-portable-pdb": "portablepdb",
 }
 
 NATIVE_UNKNOWN_STRING = "<unknown>"
@@ -299,6 +337,7 @@ NATIVE_UNKNOWN_STRING = "<unknown>"
 # LIMIT-OFFSET database queries.
 # These problems should be solved after we implement artifact bundles workflow.
 MAX_RELEASE_FILES_OFFSET = 20000
+MAX_ARTIFACT_BUNDLE_FILES_OFFSET = MAX_RELEASE_FILES_OFFSET
 
 # to go from an integration id (in _platforms.json) to the platform
 # data, such as documentation url or humanized name.
@@ -442,10 +481,12 @@ class SentryAppStatus:
     PUBLISHED = 1
     INTERNAL = 2
     PUBLISH_REQUEST_INPROGRESS = 3
+    DELETION_IN_PROGRESS = 4
     UNPUBLISHED_STR = "unpublished"
     PUBLISHED_STR = "published"
     INTERNAL_STR = "internal"
     PUBLISH_REQUEST_INPROGRESS_STR = "publish_request_inprogress"
+    DELETION_IN_PROGRESS_STR = "deletion_in_progress"
 
     @classmethod
     def as_choices(cls) -> Sequence[Tuple[int, str]]:
@@ -454,6 +495,7 @@ class SentryAppStatus:
             (cls.PUBLISHED, cls.PUBLISHED_STR),
             (cls.INTERNAL, cls.INTERNAL_STR),
             (cls.PUBLISH_REQUEST_INPROGRESS, cls.PUBLISH_REQUEST_INPROGRESS_STR),
+            (cls.DELETION_IN_PROGRESS, cls.DELETION_IN_PROGRESS_STR),
         )
 
     @classmethod
@@ -466,6 +508,23 @@ class SentryAppStatus:
             return cls.INTERNAL_STR
         elif status == cls.PUBLISH_REQUEST_INPROGRESS:
             return cls.PUBLISH_REQUEST_INPROGRESS_STR
+        elif status == cls.DELETION_IN_PROGRESS:
+            return cls.DELETION_IN_PROGRESS_STR
+        else:
+            return None
+
+    @classmethod
+    def as_int(cls, status: str) -> Optional[int]:
+        if status == cls.UNPUBLISHED_STR:
+            return cls.UNPUBLISHED
+        elif status == cls.PUBLISHED_STR:
+            return cls.PUBLISHED
+        elif status == cls.INTERNAL_STR:
+            return cls.INTERNAL
+        elif status == cls.PUBLISH_REQUEST_INPROGRESS_STR:
+            return cls.PUBLISH_REQUEST_INPROGRESS
+        elif status == cls.DELETION_IN_PROGRESS_STR:
+            return cls.DELETION_IN_PROGRESS
         else:
             return None
 
@@ -570,6 +629,7 @@ SCRAPE_JAVASCRIPT_DEFAULT = True
 TRUSTED_RELAYS_DEFAULT = None
 JOIN_REQUESTS_DEFAULT = True
 APDEX_THRESHOLD_DEFAULT = 300
+AI_SUGGESTED_SOLUTION = True
 
 # `sentry:events_member_admin` - controls whether the 'member' role gets the event:admin scope
 EVENTS_MEMBER_ADMIN_DEFAULT = True
@@ -580,3 +640,46 @@ DataCategory = sentry_relay.DataCategory
 
 CRASH_RATE_ALERT_SESSION_COUNT_ALIAS = "_total_count"
 CRASH_RATE_ALERT_AGGREGATE_ALIAS = "_crash_rate_alert_aggregate"
+
+# Dynamic sampling denylist composed manually from
+# 1. `src/sentry/event_manager.py:save`. We have function
+# `_derive_interface_tags_many(jobs)` which iterates across all interfaces
+# and execute `iter_tags`, so i've searched usage of `iter_tags`.
+# 2. `src/sentry/event_manager.py:_pull_out_data` we have `set_tag`.
+# 3. `src/sentry/event_manager.py:_get_event_user_many` we have `set_tag`.
+# 4. `src/sentry/event_manager.py:_get_or_create_release_many` we have `set_tag`.
+# 5. `src/sentry/interfaces/exception.py:Mechanism` we have `iter_tags`.
+# 6. `src/sentry/plugins/sentry_urls/models.py:UrlsPlugin`.
+# 7. `sentry/src/sentry/plugins/sentry_interface_types/models.py`.
+# 8. `src/sentry/plugins/sentry_useragents/models.py:UserAgentPlugin`.
+# Note:
+# should be sorted alphabetically so that it is easy to maintain in future
+# if you update this list please add explanation or source of it
+DS_DENYLIST = frozenset(
+    [
+        "app.device",
+        "browser",
+        "browser.name",
+        "device",
+        "device.family",
+        "environment",
+        "gpu.name",
+        "gpu.vendor",
+        "handled",
+        "interface_type",
+        "level",
+        "logger",
+        "mechanism",
+        "monitor.id",
+        "os",
+        "os.name",
+        "os.rooted",
+        "runtime",
+        "runtime.name",
+        "sentry:dist",
+        "sentry:release",
+        "sentry:user",
+        "transaction",
+        "url",
+    ]
+)

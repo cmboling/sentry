@@ -2,9 +2,11 @@ from base64 import b64encode
 from datetime import timedelta
 from unittest import mock
 
+from django.test import override_settings
 from django.utils import timezone
 from freezegun import freeze_time
 
+from sentry.issues.grouptype import PerformanceSlowDBQueryGroupType
 from sentry.models import (
     Activity,
     ApiKey,
@@ -20,13 +22,15 @@ from sentry.models import (
     GroupStatus,
     GroupSubscription,
     GroupTombstone,
-    Integration,
     Release,
 )
 from sentry.plugins.base import plugins
 from sentry.testutils import APITestCase, SnubaTestCase
+from sentry.testutils.silo import exempt_from_silo_limits, region_silo_test
+from sentry.types.activity import ActivityType
 
 
+@region_silo_test(stable=True)
 class GroupDetailsTest(APITestCase, SnubaTestCase):
     def test_with_numerical_id(self):
         self.login_as(user=self.user)
@@ -168,13 +172,13 @@ class GroupDetailsTest(APITestCase, SnubaTestCase):
 
     def test_integration_external_issue_annotation(self):
         group = self.create_group()
-        integration = Integration.objects.create(
+        integration = self.create_integration(
+            organization=group.organization,
             provider="jira",
             external_id="some_id",
             name="Hello world",
             metadata={"base_url": "https://example.com"},
         )
-        integration.add_organization(group.organization, self.user)
         self.create_integration_external_issue(group=group, integration=integration, key="api-123")
 
         self.login_as(user=self.user)
@@ -214,6 +218,7 @@ class GroupDetailsTest(APITestCase, SnubaTestCase):
         assert "http://" in result
         assert f"{group.organization.slug}/issues/{group.id}" in result
 
+    @override_settings(SENTRY_SELF_HOSTED=False)
     def test_ratelimit(self):
         self.login_as(user=self.user)
         group = self.create_group()
@@ -224,7 +229,30 @@ class GroupDetailsTest(APITestCase, SnubaTestCase):
             response = self.client.get(url, sort_by="date", limit=1)
             assert response.status_code == 429
 
+    def test_with_deleted_user_activity(self):
+        self.login_as(user=self.user)
+        user = self.create_user("foo@example.com")
 
+        group = self.create_group()
+        Activity.objects.create(
+            group=group,
+            project=self.project,
+            type=ActivityType.NOTE.value,
+            user_id=user.id,
+            data={"text": "This is bad"},
+            datetime=timezone.now(),
+        )
+
+        with exempt_from_silo_limits():
+            user.delete()
+
+        url = f"/api/0/issues/{group.id}/"
+        response = self.client.get(url, format="json")
+
+        assert response.status_code == 200, response.content
+
+
+@region_silo_test(stable=True)
 class GroupUpdateTest(APITestCase):
     def test_resolve(self):
         self.login_as(user=self.user)
@@ -240,7 +268,7 @@ class GroupUpdateTest(APITestCase):
         assert group.status == GroupStatus.RESOLVED
 
         assert GroupSubscription.objects.filter(
-            user=self.user, group=group, is_active=True
+            user_id=self.user.id, group=group, is_active=True
         ).exists()
 
     def test_resolved_in_next_release(self):
@@ -263,7 +291,7 @@ class GroupUpdateTest(APITestCase):
         assert GroupResolution.objects.filter(group=group).exists()
 
     def test_snooze_duration(self):
-        group = self.create_group(checksum="a" * 32, status=GroupStatus.RESOLVED)
+        group = self.create_group(status=GroupStatus.RESOLVED)
 
         self.login_as(user=self.user)
 
@@ -286,7 +314,7 @@ class GroupUpdateTest(APITestCase):
         assert group.get_status() == GroupStatus.IGNORED
 
         assert GroupSubscription.objects.filter(
-            user=self.user, group=group, is_active=True
+            user_id=self.user.id, group=group, is_active=True
         ).exists()
 
     def test_bookmark(self):
@@ -301,10 +329,10 @@ class GroupUpdateTest(APITestCase):
         assert response.status_code == 200, response.content
 
         # ensure we've created the bookmark
-        assert GroupBookmark.objects.filter(group=group, user=self.user).exists()
+        assert GroupBookmark.objects.filter(group=group, user_id=self.user.id).exists()
 
         assert GroupSubscription.objects.filter(
-            user=self.user, group=group, is_active=True
+            user_id=self.user.id, group=group, is_active=True
         ).exists()
 
     def test_assign_username(self):
@@ -318,10 +346,12 @@ class GroupUpdateTest(APITestCase):
 
         assert response.status_code == 200, response.content
 
-        assert GroupAssignee.objects.filter(group=group, user=self.user).exists()
+        assert GroupAssignee.objects.filter(group=group, user_id=self.user.id).exists()
 
         assert (
-            Activity.objects.filter(group=group, user=self.user, type=Activity.ASSIGNED).count()
+            Activity.objects.filter(
+                group=group, user_id=self.user.id, type=ActivityType.ASSIGNED.value
+            ).count()
             == 1
         )
 
@@ -329,17 +359,17 @@ class GroupUpdateTest(APITestCase):
 
         assert response.status_code == 200, response.content
 
-        assert GroupAssignee.objects.filter(group=group, user=self.user).exists()
+        assert GroupAssignee.objects.filter(group=group, user_id=self.user.id).exists()
 
         assert GroupSubscription.objects.filter(
-            user=self.user, group=group, is_active=True
+            user_id=self.user.id, group=group, is_active=True
         ).exists()
 
         response = self.client.put(url, data={"assignedTo": ""}, format="json")
 
         assert response.status_code == 200, response.content
 
-        assert not GroupAssignee.objects.filter(group=group, user=self.user).exists()
+        assert not GroupAssignee.objects.filter(group=group, user_id=self.user.id).exists()
 
     def test_assign_id(self):
         self.login_as(user=self.user)
@@ -352,10 +382,12 @@ class GroupUpdateTest(APITestCase):
 
         assert response.status_code == 200, response.content
 
-        assert GroupAssignee.objects.filter(group=group, user=self.user).exists()
+        assert GroupAssignee.objects.filter(group=group, user_id=self.user.id).exists()
 
         assert (
-            Activity.objects.filter(group=group, user=self.user, type=Activity.ASSIGNED).count()
+            Activity.objects.filter(
+                group=group, user_id=self.user.id, type=ActivityType.ASSIGNED.value
+            ).count()
             == 1
         )
 
@@ -363,24 +395,27 @@ class GroupUpdateTest(APITestCase):
 
         assert response.status_code == 200, response.content
 
-        assert GroupAssignee.objects.filter(group=group, user=self.user).exists()
+        assert GroupAssignee.objects.filter(group=group, user_id=self.user.id).exists()
 
         assert GroupSubscription.objects.filter(
-            user=self.user, group=group, is_active=True
+            user_id=self.user.id, group=group, is_active=True
         ).exists()
 
         response = self.client.put(url, data={"assignedTo": ""}, format="json")
 
         assert response.status_code == 200, response.content
 
-        assert not GroupAssignee.objects.filter(group=group, user=self.user).exists()
+        assert not GroupAssignee.objects.filter(group=group, user_id=self.user.id).exists()
 
     def test_assign_id_via_api_key(self):
         # XXX: This test is written to verify that using api keys works when
         # hitting an endpoint that uses `client.{get,put,post}` to redirect to
         # another endpoint. This catches a regression that happened when
         # migrating to DRF 3.x.
-        api_key = ApiKey.objects.create(organization=self.organization, scope_list=["event:write"])
+        with exempt_from_silo_limits():
+            api_key = ApiKey.objects.create(
+                organization_id=self.organization.id, scope_list=["event:write"]
+            )
         group = self.create_group()
         url = f"/api/0/issues/{group.id}/"
 
@@ -391,7 +426,7 @@ class GroupUpdateTest(APITestCase):
             HTTP_AUTHORIZATION=b"Basic " + b64encode(f"{api_key.key}:".encode()),
         )
         assert response.status_code == 200, response.content
-        assert GroupAssignee.objects.filter(group=group, user=self.user).exists()
+        assert GroupAssignee.objects.filter(group=group, user_id=self.user.id).exists()
 
     def test_assign_team(self):
         self.login_as(user=self.user)
@@ -408,10 +443,10 @@ class GroupUpdateTest(APITestCase):
 
         assert GroupAssignee.objects.filter(group=group, team=team).exists()
 
-        assert Activity.objects.filter(group=group, type=Activity.ASSIGNED).count() == 1
+        assert Activity.objects.filter(group=group, type=ActivityType.ASSIGNED.value).count() == 1
 
         assert GroupSubscription.objects.filter(
-            user=self.user, group=group, is_active=True
+            user_id=self.user.id, group=group, is_active=True
         ).exists()
 
         response = self.client.put(url, data={"assignedTo": ""}, format="json")
@@ -444,13 +479,13 @@ class GroupUpdateTest(APITestCase):
 
         assert response.status_code == 200, response.content
 
-        assert GroupSeen.objects.filter(group=group, user=self.user).exists()
+        assert GroupSeen.objects.filter(group=group, user_id=self.user.id).exists()
 
         response = self.client.put(url, data={"hasSeen": "0"}, format="json")
 
         assert response.status_code == 200, response.content
 
-        assert not GroupSeen.objects.filter(group=group, user=self.user).exists()
+        assert not GroupSeen.objects.filter(group=group, user_id=self.user.id).exists()
 
     def test_mark_seen_as_non_member(self):
         user = self.create_user("foo@example.com", is_superuser=True)
@@ -464,7 +499,7 @@ class GroupUpdateTest(APITestCase):
 
         assert response.status_code == 200, response.content
 
-        assert not GroupSeen.objects.filter(group=group, user=self.user).exists()
+        assert not GroupSeen.objects.filter(group=group, user_id=self.user.id).exists()
 
     def test_subscription(self):
         self.login_as(user=self.user)
@@ -475,13 +510,13 @@ class GroupUpdateTest(APITestCase):
         resp = self.client.put(url, data={"isSubscribed": "true"})
         assert resp.status_code == 200, resp.content
         assert GroupSubscription.objects.filter(
-            user=self.user, group=group, is_active=True
+            user_id=self.user.id, group=group, is_active=True
         ).exists()
 
         resp = self.client.put(url, data={"isSubscribed": "false"})
         assert resp.status_code == 200, resp.content
         assert GroupSubscription.objects.filter(
-            user=self.user, group=group, is_active=False
+            user_id=self.user.id, group=group, is_active=False
         ).exists()
 
     def test_discard(self):
@@ -507,6 +542,24 @@ class GroupUpdateTest(APITestCase):
         assert tombstone.project == group.project
         assert tombstone.data == group.data
 
+    def test_discard_performance_issue(self):
+        self.login_as(user=self.user)
+        group = self.create_group(type=PerformanceSlowDBQueryGroupType.type_id)
+        GroupHash.objects.create(hash="x" * 32, project=group.project, group=group)
+
+        url = f"/api/0/issues/{group.id}/"
+
+        with self.tasks():
+            with self.feature("projects:discard-groups"):
+                response = self.client.put(url, data={"discard": True})
+
+        assert response.status_code == 400, response.content
+
+        # Ensure it's still there
+        assert Group.objects.filter(id=group.id).exists()
+        assert GroupHash.objects.filter(group_id=group.id).exists()
+
+    @override_settings(SENTRY_SELF_HOSTED=False)
     def test_ratelimit(self):
         self.login_as(user=self.user)
         group = self.create_group()
@@ -518,6 +571,7 @@ class GroupUpdateTest(APITestCase):
             assert response.status_code == 429
 
 
+@region_silo_test(stable=True)
 class GroupDeleteTest(APITestCase):
     def test_delete(self):
         self.login_as(user=self.user)
@@ -549,6 +603,23 @@ class GroupDeleteTest(APITestCase):
         assert not Group.objects.filter(id=group.id).exists()
         assert not GroupHash.objects.filter(group_id=group.id).exists()
 
+    def test_delete_performance_issue(self):
+        """Test that a performance issue cannot be deleted"""
+        self.login_as(user=self.user)
+
+        group = self.create_group(type=PerformanceSlowDBQueryGroupType.type_id)
+        GroupHash.objects.create(project=group.project, hash="x" * 32, group=group)
+
+        url = f"/api/0/issues/{group.id}/"
+
+        response = self.client.delete(url, format="json")
+        assert response.status_code == 400, response.content
+
+        # Ensure it's still there
+        assert Group.objects.filter(id=group.id).exists()
+        assert GroupHash.objects.filter(group_id=group.id).exists()
+
+    @override_settings(SENTRY_SELF_HOSTED=False)
     def test_ratelimit(self):
         self.login_as(user=self.user)
         group = self.create_group()

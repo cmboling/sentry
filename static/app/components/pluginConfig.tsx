@@ -8,13 +8,13 @@ import {
   addSuccessMessage,
 } from 'sentry/actionCreators/indicator';
 import {Client} from 'sentry/api';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {Panel, PanelAlert, PanelBody, PanelHeader} from 'sentry/components/panels';
 import {t} from 'sentry/locale';
 import plugins from 'sentry/plugins';
 import PluginIcon from 'sentry/plugins/components/pluginIcon';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Plugin, Project} from 'sentry/types';
 import withApi from 'sentry/utils/withApi';
 
@@ -121,11 +121,11 @@ class PluginConfig extends Component<Props, State> {
           {data.canDisable && enabled && (
             <Actions>
               {data.isTestable && (
-                <TestPluginButton onClick={this.handleTestPlugin} size="small">
+                <TestPluginButton onClick={this.handleTestPlugin} size="sm">
                   {t('Test Plugin')}
                 </TestPluginButton>
               )}
-              <Button size="small" onClick={this.handleDisablePlugin}>
+              <Button size="sm" onClick={this.handleDisablePlugin}>
                 {t('Disable')}
               </Button>
             </Actions>

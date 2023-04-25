@@ -6,7 +6,6 @@ import omit from 'lodash/omit';
 import pick from 'lodash/pick';
 import * as qs from 'query-string';
 
-import PageFiltersActions from 'sentry/actions/pageFiltersActions';
 import {
   getDatetimeFromState,
   getStateFromQuery,
@@ -16,10 +15,7 @@ import {
   setPageFiltersStorage,
 } from 'sentry/components/organizations/pageFilters/persistence';
 import {PageFiltersStringified} from 'sentry/components/organizations/pageFilters/types';
-import {
-  doesPathHaveNewFilters,
-  getDefaultSelection,
-} from 'sentry/components/organizations/pageFilters/utils';
+import {getDefaultSelection} from 'sentry/components/organizations/pageFilters/utils';
 import {DATE_TIME_KEYS, URL_PARAM} from 'sentry/constants/pageFilters';
 import OrganizationStore from 'sentry/stores/organizationStore';
 import PageFiltersStore from 'sentry/stores/pageFiltersStore';
@@ -35,10 +31,6 @@ import {
 import {defined, valueIsEqual} from 'sentry/utils';
 import {getUtcDateString} from 'sentry/utils/dates';
 
-/**
- * NOTE: this is the internal project.id, NOT the slug
- */
-type ProjectId = string | number;
 type EnvironmentId = Environment['id'];
 
 type Options = {
@@ -68,9 +60,9 @@ type PageFiltersUpdate = {
   end?: DateString;
   environment?: string[] | null;
   period?: string | null;
-  project?: Array<string | number> | null;
+  project?: number[] | null;
   start?: DateString;
-  utc?: string | boolean | null;
+  utc?: boolean | null;
 };
 
 /**
@@ -92,7 +84,7 @@ type Router = InjectedRouter | null | undefined;
  * Reset values in the page filters store
  */
 export function resetPageFilters() {
-  PageFiltersActions.reset();
+  PageFiltersStore.onReset();
 }
 
 function getProjectIdFromProject(project: MinimalProject) {
@@ -117,10 +109,9 @@ function mergeDatetime(
   return datetime;
 }
 
-type InitializeUrlStateParams = {
+export type InitializeUrlStateParams = {
   memberProjects: Project[];
   organization: Organization;
-  pathname: Location['pathname'];
   queryParams: Location['query'];
   router: InjectedRouter;
   shouldEnforceSingleProject: boolean;
@@ -129,11 +120,17 @@ type InitializeUrlStateParams = {
   shouldForceProject?: boolean;
   showAbsolute?: boolean;
   /**
-   * Skip setting the query parameters
+   * When used with shouldForceProject it will not persist the project id
+   * to url query parameters on load. This is useful when global selection header
+   * is used for display purposes rather than selection.
    */
   skipInitializeUrlParams?: boolean;
+
   /**
-   * If true, do not load from local storage
+   * Skip loading from local storage
+   * An example is Issue Details, in the case where it is accessed directly (e.g. from email).
+   * We do not want to load the user's last used env/project in this case, otherwise will
+   * lead to very confusing behavior.
    */
   skipLoadLastUsed?: boolean;
 };
@@ -141,7 +138,6 @@ type InitializeUrlStateParams = {
 export function initializeUrlState({
   organization,
   queryParams,
-  pathname,
   router,
   memberProjects,
   skipLoadLastUsed,
@@ -194,21 +190,15 @@ export function initializeUrlState({
   if (storedPageFilters) {
     const {state: storedState, pinnedFilters} = storedPageFilters;
 
-    const pageHasPinning = doesPathHaveNewFilters(pathname, organization);
-
-    const filtersToRestore = pageHasPinning
-      ? pinnedFilters
-      : new Set<PinnedPageFilter>(['projects', 'environments']);
-
-    if (!hasProjectOrEnvironmentInUrl && filtersToRestore.has('projects')) {
+    if (!hasProjectOrEnvironmentInUrl && pinnedFilters.has('projects')) {
       pageFilters.projects = storedState.project ?? [];
     }
 
-    if (!hasProjectOrEnvironmentInUrl && filtersToRestore.has('environments')) {
+    if (!hasProjectOrEnvironmentInUrl && pinnedFilters.has('environments')) {
       pageFilters.environments = storedState.environment ?? [];
     }
 
-    if (!hasDatetimeInUrl && filtersToRestore.has('datetime')) {
+    if (!hasDatetimeInUrl && pinnedFilters.has('datetime')) {
       pageFilters.datetime = getDatetimeFromState(storedState);
       shouldUsePinnedDatetime = true;
     }
@@ -254,8 +244,8 @@ export function initializeUrlState({
   }
 
   const pinnedFilters = storedPageFilters?.pinnedFilters ?? new Set();
-  PageFiltersActions.initializeUrlState(pageFilters, pinnedFilters);
-  updateDesyncedUrlState(router);
+  PageFiltersStore.onInitializeUrlState(pageFilters, pinnedFilters);
+  updateDesyncedUrlState(router, shouldForceProject);
 
   const newDatetime = {
     ...datetime,
@@ -274,7 +264,7 @@ export function initializeUrlState({
   }
 }
 
-function isProjectsValid(projects: ProjectId[]) {
+function isProjectsValid(projects: number[]) {
   return Array.isArray(projects) && projects.every(isInteger);
 }
 
@@ -286,7 +276,7 @@ function isProjectsValid(projects: ProjectId[]) {
  * projects, you may need to clear environments.
  */
 export function updateProjects(
-  projects: ProjectId[],
+  projects: number[],
   router?: Router,
   options?: Options & {environments?: EnvironmentId[]}
 ) {
@@ -298,9 +288,12 @@ export function updateProjects(
     return;
   }
 
-  PageFiltersActions.updateProjects(projects, options?.environments);
+  PageFiltersStore.updateProjects(projects, options?.environments ?? null);
   updateParams({project: projects, environment: options?.environments}, router, options);
   persistPageFilters('projects', options);
+  if (options?.environments) {
+    persistPageFilters('environments', options);
+  }
   updateDesyncedUrlState(router);
 }
 
@@ -317,7 +310,7 @@ export function updateEnvironments(
   router?: Router,
   options?: Options
 ) {
-  PageFiltersActions.updateEnvironments(environment);
+  PageFiltersStore.updateEnvironments(environment);
   updateParams({environment}, router, options);
   persistPageFilters('environments', options);
   updateDesyncedUrlState(router);
@@ -336,7 +329,8 @@ export function updateDateTime(
   router?: Router,
   options?: Options
 ) {
-  PageFiltersActions.updateDateTime(datetime);
+  const {selection} = PageFiltersStore.getState();
+  PageFiltersStore.updateDateTime({...selection.datetime, ...datetime});
   updateParams(datetime, router, options);
   persistPageFilters('datetime', options);
   updateDesyncedUrlState(router);
@@ -346,7 +340,7 @@ export function updateDateTime(
  * Pins a particular filter so that it is read out of local storage
  */
 export function pinFilter(filter: PinnedPageFilter, pin: boolean) {
-  PageFiltersActions.pin(filter, pin);
+  PageFiltersStore.pin(filter, pin);
   persistPageFilters(null, {save: true});
 }
 
@@ -405,14 +399,17 @@ async function persistPageFilters(filter: PinnedPageFilter | null, options?: Opt
 /**
  * Checks if the URL state has changed in synchronization from the local
  * storage state, and persists that check into the store.
+ *
+ * If shouldForceProject is enabled, then we do not record any url desync
+ * for the project.
  */
-async function updateDesyncedUrlState(router?: Router) {
+async function updateDesyncedUrlState(router?: Router, shouldForceProject?: boolean) {
   // Cannot compare URL state without the router
   if (!router) {
     return;
   }
 
-  const {pathname, query} = router.location;
+  const {query} = router.location;
 
   // XXX(epurkhiser): Since this is called immediately after updating the
   // store, wait for a tick since stores are not updated fully synchronously.
@@ -429,12 +426,10 @@ async function updateDesyncedUrlState(router?: Router) {
   }
 
   const storedPageFilters = getPageFilterStorage(organization.slug);
-  const pageHasPinning = doesPathHaveNewFilters(pathname, organization);
 
-  // If we don't have any stored page filters OR pinning is not enabled for
-  // this page, then we do not check desynced state
-  if (!storedPageFilters || !pageHasPinning) {
-    PageFiltersActions.updateDesyncedFilters(new Set<PinnedPageFilter>());
+  // If we don't have any stored page filters then we do not check desynced state
+  if (!storedPageFilters) {
+    PageFiltersStore.updateDesyncedFilters(new Set<PinnedPageFilter>());
     return;
   }
 
@@ -450,7 +445,8 @@ async function updateDesyncedUrlState(router?: Router) {
   if (
     pinnedFilters.has('projects') &&
     currentQuery.project !== null &&
-    !valueIsEqual(currentQuery.project, storedState.project)
+    !valueIsEqual(currentQuery.project, storedState.project) &&
+    !shouldForceProject
   ) {
     differingFilters.add('projects');
   }
@@ -482,7 +478,7 @@ async function updateDesyncedUrlState(router?: Router) {
     differingFilters.add('datetime');
   }
 
-  PageFiltersActions.updateDesyncedFilters(differingFilters);
+  PageFiltersStore.updateDesyncedFilters(differingFilters);
 }
 
 /**
@@ -503,7 +499,7 @@ function getNewQueryParams(
 ) {
   const {resetParams, keepCursor} = options;
 
-  const cleanCurrentQuery = !!resetParams?.length
+  const cleanCurrentQuery = resetParams?.length
     ? omit(currentQuery, resetParams)
     : currentQuery;
 

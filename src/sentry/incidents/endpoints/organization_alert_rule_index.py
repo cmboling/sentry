@@ -8,6 +8,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationAlertRulePermission, OrganizationEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.paginator import (
@@ -20,13 +21,14 @@ from sentry.api.serializers.models.alert_rule import CombinedRuleSerializer
 from sentry.api.utils import InvalidParams
 from sentry.incidents.models import AlertRule, Incident
 from sentry.incidents.serializers import AlertRuleSerializer
-from sentry.models import OrganizationMemberTeam, Project, Rule, RuleStatus, Team
+from sentry.models import OrganizationMemberTeam, Project, ProjectStatus, Rule, RuleStatus, Team
 from sentry.snuba.dataset import Dataset
 from sentry.utils.cursors import Cursor, StringCursor
 
 from .utils import parse_team_params
 
 
+@region_silo_endpoint
 class OrganizationCombinedRuleIndexEndpoint(OrganizationEndpoint):
     def get(self, request: Request, organization) -> Response:
         """
@@ -34,9 +36,9 @@ class OrganizationCombinedRuleIndexEndpoint(OrganizationEndpoint):
         """
         project_ids = self.get_requested_project_ids_unchecked(request) or None
         if project_ids == {-1}:  # All projects for org:
-            project_ids = Project.objects.filter(organization=organization).values_list(
-                "id", flat=True
-            )
+            project_ids = Project.objects.filter(
+                organization=organization, status=ProjectStatus.VISIBLE
+            ).values_list("id", flat=True)
         elif project_ids is None:  # All projects for user
             org_team_list = Team.objects.filter(organization=organization).values_list(
                 "id", flat=True
@@ -44,9 +46,9 @@ class OrganizationCombinedRuleIndexEndpoint(OrganizationEndpoint):
             user_team_list = OrganizationMemberTeam.objects.filter(
                 organizationmember__user=request.user, team__in=org_team_list
             ).values_list("team", flat=True)
-            project_ids = Project.objects.filter(teams__in=user_team_list).values_list(
-                "id", flat=True
-            )
+            project_ids = Project.objects.filter(
+                teams__in=user_team_list, status=ProjectStatus.VISIBLE
+            ).values_list("id", flat=True)
 
         # Materialize the project ids here. This helps us to not overwhelm the query planner with
         # overcomplicated subqueries. Previously, this was causing Postgres to use a suboptimal
@@ -129,9 +131,11 @@ class OrganizationCombinedRuleIndexEndpoint(OrganizationEndpoint):
                 ),
             )
             issue_rules = issue_rules.annotate(date_triggered=far_past_date)
+        alert_rules_count = alert_rules.count()
+        issue_rules_count = issue_rules.count()
         alert_rule_intermediary = CombinedQuerysetIntermediary(alert_rules, sort_key)
         rule_intermediary = CombinedQuerysetIntermediary(issue_rules, rule_sort_key)
-        return self.paginate(
+        response = self.paginate(
             request,
             paginator_cls=CombinedQuerysetPaginator,
             on_results=lambda x: serialize(x, request.user, CombinedRuleSerializer(expand=expand)),
@@ -141,8 +145,12 @@ class OrganizationCombinedRuleIndexEndpoint(OrganizationEndpoint):
             cursor_cls=StringCursor if case_insensitive else Cursor,
             case_insensitive=case_insensitive,
         )
+        response["X-Sentry-Issue-Rule-Hits"] = issue_rules_count
+        response["X-Sentry-Alert-Rule-Hits"] = alert_rules_count
+        return response
 
 
+@region_silo_endpoint
 class OrganizationAlertRuleIndexEndpoint(OrganizationEndpoint):
     permission_classes = (OrganizationAlertRulePermission,)
 

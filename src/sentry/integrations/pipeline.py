@@ -1,6 +1,9 @@
-__all__ = ["IntegrationPipeline"]
+from __future__ import annotations
 
-from typing import Optional
+from sentry import features
+from sentry.api.utils import generate_organization_url
+
+__all__ = ["IntegrationPipeline"]
 
 from django.db import IntegrityError
 from django.utils import timezone
@@ -35,7 +38,7 @@ class IntegrationPipeline(Pipeline):
     pipeline_name = "integration_pipeline"
     provider_manager = default_manager
 
-    def get_analytics_entry(self) -> Optional[PipelineAnalyticsEntry]:
+    def get_analytics_entry(self) -> PipelineAnalyticsEntry | None:
         pipeline_type = "reauth" if self.fetch_state("integration_id") else "install"
         return PipelineAnalyticsEntry("integrations.pipeline_step", pipeline_type)
 
@@ -175,5 +178,11 @@ class IntegrationPipeline(Pipeline):
         return self._dialog_response(serialize(org_integration, self.request.user), True)
 
     def _dialog_response(self, data, success):
-        context = {"payload": {"success": success, "data": data}}
+        document_origin = "document.origin"
+        if features.has("organizations:customer-domains", self.organization):
+            document_origin = f'"{generate_organization_url(self.organization.slug)}"'
+        context = {
+            "payload": {"success": success, "data": data},
+            "document_origin": document_origin,
+        }
         return render_to_response("sentry/integrations/dialog-complete.html", context, self.request)

@@ -1,11 +1,12 @@
 import unittest
 from datetime import timedelta
+from unittest import mock
 from unittest.mock import Mock, patch
 
+import pytest
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.utils import timezone
-from exam import patcher
 from freezegun import freeze_time
 
 from sentry.db.models.manager import BaseManager
@@ -23,9 +24,12 @@ from sentry.incidents.models import (
     IncidentType,
     TriggerStatus,
 )
+from sentry.services.hybrid_cloud.user import user_service
 from sentry.testutils import TestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class FetchForOrganizationTest(TestCase):
     def test_empty(self):
         incidents = Incident.objects.fetch_for_organization(self.organization, [self.project])
@@ -102,7 +106,7 @@ class IncidentClearSubscriptionCacheTest(TestCase):
         self.subscription.delete()
         # Add the subscription id back in so we don't use `None` in the lookup check.
         self.subscription.id = subscription_id
-        with self.assertRaises(AlertRule.DoesNotExist):
+        with pytest.raises(AlertRule.DoesNotExist):
             AlertRule.objects.get_for_subscription(self.subscription)
 
     def test_deleted_alert_rule(self):
@@ -112,7 +116,7 @@ class IncidentClearSubscriptionCacheTest(TestCase):
             == self.alert_rule
         )
         delete_alert_rule(self.alert_rule)
-        with self.assertRaises(AlertRule.DoesNotExist):
+        with pytest.raises(AlertRule.DoesNotExist):
             AlertRule.objects.get_for_subscription(self.subscription)
 
 
@@ -386,6 +390,7 @@ class IncidentCurrentEndDateTest(unittest.TestCase):
         assert incident.current_end_date == timezone.now() - timedelta(minutes=10)
 
 
+@region_silo_test
 class AlertRuleFetchForOrganizationTest(TestCase):
     def test_empty(self):
         alert_rule = AlertRule.objects.fetch_for_organization(self.organization)
@@ -426,7 +431,7 @@ class AlertRuleTriggerActionTargetTest(TestCase):
             target_type=AlertRuleTriggerAction.TargetType.USER.value,
             target_identifier=str(self.user.id),
         )
-        assert trigger.target == self.user
+        assert trigger.target == user_service.get_user(user_id=self.user.id)
 
     def test_invalid_user(self):
         trigger = AlertRuleTriggerAction(
@@ -491,7 +496,10 @@ class AlertRuleTriggerActionResolveTest(AlertRuleTriggerActionActivateTest, unit
 
 
 class AlertRuleTriggerActionActivateTest(TestCase):
-    metrics = patcher("sentry.incidents.models.metrics")
+    @pytest.fixture(autouse=True)
+    def _setup_metric_patch(self):
+        with mock.patch("sentry.incidents.models.metrics") as self.metrics:
+            yield
 
     def setUp(self):
         self.old_handlers = AlertRuleTriggerAction._type_registrations

@@ -98,7 +98,6 @@ class GitHubEnterpriseIntegrationTest(IntegrationTestCase):
             responses.GET,
             self.base_url + "/user/installations",
             json={"installations": [{"id": installation_id}]},
-            match_querystring=True,
         )
 
         resp = self.client.get(
@@ -152,7 +151,7 @@ class GitHubEnterpriseIntegrationTest(IntegrationTestCase):
             },
         }
         oi = OrganizationIntegration.objects.get(
-            integration=integration, organization=self.organization
+            integration=integration, organization_id=self.organization.id
         )
         assert oi.config == {}
 
@@ -174,15 +173,15 @@ class GitHubEnterpriseIntegrationTest(IntegrationTestCase):
             f"{self.base_url}/search/repositories?{querystring}",
             json={
                 "items": [
-                    {"name": "example", "full_name": "test/example"},
-                    {"name": "exhaust", "full_name": "test/exhaust"},
+                    {"name": "example", "full_name": "test/example", "default_branch": "main"},
+                    {"name": "exhaust", "full_name": "test/exhaust", "default_branch": "main"},
                 ]
             },
         )
         integration = Integration.objects.get(provider=self.provider.key)
-        installation = integration.get_installation(self.organization)
+        installation = integration.get_installation(self.organization.id)
         result = installation.get_repositories("ex")
         assert result == [
-            {"identifier": "test/example", "name": "example"},
-            {"identifier": "test/exhaust", "name": "exhaust"},
+            {"identifier": "test/example", "name": "example", "default_branch": "main"},
+            {"identifier": "test/exhaust", "name": "exhaust", "default_branch": "main"},
         ]

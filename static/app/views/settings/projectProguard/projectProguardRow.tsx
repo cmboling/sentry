@@ -3,16 +3,16 @@ import styled from '@emotion/styled';
 
 import Access from 'sentry/components/acl/access';
 import {Role} from 'sentry/components/acl/role';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import Confirm from 'sentry/components/confirm';
 import FileSize from 'sentry/components/fileSize';
 import Link from 'sentry/components/links/link';
 import TimeSince from 'sentry/components/timeSince';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {IconClock, IconDelete, IconDownload} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {DebugFile} from 'sentry/types/debugFiles';
 
 type Props = {
@@ -23,13 +23,13 @@ type Props = {
   orgSlug: string;
 };
 
-const ProjectProguardRow = ({
+function ProjectProguardRow({
   mapping,
   onDelete,
   downloadUrl,
   downloadRole,
   orgSlug,
-}: Props) => {
+}: Props) {
   const {id, debugId, uuid, size, dateCreated} = mapping;
 
   const handleDeleteClick = () => {
@@ -65,7 +65,7 @@ const ProjectProguardRow = ({
                 isHoverable
               >
                 <Button
-                  size="small"
+                  size="sm"
                   icon={<IconDownload size="sm" />}
                   disabled={!hasRole}
                   href={downloadUrl}
@@ -88,7 +88,7 @@ const ProjectProguardRow = ({
                   disabled={!hasAccess}
                 >
                   <Button
-                    size="small"
+                    size="sm"
                     icon={<IconDelete size="sm" />}
                     title={hasAccess ? t('Remove Mapping') : undefined}
                     aria-label={t('Remove Mapping')}
@@ -102,7 +102,7 @@ const ProjectProguardRow = ({
       </ActionsColumn>
     </Fragment>
   );
-};
+}
 
 const NameColumn = styled('div')`
   display: flex;

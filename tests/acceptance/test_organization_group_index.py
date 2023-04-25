@@ -4,15 +4,17 @@ from unittest.mock import patch
 import pytz
 from django.utils import timezone
 
+from fixtures.page_objects.issue_list import IssueListPage
 from sentry.models import AssistantActivity, GroupInboxReason, GroupStatus
 from sentry.models.groupinbox import add_group_to_inbox
 from sentry.testutils import AcceptanceTestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
-from tests.acceptance.page_objects.issue_list import IssueListPage
+from sentry.testutils.silo import region_silo_test
 
 event_time = before_now(days=3).replace(tzinfo=pytz.utc)
 
 
+@region_silo_test
 class OrganizationGroupIndexTest(AcceptanceTestCase, SnubaTestCase):
     def setUp(self):
         super().setUp()
@@ -106,7 +108,7 @@ class OrganizationGroupIndexTest(AcceptanceTestCase, SnubaTestCase):
             self.page.select_issue(1)
             self.page.resolve_issues_removal()
 
-            group1.update(status=GroupStatus.RESOLVED)
+            group1.update(status=GroupStatus.RESOLVED, substatus=None)
 
             self.page.wait_for_issue_removal()
             groups = self.browser.elements('[data-test-id="event-issue-header"]')
@@ -148,7 +150,7 @@ class OrganizationGroupIndexTest(AcceptanceTestCase, SnubaTestCase):
             self.page.select_issue(1)
             self.page.resolve_issues_removal()
 
-            group1.update(status=GroupStatus.RESOLVED)
+            group1.update(status=GroupStatus.RESOLVED, substatus=None)
 
             self.page.wait_for_issue_removal()
             groups = self.browser.elements('[data-test-id="event-issue-header"]')
@@ -170,7 +172,7 @@ class OrganizationGroupIndexTest(AcceptanceTestCase, SnubaTestCase):
             self.page.select_issue(1)
             self.page.ignore_issues()
 
-            group1.update(status=GroupStatus.IGNORED)
+            group1.update(status=GroupStatus.IGNORED, substatus=None)
 
             self.page.wait_for_issue_removal()
             groups = self.browser.elements('[data-test-id="event-issue-header"]')
@@ -193,7 +195,7 @@ class OrganizationGroupIndexTest(AcceptanceTestCase, SnubaTestCase):
                 self.page.select_issue(1)
                 self.page.ignore_issues()
 
-                group1.update(status=GroupStatus.IGNORED)
+                group1.update(status=GroupStatus.IGNORED, substatus=None)
 
                 self.page.wait_for_issue_removal()
                 groups = self.browser.elements('[data-test-id="event-issue-header"]')
@@ -215,7 +217,7 @@ class OrganizationGroupIndexTest(AcceptanceTestCase, SnubaTestCase):
             self.page.select_issue(1)
             self.page.delete_issues()
 
-            group1.update(status=GroupStatus.PENDING_DELETION)
+            group1.update(status=GroupStatus.PENDING_DELETION, substatus=None)
 
             self.page.wait_for_issue_removal()
             groups = self.browser.elements('[data-test-id="event-issue-header"]')
@@ -238,7 +240,7 @@ class OrganizationGroupIndexTest(AcceptanceTestCase, SnubaTestCase):
                 self.page.select_issue(1)
                 self.page.delete_issues()
 
-                group1.update(status=GroupStatus.PENDING_DELETION)
+                group1.update(status=GroupStatus.PENDING_DELETION, substatus=None)
 
                 self.page.wait_for_issue_removal()
                 groups = self.browser.elements('[data-test-id="event-issue-header"]')
@@ -262,8 +264,8 @@ class OrganizationGroupIndexTest(AcceptanceTestCase, SnubaTestCase):
             self.page.select_issue(2)
             self.page.merge_issues()
 
-            group1.update(status=GroupStatus.PENDING_MERGE)
-            group2.update(status=GroupStatus.PENDING_MERGE)
+            group1.update(status=GroupStatus.PENDING_MERGE, substatus=None)
+            group2.update(status=GroupStatus.PENDING_MERGE, substatus=None)
 
             self.page.wait_for_issue_removal()
             groups = self.browser.elements('[data-test-id="event-issue-header"]')

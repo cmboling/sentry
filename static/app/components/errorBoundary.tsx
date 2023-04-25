@@ -1,9 +1,9 @@
-import * as React from 'react';
+import {Component} from 'react';
 import {browserHistory} from 'react-router';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
 
-import Alert from 'sentry/components/alert';
+import {Alert} from 'sentry/components/alert';
 import DetailedError from 'sentry/components/errors/detailedError';
 import {t} from 'sentry/locale';
 import getDynamicText from 'sentry/utils/getDynamicText';
@@ -13,6 +13,7 @@ type DefaultProps = {
 };
 
 type Props = DefaultProps & {
+  children?: React.ReactNode;
   // To add context for better UX
   className?: string;
   customComponent?: React.ReactNode;
@@ -32,7 +33,7 @@ function getExclamation() {
   return exclamation[Math.floor(Math.random() * exclamation.length)];
 }
 
-class ErrorBoundary extends React.Component<Props, State> {
+class ErrorBoundary extends Component<Props, State> {
   static defaultProps: DefaultProps = {
     mini: false,
   };
@@ -61,6 +62,13 @@ class ErrorBoundary extends React.Component<Props, State> {
       if (errorTag) {
         Object.keys(errorTag).forEach(tag => scope.setTag(tag, errorTag[tag]));
       }
+
+      // Based on https://github.com/getsentry/sentry-javascript/blob/6f4ad562c469f546f1098136b65583309d03487b/packages/react/src/errorboundary.tsx#L75-L85
+      const errorBoundaryError = new Error(error.message);
+      errorBoundaryError.name = `React ErrorBoundary ${errorBoundaryError.name}`;
+      errorBoundaryError.stack = errorInfo.componentStack;
+
+      error.cause = errorBoundaryError;
 
       scope.setExtra('errorInfo', errorInfo);
       Sentry.captureException(error);
@@ -100,7 +108,7 @@ class ErrorBoundary extends React.Component<Props, State> {
     }
 
     return (
-      <Wrapper>
+      <Wrapper data-test-id="error-boundary">
         <DetailedError
           heading={getDynamicText({
             value: getExclamation(),

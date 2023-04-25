@@ -1,9 +1,16 @@
 from django.conf import settings
 from django.db import models
 
-from sentry.db.models import BoundedPositiveIntegerField, FlexibleForeignKey, Model, sane_repr
+from sentry.db.models import (
+    BoundedPositiveIntegerField,
+    FlexibleForeignKey,
+    Model,
+    control_silo_only_model,
+    sane_repr,
+)
 
 
+@control_silo_only_model
 class AssistantActivity(Model):
     """Records user interactions with the assistant guides."""
 

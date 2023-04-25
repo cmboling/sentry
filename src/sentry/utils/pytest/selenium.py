@@ -1,6 +1,5 @@
 # TODO(dcramer): this heavily inspired by pytest-selenium, and it's possible
 # we could simply inherit from the plugin at this point
-
 import logging
 import os
 import sys
@@ -17,10 +16,11 @@ from selenium.common.exceptions import (
     WebDriverException,
 )
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.ui import WebDriverWait
 
-from sentry.utils.compat import map
+from sentry.silo import SiloMode
 from sentry.utils.retries import TimedRetryPolicy
 
 logger = logging.getLogger("sentry.testutils")
@@ -130,10 +130,10 @@ class Browser:
 
         if xpath is not None:
             self.wait_until(xpath=xpath)
-            return self.driver.find_element_by_xpath(xpath)
+            return self.driver.find_element(by=By.XPATH, value=xpath)
         else:
             self.wait_until(selector)
-            return self.driver.find_element_by_css_selector(selector)
+            return self.driver.find_element(by=By.CSS_SELECTOR, value=selector)
 
     def elements(self, selector=None, xpath=None):
         """
@@ -142,17 +142,17 @@ class Browser:
 
         if xpath is not None:
             self.wait_until(xpath=xpath)
-            return self.driver.find_elements_by_xpath(xpath)
+            return self.driver.find_elements(by=By.XPATH, value=xpath)
         else:
             self.wait_until(selector)
-            return self.driver.find_elements_by_css_selector(selector)
+            return self.driver.find_elements(by=By.CSS_SELECTOR, value=selector)
 
     def element_exists(self, selector):
         """
         Check if an element exists on the page. This method will *not* wait for the element.
         """
         try:
-            self.driver.find_element_by_css_selector(selector)
+            self.driver.find_element(by=By.CSS_SELECTOR, value=selector)
         except NoSuchElementException:
             return False
         return True
@@ -187,7 +187,7 @@ class Browser:
         return self
 
     def find_element_by_name(self, name):
-        return self.driver.find_element_by_name(name)
+        return self.driver.find_element(by=By.NAME, value=name)
 
     def move_to(self, selector=None):
         """
@@ -206,8 +206,6 @@ class Browser:
         Waits until ``selector`` is visible and enabled to be clicked, or until ``timeout``
         is hit, whichever happens first.
         """
-        from selenium.webdriver.common.by import By
-
         if selector:
             condition = expected_conditions.element_to_be_clickable((By.CSS_SELECTOR, selector))
         else:
@@ -222,8 +220,6 @@ class Browser:
         Waits until ``selector`` is found in the browser, or until ``timeout``
         is hit, whichever happens first.
         """
-        from selenium.webdriver.common.by import By
-
         if selector:
             condition = expected_conditions.presence_of_element_located((By.CSS_SELECTOR, selector))
         elif xpath:
@@ -245,8 +241,6 @@ class Browser:
         Waits until ``selector`` is NOT found in the browser, or until
         ``timeout`` is hit, whichever happens first.
         """
-        from selenium.webdriver.common.by import By
-
         if selector:
             condition = expected_conditions.presence_of_element_located((By.CSS_SELECTOR, selector))
         elif title:
@@ -298,13 +292,15 @@ class Browser:
         """
         self.driver.implicitly_wait(duration)
 
-    def snapshot(self, name, mobile_only=False):
+    def snapshot(self, name, mobile_only=False, desktop_only=False):
         """
         Capture a screenshot of the current state of the page.
         """
+        if SiloMode.get_current_mode() != SiloMode.MONOLITH:
+            name = f"{name}-{SiloMode.get_current_mode()}"
         # TODO(dcramer): ideally this would take the executing test package
         # into account for duplicate names
-        if os.environ.get("VISUAL_SNAPSHOT_ENABLE") != "1" or sys.version_info[:2] != (3, 8):
+        if os.environ.get("VISUAL_SNAPSHOT_ENABLE") != "1":
             return self
 
         self.wait_for_images_loaded()
@@ -329,7 +325,7 @@ class Browser:
             with self.full_viewport():
                 screenshot_path = f"{snapshot_dir}/{filename}.png"
                 # This will make sure we resize viewport height to fit contents
-                self.driver.find_element_by_tag_name("body").screenshot(screenshot_path)
+                self.driver.find_element(by=By.TAG_NAME, value="body").screenshot(screenshot_path)
 
                 if os.environ.get("SENTRY_SCREENSHOT"):
                     import click
@@ -341,19 +337,22 @@ class Browser:
                 )
                 if has_tooltips:
                     screenshot_path = f"{snapshot_dir}-tooltips/{filename}.png"
-                    self.driver.find_element_by_tag_name("body").screenshot(screenshot_path)
+                    self.driver.find_element(by=By.TAG_NAME, value="body").screenshot(
+                        screenshot_path
+                    )
                     self.driver.execute_script(
                         "window.__closeAllTooltips && window.__closeAllTooltips()"
                     )
 
-        with self.mobile_viewport():
-            screenshot_path = f"{snapshot_dir}-mobile/{filename}.png"
-            self.driver.find_element_by_tag_name("body").screenshot(screenshot_path)
+        if not desktop_only:
+            with self.mobile_viewport():
+                screenshot_path = f"{snapshot_dir}-mobile/{filename}.png"
+                self.driver.find_element(by=By.TAG_NAME, value="body").screenshot(screenshot_path)
 
-            if os.environ.get("SENTRY_SCREENSHOT"):
-                import click
+                if os.environ.get("SENTRY_SCREENSHOT"):
+                    import click
 
-                click.launch(screenshot_path)
+                    click.launch(screenshot_path)
 
         return self
 
@@ -405,23 +404,12 @@ class Browser:
             logger.info("selenium.initialize-cookies")
             self.get("/")
 
-        # XXX(dcramer): PhantomJS does not let us add cookies with the native
-        # selenium API because....
-        # http://stackoverflow.com/questions/37103621/adding-cookies-working-with-firefox-webdriver-but-not-in-phantomjs
-
         # TODO(dcramer): this should be escaped, but idgaf
         logger.info(f"selenium.set-cookie.{name}", extra={"value": value})
-        if isinstance(self.driver, webdriver.PhantomJS):
-            self.driver.execute_script(
-                "document.cookie = '{name}={value}; path={path}; domain={domain}; expires={expires}'; max-age={max_age}\n".format(
-                    **cookie
-                )
-            )
-        else:
-            # XXX(dcramer): chromedriver (of certain versions) is complaining about this being
-            # an invalid kwarg
-            del cookie["secure"]
-            self.driver.add_cookie(cookie)
+        # XXX(dcramer): chromedriver (of certain versions) is complaining about this being
+        # an invalid kwarg
+        del cookie["secure"]
+        self.driver.add_cookie(cookie)
 
 
 def pytest_addoption(parser):
@@ -442,6 +430,7 @@ def pytest_addoption(parser):
     group._addoption(
         "--no-headless", dest="no_headless", help="show a browser while running the tests (chrome)"
     )
+    group._addoption("--slow-network", dest="slow_network", help="slow the network (chrome)")
 
 
 def pytest_configure(config):
@@ -476,6 +465,7 @@ def browser(request, live_server):
 
     driver_type = request.config.getoption("selenium_driver")
     headless = not request.config.getoption("no_headless")
+    slow_network = request.config.getoption("slow_network")
     if driver_type == "chrome":
         options = webdriver.ChromeOptions()
         options.add_argument("no-sandbox")
@@ -493,6 +483,12 @@ def browser(request, live_server):
             chrome_args["executable_path"] = chromedriver_path
 
         driver = start_chrome(**chrome_args)
+        if slow_network:
+            driver.set_network_conditions(
+                offline=False,
+                latency=400 * 2,  # additional latency (ms)
+                throughput=500 * 1024,  # maximal throughput
+            )
     elif driver_type == "firefox":
         driver = webdriver.Firefox()
     elif driver_type == "phantomjs":
@@ -505,30 +501,37 @@ def browser(request, live_server):
 
     driver.set_window_size(window_width, window_height)
 
-    def fin():
-        # dump console log to stdout, will be shown when test fails
-        for entry in driver.get_log("browser"):
-            sys.stderr.write("[browser console] ")
-            sys.stderr.write(repr(entry))
-            sys.stderr.write("\n")
-        # Teardown Selenium.
-        try:
-            driver.quit()
-        except Exception:
-            pass
-
     request.node._driver = driver
-    request.addfinalizer(fin)
 
     browser = Browser(driver, live_server)
 
     browser.set_emulated_media([{"name": "prefers-reduced-motion", "value": "reduce"}])
 
+    # XXX: We explicitly set an extra garbage cookie, just so like in
+    # production, there are more than one cookies set.
+    #
+    # This is the outcome of an incident where the acceptance tests failed to
+    # capture an issue where cookie lookup in the frontend failed, but did NOT
+    # fail in the acceptance tests because the code worked fine when
+    # document.cookie only had one cookie in it.
+    browser.save_cookie("acceptance_test_cookie", "1")
+
     if hasattr(request, "cls"):
         request.cls.browser = browser
     request.node.browser = browser
 
-    return driver
+    yield driver
+
+    # dump console log to stdout, will be shown when test fails
+    for entry in driver.get_log("browser"):
+        sys.stderr.write("[browser console] ")
+        sys.stderr.write(repr(entry))
+        sys.stderr.write("\n")
+    # Teardown Selenium.
+    try:
+        driver.quit()
+    except Exception:
+        pass
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)

@@ -1,16 +1,21 @@
 from datetime import timedelta
+from functools import cached_property
 
 from django.test import RequestFactory
 from django.utils import timezone
-from exam import fixture
 
 from sentry.middleware.user import UserActiveMiddleware
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 
 
+@control_silo_test
 class UserActiveMiddlewareTest(TestCase):
-    middleware = fixture(UserActiveMiddleware)
-    factory = fixture(RequestFactory)
+    middleware = cached_property(UserActiveMiddleware)
+
+    @cached_property
+    def factory(self):
+        return RequestFactory()
 
     def test_simple(self):
         self.view = lambda x: None

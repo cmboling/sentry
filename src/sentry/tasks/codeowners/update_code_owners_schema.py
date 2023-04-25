@@ -1,5 +1,6 @@
 from sentry import features
-from sentry.tasks.base import instrumented_task
+from sentry.models import Integration, Organization, Project
+from sentry.tasks.base import instrumented_task, load_model_from_db
 
 
 @instrumented_task(
@@ -11,18 +12,22 @@ from sentry.tasks.base import instrumented_task
 def update_code_owners_schema(organization, integration=None, projects=None, **kwargs):
     from sentry.models import ProjectCodeOwners, RepositoryProjectPathConfig
 
+    organization = load_model_from_db(Organization, organization)
+
     if not features.has("organizations:integrations-codeowners", organization):
         return
     try:
         code_owners = []
 
         if projects:
+            projects = [load_model_from_db(Project, project) for project in projects]
             code_owners = ProjectCodeOwners.objects.filter(project__in=projects)
 
         if integration:
+            integration = load_model_from_db(Integration, integration, allow_cache=False)
             code_mapping_ids = RepositoryProjectPathConfig.objects.filter(
-                organization_integration__organization=organization,
-                organization_integration__integration=integration,
+                organization_integration__organization_id=organization.id,
+                organization_integration__integration_id=integration.id,
             ).values_list("id", flat=True)
 
             code_owners = ProjectCodeOwners.objects.filter(
@@ -30,7 +35,7 @@ def update_code_owners_schema(organization, integration=None, projects=None, **k
             )
 
         for code_owner in code_owners:
-            code_owner.update_schema()
+            code_owner.update_schema(organization=organization)
 
     # TODO(nisanthan): May need to add logging  for the cases where we might want to have more information if something fails
     except (RepositoryProjectPathConfig.DoesNotExist, ProjectCodeOwners.DoesNotExist):

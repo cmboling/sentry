@@ -18,7 +18,6 @@ from django.utils.translation import ugettext_lazy as _
 
 from bitfield import BitField
 from sentry import projectoptions
-from sentry.app import locks
 from sentry.constants import RESERVED_PROJECT_SLUGS, ObjectStatus
 from sentry.db.mixin import PendingDeletionMixin, delete_pending_deletion_option
 from sentry.db.models import (
@@ -26,15 +25,19 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
 from sentry.db.models.utils import slugify_instance
+from sentry.db.postgres.roles import in_test_psql_role_override
+from sentry.locks import locks
+from sentry.models.outbox import OutboxCategory, OutboxScope, RegionOutbox
 from sentry.snuba.models import SnubaQuery
 from sentry.utils import metrics
 from sentry.utils.colors import get_hashed_color
-from sentry.utils.http import absolute_uri
 from sentry.utils.integrationdocs import integration_doc_exists
 from sentry.utils.retries import TimedRetryPolicy
+from sentry.utils.snowflake import SnowflakeIdMixin
 
 if TYPE_CHECKING:
     from sentry.models import User
@@ -42,13 +45,17 @@ if TYPE_CHECKING:
 # TODO(dcramer): pull in enum library
 ProjectStatus = ObjectStatus
 
+SENTRY_USE_SNOWFLAKE = getattr(settings, "SENTRY_USE_SNOWFLAKE", False)
+
 
 class ProjectManager(BaseManager):
     def get_by_users(self, users: Iterable[User]) -> Mapping[int, Iterable[int]]:
         """Given a list of users, return a mapping of each user to the projects they are a member of."""
         project_rows = self.filter(
             projectteam__team__organizationmemberteam__is_active=True,
-            projectteam__team__organizationmemberteam__organizationmember__user__in=users,
+            projectteam__team__organizationmemberteam__organizationmember__user_id__in=map(
+                lambda u: u.id, users
+            ),
         ).values_list("id", "projectteam__team__organizationmemberteam__organizationmember__user")
 
         projects_by_user_id = defaultdict(set)
@@ -98,7 +105,8 @@ class ProjectManager(BaseManager):
         return sorted(project_list, key=lambda x: x.name.lower())
 
 
-class Project(Model, PendingDeletionMixin):
+@region_silo_only_model
+class Project(Model, PendingDeletionMixin, SnowflakeIdMixin):
     from sentry.models.projectteam import ProjectTeam
 
     """
@@ -109,6 +117,7 @@ class Project(Model, PendingDeletionMixin):
     __include_in_export__ = True
 
     slug = models.SlugField(null=True)
+    # DEPRECATED do not use, prefer slug
     name = models.CharField(max_length=200)
     forced_color = models.CharField(max_length=6, null=True, blank=True)
     organization = FlexibleForeignKey("sentry.Organization")
@@ -134,6 +143,20 @@ class Project(Model, PendingDeletionMixin):
             ("has_transactions", "This Project has sent transactions"),
             ("has_alert_filters", "This Project has filters"),
             ("has_sessions", "This Project has sessions"),
+            ("has_profiles", "This Project has sent profiles"),
+            ("has_replays", "This Project has sent replays"),
+            ("spike_protection_error_currently_active", "spike_protection_error_currently_active"),
+            (
+                "spike_protection_transaction_currently_active",
+                "spike_protection_transaction_currently_active",
+            ),
+            (
+                "spike_protection_attachment_currently_active",
+                "spike_protection_attachment_currently_active",
+            ),
+            ("has_minified_stack_trace", "This Project has event with minified stack trace"),
+            ("has_cron_monitors", "This Project has cron monitors"),
+            ("has_cron_checkins", "This Project has sent check-ins"),
         ),
         default=10,
         null=True,
@@ -166,7 +189,9 @@ class Project(Model, PendingDeletionMixin):
 
     def save(self, *args, **kwargs):
         if not self.slug:
-            lock = locks.get("slug:project", duration=5)
+            lock = locks.get(
+                f"slug:project:{self.organization_id}", duration=5, name="project_slug"
+            )
             with TimedRetryPolicy(10)(lock.acquire):
                 slugify_instance(
                     self,
@@ -175,18 +200,24 @@ class Project(Model, PendingDeletionMixin):
                     reserved=RESERVED_PROJECT_SLUGS,
                     max_length=50,
                 )
-            super().save(*args, **kwargs)
+
+        if SENTRY_USE_SNOWFLAKE:
+            snowflake_redis_key = "project_snowflake_key"
+            self.save_with_snowflake_id(
+                snowflake_redis_key, lambda: super(Project, self).save(*args, **kwargs)
+            )
         else:
             super().save(*args, **kwargs)
         self.update_rev_for_option()
 
     def get_absolute_url(self, params=None):
-        url = f"/organizations/{self.organization.slug}/issues/"
+        path = f"/organizations/{self.organization.slug}/issues/"
         params = {} if params is None else params
         params["project"] = self.id
+        query = None
         if params:
-            url = url + "?" + urlencode(params)
-        return absolute_uri(url)
+            query = urlencode(params)
+        return self.organization.absolute_url(path, query=query)
 
     def is_internal_project(self):
         for value in (settings.SENTRY_FRONTEND_PROJECT, settings.SENTRY_PROJECT):
@@ -268,11 +299,13 @@ class Project(Model, PendingDeletionMixin):
             Environment,
             EnvironmentProject,
             ProjectTeam,
+            RegionScheduledDeletion,
             ReleaseProject,
             ReleaseProjectEnvironment,
             Rule,
         )
         from sentry.models.actor import ACTOR_TYPES
+        from sentry.monitors.models import Monitor
 
         old_org_id = self.organization_id
         org_changed = old_org_id != organization.id
@@ -319,13 +352,25 @@ class Project(Model, PendingDeletionMixin):
                 environment_id=Environment.get_or_create(self, environment_names[environment_id]).id
             )
 
+        # Manually move over organization id's for Monitors
+        monitors = Monitor.objects.filter(organization_id=old_org_id)
+        new_monitors = set(
+            Monitor.objects.filter(organization_id=organization.id).values_list("slug", flat=True)
+        )
+        for monitor in monitors:
+            if monitor.slug in new_monitors:
+                RegionScheduledDeletion.schedule(monitor, days=0)
+            else:
+                monitor.update(organization_id=organization.id)
+
         # Remove alert owners not in new org
         alert_rules = AlertRule.objects.fetch_for_project(self).filter(owner_id__isnull=False)
         rules = Rule.objects.filter(owner_id__isnull=False, project=self)
         for rule in list(chain(alert_rules, rules)):
             actor = rule.owner
+            is_member = False
             if actor.type == ACTOR_TYPES["user"]:
-                is_member = organization.member_set.filter(user=actor.resolve()).exists()
+                is_member = organization.member_set.filter(user_id=actor.resolve().id).exists()
             if actor.type == ACTOR_TYPES["team"]:
                 is_member = actor.resolve().organization_id == organization.id
             if not is_member:
@@ -379,7 +424,7 @@ class Project(Model, PendingDeletionMixin):
         Rule.objects.filter(owner_id=team.actor_id, project=self).update(owner=None)
 
     def get_security_token(self):
-        lock = locks.get(self.get_lock_key(), duration=5)
+        lock = locks.get(self.get_lock_key(), duration=5, name="project_security_token")
         with TimedRetryPolicy(10)(lock.acquire):
             security_token = self.get_option("sentry:token", None)
             if security_token is None:
@@ -448,13 +493,23 @@ class Project(Model, PendingDeletionMixin):
             return True
         return integration_doc_exists(value)
 
+    @staticmethod
+    def outbox_for_update(project_identifier: int, organization_identifier: int) -> RegionOutbox:
+        return RegionOutbox(
+            shard_scope=OutboxScope.ORGANIZATION_SCOPE,
+            shard_identifier=organization_identifier,
+            category=OutboxCategory.PROJECT_UPDATE,
+            object_identifier=project_identifier,
+        )
+
     def delete(self, **kwargs):
         from sentry.models import NotificationSetting
 
         # There is no foreign key relationship so we have to manually cascade.
         NotificationSetting.objects.remove_for_project(self)
-
-        return super().delete(**kwargs)
+        with transaction.atomic(), in_test_psql_role_override("postgres"):
+            Project.outbox_for_update(self.id, self.organization_id).save()
+            return super().delete(**kwargs)
 
 
 pre_delete.connect(delete_pending_deletion_option, sender=Project, weak=False)

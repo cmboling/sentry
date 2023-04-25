@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Component, Fragment} from 'react';
 import {RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
 
@@ -6,27 +6,21 @@ import {addLoadingMessage, clearIndicators} from 'sentry/actionCreators/indicato
 import {Client} from 'sentry/api';
 import Access from 'sentry/components/acl/access';
 import AlertLink from 'sentry/components/alertLink';
-import AutoSelectText from 'sentry/components/autoSelectText';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import EmptyStateWarning from 'sentry/components/emptyStateWarning';
 import Form from 'sentry/components/forms/form';
 import JsonForm from 'sentry/components/forms/jsonForm';
 import ExternalLink from 'sentry/components/links/externalLink';
 import LoadingError from 'sentry/components/loadingError';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
-import {
-  Panel,
-  PanelAlert,
-  PanelBody,
-  PanelHeader,
-  PanelTable,
-} from 'sentry/components/panels';
+import {Panel, PanelAlert, PanelTable} from 'sentry/components/panels';
 import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import Tag from 'sentry/components/tag';
 import TimeSince from 'sentry/components/timeSince';
+import Version from 'sentry/components/version';
 import formGroups from 'sentry/data/forms/processingIssues';
 import {IconQuestion} from 'sentry/icons';
 import {t, tn} from 'sentry/locale';
-import {inputStyles} from 'sentry/styles/input';
 import {Organization, ProcessingIssue, ProcessingIssueItem} from 'sentry/types';
 import withApi from 'sentry/utils/withApi';
 import withOrganization from 'sentry/utils/withOrganization';
@@ -61,7 +55,7 @@ const HELP_LINKS = {
 type Props = {
   api: Client;
   organization: Organization;
-} & RouteComponentProps<{orgId: string; projectId: string}, {}>;
+} & RouteComponentProps<{projectId: string}, {}>;
 
 type State = {
   error: boolean;
@@ -73,7 +67,7 @@ type State = {
   reprocessing: boolean;
 };
 
-class ProjectProcessingIssues extends React.Component<Props, State> {
+class ProjectProcessingIssues extends Component<Props, State> {
   state: State = {
     formData: {},
     loading: true,
@@ -89,11 +83,12 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
   }
 
   fetchData = () => {
-    const {orgId, projectId} = this.props.params;
+    const {organization} = this.props;
+    const {projectId} = this.props.params;
     this.setState({
       expected: this.state.expected + 2,
     });
-    this.props.api.request(`/projects/${orgId}/${projectId}/`, {
+    this.props.api.request(`/projects/${organization.slug}/${projectId}/`, {
       success: data => {
         const expected = this.state.expected - 1;
         this.setState({
@@ -113,7 +108,7 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
     });
 
     this.props.api.request(
-      `/projects/${orgId}/${projectId}/processingissues/?detailed=1`,
+      `/projects/${organization.slug}/${projectId}/processingissues/?detailed=1`,
       {
         success: (data, _, resp) => {
           const expected = this.state.expected - 1;
@@ -147,8 +142,9 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
 
     addLoadingMessage(t('Started reprocessing\u2026'));
 
-    const {orgId, projectId} = this.props.params;
-    this.props.api.request(`/projects/${orgId}/${projectId}/reprocessing/`, {
+    const {organization} = this.props;
+    const {projectId} = this.props.params;
+    this.props.api.request(`/projects/${organization.slug}/${projectId}/reprocessing/`, {
       method: 'POST',
       success: () => {
         this.fetchData();
@@ -168,61 +164,69 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
   };
 
   discardEvents = () => {
-    const {orgId, projectId} = this.props.params;
+    const {organization} = this.props;
+    const {projectId} = this.props.params;
     this.setState({
       expected: this.state.expected + 1,
     });
-    this.props.api.request(`/projects/${orgId}/${projectId}/processingissues/discard/`, {
-      method: 'DELETE',
-      success: () => {
-        const expected = this.state.expected - 1;
-        this.setState({
-          expected,
-          error: false,
-          loading: expected > 0,
-        });
-        // TODO (billyvg): Need to fix this
-        // we reload to get rid of the badge in the sidebar
-        window.location.reload();
-      },
-      error: () => {
-        const expected = this.state.expected - 1;
-        this.setState({
-          expected,
-          error: true,
-          loading: expected > 0,
-        });
-      },
-    });
+    this.props.api.request(
+      `/projects/${organization.slug}/${projectId}/processingissues/discard/`,
+      {
+        method: 'DELETE',
+        success: () => {
+          const expected = this.state.expected - 1;
+          this.setState({
+            expected,
+            error: false,
+            loading: expected > 0,
+          });
+          // TODO (billyvg): Need to fix this
+          // we reload to get rid of the badge in the sidebar
+          window.location.reload();
+        },
+        error: () => {
+          const expected = this.state.expected - 1;
+          this.setState({
+            expected,
+            error: true,
+            loading: expected > 0,
+          });
+        },
+      }
+    );
   };
 
   deleteProcessingIssues = () => {
-    const {orgId, projectId} = this.props.params;
+    const {organization} = this.props;
+    const {projectId} = this.props.params;
     this.setState({
       expected: this.state.expected + 1,
     });
-    this.props.api.request(`/projects/${orgId}/${projectId}/processingissues/`, {
-      method: 'DELETE',
-      success: () => {
-        const expected = this.state.expected - 1;
-        this.setState({
-          expected,
-          error: false,
-          loading: expected > 0,
-        });
-        // TODO (billyvg): Need to fix this
-        // we reload to get rid of the badge in the sidebar
-        window.location.reload();
-      },
-      error: () => {
-        const expected = this.state.expected - 1;
-        this.setState({
-          expected,
-          error: true,
-          loading: expected > 0,
-        });
-      },
-    });
+    this.props.api.request(
+      `/projects/${organization.slug}/${projectId}/processingissues/`,
+      {
+        method: 'DELETE',
+        success: () => {
+          const expected = this.state.expected - 1;
+          this.setState({
+            expected,
+            error: false,
+            loading: expected > 0,
+          });
+          // TODO (billyvg): Need to fix this
+          // we reload to get rid of the badge in the sidebar
+          window.location.reload();
+        },
+        error: () => {
+          const expected = this.state.expected - 1;
+          this.setState({
+            expected,
+            error: true,
+            loading: expected > 0,
+          });
+        },
+      }
+    );
   };
 
   renderDebugTable() {
@@ -290,6 +294,7 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
   }
 
   renderDetails(item: ProcessingIssueItem) {
+    const {release, dist} = item.data;
     let dsymUUID: React.ReactNode = null;
     let dsymName: React.ReactNode = null;
     let dsymArch: React.ReactNode = null;
@@ -311,6 +316,16 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
         {dsymUUID && <span> {dsymUUID}</span>}
         {dsymArch && <span> {dsymArch}</span>}
         {dsymName && <span> (for {dsymName})</span>}
+        {(release || dist) && (
+          <div>
+            <Tag tooltipText={t('Latest Release Observed with Issue')}>
+              {release ? <Version version={release} /> : t('none')}
+            </Tag>{' '}
+            <Tag tooltipText={t('Latest Distribution Observed with Issue')}>
+              {dist || t('none')}
+            </Tag>
+          </div>
+        )}
       </span>
     );
   }
@@ -340,29 +355,6 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
 
   renderResults() {
     const {processingIssues} = this.state;
-    const fixLink = processingIssues ? processingIssues.signedLink : false;
-
-    let fixLinkBlock: React.ReactNode = null;
-
-    if (fixLink) {
-      fixLinkBlock = (
-        <Panel>
-          <PanelHeader>
-            {t('Having trouble uploading debug informations? We can help!')}
-          </PanelHeader>
-          <PanelBody withPadding>
-            <label>
-              {t(
-                "Paste this command into your shell and we'll attempt to upload the missing symbols from your machine:"
-              )}
-            </label>
-            <AutoSelectTextInput readOnly>
-              curl -sL "{fixLink}" | bash
-            </AutoSelectTextInput>
-          </PanelBody>
-        </Panel>
-      );
-    }
 
     let processingRow: React.ReactNode = null;
     if (processingIssues && processingIssues.issuesProcessing > 0) {
@@ -378,14 +370,13 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
     }
 
     return (
-      <React.Fragment>
-        {fixLinkBlock}
+      <Fragment>
         <h3>
           {t('Pending Issues')}
           <Access access={['project:write']}>
             {({hasAccess}) => (
               <Button
-                size="small"
+                size="sm"
                 className="pull-right"
                 disabled={!hasAccess}
                 onClick={() => this.discardEvents()}
@@ -398,17 +389,17 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
         <PanelTable headers={[t('Problem'), t('Details'), t('Events'), t('Last seen')]}>
           {processingRow}
           {processingIssues?.issues?.map((item, idx) => (
-            <React.Fragment key={idx}>
+            <Fragment key={idx}>
               <div>{this.renderProblem(item)}</div>
               <div>{this.renderDetails(item)}</div>
               <div>{item.numEvents + ''}</div>
               <div>
                 <TimeSince date={item.lastSeen} />
               </div>
-            </React.Fragment>
+            </Fragment>
           ))}
         </PanelTable>
-      </React.Fragment>
+      </Fragment>
     );
   }
 
@@ -419,12 +410,13 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
     }
 
     const {formData} = this.state;
-    const {orgId, projectId} = this.props.params;
+    const {organization} = this.props;
+    const {projectId} = this.props.params;
     return (
       <Form
         saveOnBlur
         onSubmitSuccess={this.deleteProcessingIssues}
-        apiEndpoint={`/projects/${orgId}/${projectId}/`}
+        apiEndpoint={`/projects/${organization.slug}/${projectId}/`}
         apiMethod="PUT"
         initialData={formData}
       >
@@ -471,11 +463,6 @@ class ProjectProcessingIssues extends React.Component<Props, State> {
 
 const StyledPanelAlert = styled(PanelAlert)`
   grid-column: 1/5;
-`;
-
-const AutoSelectTextInput = styled(AutoSelectText)<{readOnly: boolean}>`
-  font-family: ${p => p.theme.text.familyMono};
-  ${p => inputStyles(p)};
 `;
 
 export {ProjectProcessingIssues};

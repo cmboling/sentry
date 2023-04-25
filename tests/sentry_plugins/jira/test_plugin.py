@@ -1,8 +1,9 @@
+from functools import cached_property
+
 import responses
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 from django.urls import reverse
-from exam import fixture
 
 from sentry.testutils import TestCase
 from sentry.utils import json
@@ -187,11 +188,11 @@ issue_response = {
 
 
 class JiraPluginTest(TestCase):
-    @fixture
+    @cached_property
     def plugin(self):
         return JiraPlugin()
 
-    @fixture
+    @cached_property
     def request(self):
         return RequestFactory()
 
@@ -282,16 +283,13 @@ class JiraPluginTest(TestCase):
         ) == {"text": "Foo Bar - foo@sentry.io (foobar)", "id": "foobar"}
 
         # test weird addon users that don't have email addresses
-        assert (
-            self.plugin._get_formatted_user(
-                {
-                    "name": "robot",
-                    "avatarUrls": {
-                        "16x16": "https://avatar-cdn.atlassian.com/someid",
-                        "24x24": "https://avatar-cdn.atlassian.com/someotherid",
-                    },
-                    "self": "https://something.atlassian.net/rest/api/2/user?username=someaddon",
-                }
-            )
-            == {"id": "robot", "text": "robot (robot)"}
-        )
+        assert self.plugin._get_formatted_user(
+            {
+                "name": "robot",
+                "avatarUrls": {
+                    "16x16": "https://avatar-cdn.atlassian.com/someid",
+                    "24x24": "https://avatar-cdn.atlassian.com/someotherid",
+                },
+                "self": "https://something.atlassian.net/rest/api/2/user?username=someaddon",
+            }
+        ) == {"id": "robot", "text": "robot (robot)"}

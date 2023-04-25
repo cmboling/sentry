@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {cloneElement, Fragment, isValidElement} from 'react';
 import * as Sentry from '@sentry/react';
 import Jed from 'jed';
 import isObject from 'lodash/isObject';
@@ -6,6 +6,7 @@ import isString from 'lodash/isString';
 import {sprintf} from 'sprintf-js';
 
 import localStorage from 'sentry/utils/localStorage';
+import toArray from 'sentry/utils/toArray';
 
 const markerStyles = {
   background: '#ff801790',
@@ -72,7 +73,6 @@ function getClient(): Jed | null {
     // If this happens, it could mean that an import was added/changed where
     // locale initialization does not happen soon enough.
     const warning = new Error('Locale not set, defaulting to English');
-    console.error(warning); // eslint-disable-line no-console
     Sentry.captureException(warning);
     return setLocale(DEFAULT_LOCALE_DATA);
   }
@@ -105,8 +105,8 @@ function formatForReact(formatString: string, args: FormatArg[]): React.ReactNod
     }
 
     // this points to a react element!
-    if (React.isValidElement(arg)) {
-      nodes.push(React.cloneElement(arg, {key: idx}));
+    if (isValidElement(arg)) {
+      nodes.push(cloneElement(arg, {key: idx}));
     } else {
       // Not a react element, massage it so that sprintf.format can format it
       // for us.  We make sure match[2] is null so that we do not go down the
@@ -114,7 +114,7 @@ function formatForReact(formatString: string, args: FormatArg[]): React.ReactNod
       // array with two items in.
       match[2] = null;
       match[1] = 1;
-      nodes.push(<span key={idx++}>{sprintf.format([match], [null, arg])}</span>);
+      nodes.push(<Fragment key={idx++}>{sprintf.format([match], [null, arg])}</Fragment>);
     }
   });
 
@@ -125,7 +125,7 @@ function formatForReact(formatString: string, args: FormatArg[]): React.ReactNod
  * Determine if any arguments include React elements.
  */
 function argsInvolveReact(args: FormatArg[]): boolean {
-  if (args.some(React.isValidElement)) {
+  if (args.some(isValidElement)) {
     return true;
   }
 
@@ -135,7 +135,7 @@ function argsInvolveReact(args: FormatArg[]): boolean {
 
   const componentMap = args[0] as ComponentMap;
 
-  return Object.keys(componentMap).some(key => React.isValidElement(componentMap[key]));
+  return Object.keys(componentMap).some(key => isValidElement(componentMap[key]));
 }
 
 /**
@@ -241,7 +241,7 @@ export function renderTemplate(
 
     for (const item of group) {
       if (isString(item)) {
-        children.push(<span key={idx++}>{item}</span>);
+        children.push(<Fragment key={idx++}>{item}</Fragment>);
       } else {
         children.push(renderGroup(item.group));
       }
@@ -249,20 +249,20 @@ export function renderTemplate(
 
     // In case we cannot find our component, we call back to an empty
     // span so that stuff shows up at least.
-    let reference = components[groupKey] ?? <span key={idx++} />;
+    let reference = components[groupKey] ?? <Fragment key={idx++} />;
 
-    if (!React.isValidElement(reference)) {
-      reference = <span key={idx++}>{reference}</span>;
+    if (!isValidElement(reference)) {
+      reference = <Fragment key={idx++}>{reference}</Fragment>;
     }
 
     const element = reference as React.ReactElement;
 
     return children.length === 0
-      ? React.cloneElement(element, {key: idx++})
-      : React.cloneElement(element, {key: idx++}, children);
+      ? cloneElement(element, {key: idx++})
+      : cloneElement(element, {key: idx++}, children);
   }
 
-  return <React.Fragment>{renderGroup('root')}</React.Fragment>;
+  return <Fragment>{renderGroup('root')}</Fragment>;
 }
 
 /**
@@ -271,9 +271,9 @@ export function renderTemplate(
  * NOTE: This is a no-op and will return the node if LOCALE_DEBUG is not
  * currently enabled. See setLocaleDebug and toggleLocaleDebug.
  */
-function mark(node: React.ReactNode): string {
+function mark<T extends React.ReactNode>(node: T): T {
   if (!LOCALE_DEBUG) {
-    return node as string;
+    return node;
   }
 
   // TODO(epurkhiser): Explain why we manually create a react node and assign
@@ -281,19 +281,19 @@ function mark(node: React.ReactNode): string {
   // require some understanding of reacts internal types.
   const proxy = {
     $$typeof: Symbol.for('react.element'),
-    type: 'span',
+    type: Symbol.for('react.fragment'),
     key: null,
     ref: null,
     props: {
       style: markerStyles,
-      children: Array.isArray(node) ? node : [node],
+      children: toArray(node),
     },
     _owner: null,
     _store: {},
   };
 
   proxy.toString = () => '✅' + node + '✅';
-  return proxy as unknown as string;
+  return proxy as T;
 }
 
 /**
@@ -330,7 +330,7 @@ export function gettext(string: string, ...args: FormatArg[]): string {
   // XXX(ts): It IS possible to use gettext in such a way that it will return a
   // React.ReactNodeArray, however we currently rarely (if at all) use it in
   // this way, and usually just expect strings back.
-  return mark(format(val, args));
+  return mark(format(val, args) as string);
 }
 
 /**
@@ -349,9 +349,16 @@ export function ngettext(singular: string, plural: string, ...args: FormatArg[])
   if (args.length > 0) {
     countArg = Math.abs(args[0] as number) || 0;
 
-    // `toLocaleString` will render `999` as `"999"` but `9999` as `"9,999"`. This means that any call with `tn` or `ngettext` cannot use `%d` in the codebase but has to use `%s`.
-    // This means a string is always being passed in as an argument, but `sprintf-js` implicitly coerces strings that can be parsed as integers into an integer.
-    // This would break under any locale that used different formatting and other undesirable behaviors.
+    // `toLocaleString` will render `999` as `"999"` but `9999` as `"9,999"`.
+    // This means that any call with `tn` or `ngettext` cannot use `%d` in the
+    // codebase but has to use `%s`.
+    //
+    // This means a string is always being passed in as an argument, but
+    // `sprintf-js` implicitly coerces strings that can be parsed as integers
+    // into an integer.
+    //
+    // This would break under any locale that used different formatting and
+    // other undesirable behaviors.
     if ((singular + plural).includes('%d')) {
       // eslint-disable-next-line no-console
       console.error(new Error('You should not use %d within tn(), use %s instead'));
@@ -383,9 +390,9 @@ export function ngettext(singular: string, plural: string, ...args: FormatArg[])
 export function gettextComponentTemplate(
   template: string,
   components: ComponentMap
-): string {
+): JSX.Element {
   const parsedTemplate = parseComponentTemplate(getClient().gettext(template));
-  return mark(renderTemplate(parsedTemplate, components));
+  return mark(renderTemplate(parsedTemplate, components) as JSX.Element);
 }
 
 /**

@@ -1,9 +1,8 @@
-import * as React from 'react';
 import styled from '@emotion/styled';
 
 import Feature from 'sentry/components/acl/feature';
 import FeatureDisabled from 'sentry/components/acl/featureDisabled';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import Highlight from 'sentry/components/highlight';
 import {Hovercard} from 'sentry/components/hovercard';
 import IdBadge from 'sentry/components/idBadge';
@@ -11,21 +10,18 @@ import PageFilterRow from 'sentry/components/organizations/pageFilterRow';
 import BookmarkStar from 'sentry/components/projects/bookmarkStar';
 import {IconOpen, IconSettings} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Project} from 'sentry/types';
-import {analytics} from 'sentry/utils/analytics';
-
-const defaultProps = {
-  multi: false,
-  inputValue: '',
-  isChecked: false,
-};
+import {trackAnalytics} from 'sentry/utils/analytics';
 
 type Props = {
+  inputValue: string;
+  isChecked: boolean;
+  multi: boolean;
   organization: Organization;
   project: Project;
-  onMultiSelect?: (project: Project, event: React.MouseEvent) => void;
-} & typeof defaultProps;
+  onMultiSelect?: (project: Project) => void;
+};
 
 function ProjectSelectorItem({
   project,
@@ -35,14 +31,13 @@ function ProjectSelectorItem({
   inputValue = '',
   isChecked = false,
 }: Props) {
-  const handleClick = (event: React.MouseEvent) => {
-    event.stopPropagation();
-    onMultiSelect?.(project, event);
+  const onSelectedChange = () => {
+    onMultiSelect?.(project);
   };
 
   const handleBookmarkToggle = (isBookmarked: boolean) => {
-    analytics('projectselector.bookmark_toggle', {
-      org_id: parseInt(organization.id, 10),
+    trackAnalytics('projectselector.bookmark_toggle', {
+      organization,
       bookmarked: isBookmarked,
     });
   };
@@ -60,7 +55,6 @@ function ProjectSelectorItem({
           <FeatureDisabled
             features={features}
             hideHelpToggle
-            message={t('Multiple project selection disabled')}
             featureName={t('Multiple Project Selection')}
           />
         }
@@ -73,7 +67,7 @@ function ProjectSelectorItem({
   return (
     <ProjectFilterRow
       checked={isChecked}
-      onCheckClick={handleClick}
+      onSelectedChange={onSelectedChange}
       multi={multi}
       renderCheckbox={({checkbox}) => (
         <Feature
@@ -107,7 +101,7 @@ function ProjectSelectorItem({
         icon={<IconOpen />}
       />
       <ActionButton
-        to={`/settings/${organization.slug}/${project.slug}/`}
+        to={`/settings/${organization.slug}/projects/${project.slug}/`}
         size="zero"
         priority="link"
         aria-label="Project Settings"

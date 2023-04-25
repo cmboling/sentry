@@ -1,10 +1,16 @@
 import styled from '@emotion/styled';
 
-const PageFilterBar = styled('div')`
+const PageFilterBar = styled('div')<{condensed?: boolean}>`
   display: flex;
   position: relative;
   border-radius: ${p => p.theme.borderRadius};
-  height: ${p => p.theme.form.default.height}px;
+  height: ${p => p.theme.form.md.height}px;
+  ${p =>
+    p.condensed &&
+    `
+    max-width: 100%;
+    width: max-content;
+  `}
 
   &::after {
     content: '';
@@ -22,7 +28,7 @@ const PageFilterBar = styled('div')`
     z-index: 0;
   }
 
-  & button[aria-haspopup='listbox'] {
+  & button[aria-haspopup] {
     height: 100%;
     min-height: auto;
     border-color: transparent !important;
@@ -31,10 +37,24 @@ const PageFilterBar = styled('div')`
   }
 
   & > * {
-    min-width: 6rem;
+    min-width: 0;
     flex-grow: 1;
     flex-shrink: 1;
     flex-basis: max-content;
+
+    /* Prevent project filter from shrinking (it has in-built max character count)
+    except in mobile */
+    &:first-child {
+      flex-shrink: 0;
+      @media only screen and (max-width: ${p => p.theme.breakpoints.small}) {
+        flex-shrink: 1;
+      }
+    }
+
+    /* Prevent date filter from shrinking below 6.5rem */
+    &:last-child {
+      min-width: 6.5rem;
+    }
   }
 
   & > *:not(:first-child)::after {
@@ -49,9 +69,9 @@ const PageFilterBar = styled('div')`
   }
 
   & > *:hover::after,
-  & > *:focus-within::after,
+  & > *[data-is-open='true']::after,
   & > *:hover + *:not(:first-child)::after,
-  & > *:focus-within + *:not(:first-child)::after {
+  & > *[data-is-open='true'] + *:not(:first-child)::after {
     display: none;
   }
 `;

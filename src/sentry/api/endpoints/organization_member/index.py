@@ -1,3 +1,5 @@
+from typing import List, Tuple
+
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Q
@@ -5,29 +7,22 @@ from rest_framework import serializers
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry import features, ratelimits, roles
+from sentry import audit_log, features, ratelimits, roles
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint, OrganizationPermission
 from sentry.api.paginator import OffsetPaginator
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models import organization_member as organization_member_serializers
 from sentry.api.serializers.rest_framework import ListField
 from sentry.api.validators import AllowedEmailField
-from sentry.app import locks
-from sentry.models import (
-    AuditLogEntryEvent,
-    ExternalActor,
-    InviteStatus,
-    OrganizationMember,
-    Team,
-    TeamStatus,
-)
+from sentry.models import ExternalActor, InviteStatus, OrganizationMember, Team, TeamStatus
 from sentry.models.authenticator import available_authenticators
+from sentry.roles import organization_roles, team_roles
 from sentry.search.utils import tokenize_query
 from sentry.signals import member_invited
 from sentry.utils import metrics
-from sentry.utils.retries import TimedRetryPolicy
 
-from . import get_allowed_roles, save_team_assignments
+from . import get_allowed_org_roles, save_team_assignments
 
 ERR_RATE_LIMITED = "You are being rate limited for too many invitations."
 
@@ -47,9 +42,17 @@ class MemberConflictValidationError(serializers.ValidationError):
 
 class OrganizationMemberSerializer(serializers.Serializer):
     email = AllowedEmailField(max_length=75, required=True)
-    role = serializers.ChoiceField(choices=roles.get_choices(), required=True)
-    teams = ListField(required=False, allow_null=False, default=[])
+    role = serializers.ChoiceField(
+        choices=roles.get_choices(), default=organization_roles.get_default().id
+    )  # deprecated, use orgRole
+    orgRole = serializers.ChoiceField(
+        choices=roles.get_choices(), default=organization_roles.get_default().id
+    )
+    teams = ListField(required=False, allow_null=False, default=[])  # deprecated, use teamRoles
+    teamRoles = ListField(required=False, allow_null=True, default=[])
     sendInvite = serializers.BooleanField(required=False, default=True, write_only=True)
+    reinvite = serializers.BooleanField(required=False)
+    regenerate = serializers.BooleanField(required=False)
 
     def validate_email(self, email):
         queryset = OrganizationMember.objects.filter(
@@ -70,6 +73,20 @@ class OrganizationMemberSerializer(serializers.Serializer):
                 )
         return email
 
+    def validate_role(self, role):
+        return self.validate_orgRole(role)
+
+    def validate_orgRole(self, role):
+        if features.has("organizations:team-roles", self.context["organization"]):
+            if role in {r.id for r in organization_roles.get_all() if r.is_retired}:
+                raise serializers.ValidationError("This org-level role has been deprecated")
+
+        if role not in {r.id for r in self.context["allowed_roles"]}:
+            raise serializers.ValidationError(
+                "You do not have permission to set that org-level role"
+            )
+        return role
+
     def validate_teams(self, teams):
         valid_teams = list(
             Team.objects.filter(
@@ -82,13 +99,23 @@ class OrganizationMemberSerializer(serializers.Serializer):
 
         return valid_teams
 
-    def validate_role(self, role):
-        if role not in {r.id for r in self.context["allowed_roles"]}:
-            raise serializers.ValidationError("You do not have permission to invite that role.")
+    def validate_teamRoles(self, teamRoles) -> List[Tuple[Team, str]]:
+        roles = {item["role"] for item in teamRoles}
+        valid_roles = [r.id for r in team_roles.get_all()] + [None]
+        if roles.difference(valid_roles):
+            raise serializers.ValidationError("Invalid team-role")
+        team_slugs = [item["teamSlug"] for item in teamRoles]
+        valid_teams = self.validate_teams(team_slugs)
 
-        return role
+        # Avoids O(n * n) search
+        team_role_map = {item["teamSlug"]: item["role"] for item in teamRoles}
+        # TODO(dlee): Check if they have permissions to assign team role for each team
+        valid_team_roles = [(team, team_role_map[team.slug]) for team in valid_teams]
+
+        return valid_team_roles
 
 
+@region_silo_endpoint
 class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
     permission_classes = (MemberPermission,)
 
@@ -118,7 +145,10 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
                     queryset = queryset.filter(role__in=[r.id for r in roles.with_any_scope(value)])
 
                 elif key == "role":
-                    queryset = queryset.filter(role__in=value)
+                    members_with_role = organization.get_members_with_org_roles(
+                        roles=value, include_null_users=True
+                    ).values_list("id", flat=True)
+                    queryset = queryset.filter(id__in=members_with_role)
 
                 elif key == "isInvited":
                     isInvited = "true" in value
@@ -188,10 +218,11 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
 
         Invite a member to the organization.
 
-        :pparam string organization_slug: the slug of the organization the member will belong to
+        :param string organization_slug: the slug of the organization the member will belong to
         :param string email: the email address to invite
-        :param string role: the role of the new member
+        :param string role: the org-role of the new member
         :param array teams: the slugs of the teams the member should belong to.
+        :param array teamRoles: the team and team-roles assigned to the member
 
         :auth: required
         """
@@ -200,7 +231,7 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
                 {"organization": "Your organization is not allowed to invite members"}, status=403
             )
 
-        _, allowed_roles = get_allowed_roles(request, organization)
+        allowed_roles = get_allowed_org_roles(request, organization)
 
         serializer = OrganizationMemberSerializer(
             data=request.data,
@@ -243,17 +274,21 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
                 organization=organization,
                 email=result["email"],
                 role=result["role"],
-                inviter=request.user,
+                inviter_id=request.user.id,
             )
 
             if settings.SENTRY_ENABLE_INVITES:
                 om.token = om.generate_token()
             om.save()
 
-        if result["teams"]:
-            lock = locks.get(f"org:member:{om.id}", duration=5)
-            with TimedRetryPolicy(10)(lock.acquire):
-                save_team_assignments(om, result["teams"])
+        # Do not set team-roles when inviting members
+        if "teamRoles" in result or "teams" in result:
+            teams = (
+                [team for team, _ in result.get("teamRoles")]
+                if "teamRoles" in result and result["teamRoles"]
+                else result.get("teams")
+            )
+            save_team_assignments(om, teams)
 
         if settings.SENTRY_ENABLE_INVITES and result.get("sendInvite"):
             om.send_invite_email()
@@ -266,9 +301,9 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
             organization_id=organization.id,
             target_object=om.id,
             data=om.get_audit_log_data(),
-            event=AuditLogEntryEvent.MEMBER_INVITE
+            event=audit_log.get_event_id("MEMBER_INVITE")
             if settings.SENTRY_ENABLE_INVITES
-            else AuditLogEntryEvent.MEMBER_ADD,
+            else audit_log.get_event_id("MEMBER_ADD"),
         )
 
         return Response(serialize(om), status=201)

@@ -1,23 +1,25 @@
-from exam import fixture
+from functools import cached_property
 
 from sentry.api.serializers import serialize
 from sentry.incidents.models import IncidentActivity, IncidentActivityType, IncidentSubscription
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test(stable=True)
 class OrganizationIncidentCommentCreateEndpointTest(APITestCase):
     endpoint = "sentry-api-0-organization-incident-comments"
     method = "post"
 
-    @fixture
+    @cached_property
     def organization(self):
         return self.create_organization()
 
-    @fixture
+    @cached_property
     def project(self):
         return self.create_project(organization=self.organization)
 
-    @fixture
+    @cached_property
     def user(self):
         return self.create_user()
 
@@ -29,12 +31,12 @@ class OrganizationIncidentCommentCreateEndpointTest(APITestCase):
         comment = "hello"
         incident = self.create_incident()
         with self.feature("organizations:incidents"):
-            resp = self.get_valid_response(
+            resp = self.get_success_response(
                 self.organization.slug, incident.identifier, comment=comment, status_code=201
             )
         activity = IncidentActivity.objects.get(id=resp.data["id"])
         assert activity.type == IncidentActivityType.COMMENT.value
-        assert activity.user == self.user
+        assert activity.user_id == self.user.id
         assert activity.comment == comment
         assert resp.data == serialize([activity], self.user)[0]
 
@@ -50,7 +52,7 @@ class OrganizationIncidentCommentCreateEndpointTest(APITestCase):
         comment = "hello **@%s**" % mentioned_member.username
         incident = self.create_incident()
         with self.feature("organizations:incidents"):
-            resp = self.get_valid_response(
+            resp = self.get_success_response(
                 self.organization.slug,
                 incident.identifier,
                 comment=comment,
@@ -59,11 +61,11 @@ class OrganizationIncidentCommentCreateEndpointTest(APITestCase):
             )
         activity = IncidentActivity.objects.get(id=resp.data["id"])
         assert activity.type == IncidentActivityType.COMMENT.value
-        assert activity.user == self.user
+        assert activity.user_id == self.user.id
         assert activity.comment == comment
         assert resp.data == serialize([activity], self.user)[0]
         assert IncidentSubscription.objects.filter(
-            user=mentioned_member, incident=incident
+            user_id=mentioned_member.id, incident=incident
         ).exists()
 
     def test_access(self):

@@ -6,15 +6,14 @@ import {SectionHeading} from 'sentry/components/charts/styles';
 import {ActiveOperationFilter} from 'sentry/components/events/interfaces/spans/filter';
 import {
   RawSpanType,
-  SpanEntry,
   TraceContextType,
 } from 'sentry/components/events/interfaces/spans/types';
 import {getSpanOperation} from 'sentry/components/events/interfaces/spans/utils';
 import {pickBarColor} from 'sentry/components/performance/waterfall/utils';
 import QuestionTooltip from 'sentry/components/questionTooltip';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {EntryType, Event, EventTransaction} from 'sentry/types/event';
+import {space} from 'sentry/styles/space';
+import {EntrySpans, EntryType, Event, EventTransaction} from 'sentry/types/event';
 
 type StartTimestamp = number;
 type EndTimestamp = number;
@@ -82,9 +81,11 @@ class OpsBreakdown extends Component<Props> {
       return [];
     }
 
-    const spanEntry = event.entries.find((entry: SpanEntry | any): entry is SpanEntry => {
-      return entry.type === EntryType.SPANS;
-    });
+    const spanEntry = event.entries.find(
+      (entry: EntrySpans | any): entry is EntrySpans => {
+        return entry.type === EntryType.SPANS;
+      }
+    );
 
     let spans: RawSpanType[] = spanEntry?.data ?? [];
 
@@ -120,12 +121,15 @@ class OpsBreakdown extends Component<Props> {
     const operationNameIntervals = spans.reduce(
       (intervals: Partial<OperationNameIntervals>, span: RawSpanType) => {
         let startTimestamp = span.start_timestamp;
-        let endTimestamp = span.timestamp;
+        const endTimestamp = span.timestamp;
+
+        if (!span.exclusive_time) {
+          return intervals;
+        }
 
         if (endTimestamp < startTimestamp) {
           // reverse timestamps
           startTimestamp = span.timestamp;
-          endTimestamp = span.start_timestamp;
         }
 
         // invariant: startTimestamp <= endTimestamp
@@ -137,7 +141,10 @@ class OpsBreakdown extends Component<Props> {
           operationName = 'unknown';
         }
 
-        const cover: TimeWindowSpan = [startTimestamp, endTimestamp];
+        const cover: TimeWindowSpan = [
+          startTimestamp,
+          startTimestamp + span.exclusive_time / 1000,
+        ];
 
         const operationNameInterval = intervals[operationName];
 
@@ -303,7 +310,7 @@ const StyledBreakdownNoHeader = styled('div')`
   margin: ${space(2)} ${space(3)};
 `;
 
-const OpsLine = styled('div')`
+export const OpsLine = styled('div')`
   display: flex;
   justify-content: space-between;
   margin-bottom: ${space(0.5)};

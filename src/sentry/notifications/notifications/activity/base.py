@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, Mapping, MutableMapping
 from urllib.parse import urlparse, urlunparse
 
@@ -13,38 +14,42 @@ from sentry.notifications.notifications.base import ProjectNotification
 from sentry.notifications.types import NotificationSettingTypes
 from sentry.notifications.utils import send_activity_notification
 from sentry.notifications.utils.avatar import avatar_as_html
-from sentry.notifications.utils.participants import get_participants_for_group
+from sentry.notifications.utils.participants import ParticipantMap, get_participants_for_group
+from sentry.services.hybrid_cloud.actor import RpcActor
+from sentry.services.hybrid_cloud.user import RpcUser, user_service
 from sentry.types.integrations import ExternalProviders
 
 if TYPE_CHECKING:
-    from sentry.models import Activity, Team, User
+    from sentry.models import Activity
 
 
 class ActivityNotification(ProjectNotification, abc.ABC):
+    metrics_key = "activity"
     notification_setting_type = NotificationSettingTypes.WORKFLOW
     template_path = "sentry/emails/activity/generic"
-    metrics_key = "activity"
 
     def __init__(self, activity: Activity) -> None:
         super().__init__(activity.project)
         self.activity = activity
 
-    def get_title(self) -> str:
-        raise NotImplementedError
+    @property
+    @abc.abstractmethod
+    def title(self) -> str:
+        """The header for Workflow notifications."""
+        pass
 
     def get_base_context(self) -> MutableMapping[str, Any]:
         """The most basic context shared by every notification type."""
         return {
             "data": self.activity.data,
-            "author": self.activity.user,
-            "title": self.get_title(),
+            "title": self.title,
             "project": self.project,
             "project_link": self.get_project_link(),
             **super().get_base_context(),
         }
 
     def get_recipient_context(
-        self, recipient: Team | User, extra_context: Mapping[str, Any]
+        self, recipient: RpcActor, extra_context: Mapping[str, Any]
     ) -> MutableMapping[str, Any]:
         context = super().get_recipient_context(recipient, extra_context)
         return {**context, **get_reason_context(context)}
@@ -53,23 +58,18 @@ class ActivityNotification(ProjectNotification, abc.ABC):
     def reference(self) -> Model | None:
         return self.activity
 
-    def get_type(self) -> str:
-        return f"notify.activity.{self.activity.get_type_display()}"
-
     @abc.abstractmethod
     def get_context(self) -> MutableMapping[str, Any]:
         pass
 
     @abc.abstractmethod
-    def get_participants_with_group_subscription_reason(
-        self,
-    ) -> Mapping[ExternalProviders, Mapping[Team | User, int]]:
+    def get_participants_with_group_subscription_reason(self) -> ParticipantMap:
         pass
 
     def send(self) -> None:
         return send_activity_notification(self)
 
-    def get_log_params(self, recipient: Team | User) -> Mapping[str, Any]:
+    def get_log_params(self, recipient: RpcActor) -> Mapping[str, Any]:
         return {"activity": self.activity, **super().get_log_params(recipient)}
 
 
@@ -80,14 +80,8 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
         super().__init__(activity)
         self.group = activity.group
 
-    def get_activity_name(self) -> str:
-        raise NotImplementedError
-
     def get_description(self) -> tuple[str, Mapping[str, Any], Mapping[str, Any]]:
         raise NotImplementedError
-
-    def get_title(self) -> str:
-        return self.get_activity_name()
 
     def get_group_link(self) -> str:
         # method only used for emails
@@ -95,11 +89,13 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
         referrer = self.get_referrer(ExternalProviders.EMAIL)
         return str(self.group.get_absolute_url(params={"referrer": referrer}))
 
-    def get_participants_with_group_subscription_reason(
-        self,
-    ) -> Mapping[ExternalProviders, Mapping[Team | User, int]]:
+    @cached_property
+    def user(self) -> RpcUser | None:
+        return user_service.get_user(self.activity.user_id)
+
+    def get_participants_with_group_subscription_reason(self) -> ParticipantMap:
         """This is overridden by the activity subclasses."""
-        return get_participants_for_group(self.group, self.activity.user)
+        return get_participants_for_group(self.group, self.user)
 
     def get_unsubscribe_key(self) -> tuple[str, int, str | None] | None:
         return "issue", self.group.id, None
@@ -119,7 +115,6 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
         description, params, html_params = self.get_description()
         return {
             **self.get_base_context(),
-            "activity_name": self.get_activity_name(),
             "text_description": self.description_as_text(description, params),
             "html_description": self.description_as_html(description, html_params or params),
         }
@@ -138,26 +133,31 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
             "referrer": self.__class__.__name__,
         }
 
-    def get_notification_title(self) -> str:
+    def get_notification_title(
+        self, provider: ExternalProviders, context: Mapping[str, Any] | None = None
+    ) -> str:
         description, params, _ = self.get_description()
-        return self.description_as_text(description, params, True)
+        return self.description_as_text(description, params, True, provider)
 
     def get_subject(self, context: Mapping[str, Any] | None = None) -> str:
         return f"{self.group.qualified_short_id} - {self.group.title}"
 
     def description_as_text(
-        self, description: str, params: Mapping[str, Any], url: bool | None = False
+        self,
+        description: str,
+        params: Mapping[str, Any],
+        url: bool | None = False,
+        provider: ExternalProviders | None = None,
     ) -> str:
-        user = self.activity.user
-        if user:
-            name = user.name or user.email
+        if self.user:
+            name = self.user.name or self.user.email
         else:
             name = "Sentry"
 
         issue_name = self.group.qualified_short_id or "an issue"
         if url and self.group.qualified_short_id:
             group_url = self.group.get_absolute_url(params={"referrer": "activity_notification"})
-            issue_name = f"<{group_url}|{self.group.qualified_short_id}>"
+            issue_name = f"{self.format_url(text=self.group.qualified_short_id, url=group_url, provider=provider)}"
 
         context = {"author": name, "an issue": issue_name}
         context.update(params)
@@ -165,15 +165,14 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
         return description.format(**context)
 
     def description_as_html(self, description: str, params: Mapping[str, Any]) -> SafeString:
-        user = self.activity.user
-        if user:
-            name = user.get_display_name()
+        if self.user:
+            name = self.user.get_display_name()
         else:
             name = "Sentry"
 
         fmt = '<span class="avatar-container">{}</span> <strong>{}</strong>'
 
-        author = mark_safe(fmt.format(avatar_as_html(user), escape(name)))
+        author = mark_safe(fmt.format(avatar_as_html(self.user), escape(name)))
 
         issue_name = escape(self.group.qualified_short_id or "an issue")
         an_issue = f'<a href="{escape(self.get_group_link())}">{issue_name}</a>'
@@ -183,15 +182,15 @@ class GroupActivityNotification(ActivityNotification, abc.ABC):
 
         return mark_safe(description.format(**context))
 
-    def get_title_link(self, recipient: Team | User) -> str | None:
-        from sentry.integrations.slack.message_builder.issues import get_title_link
+    def get_title_link(self, recipient: RpcActor, provider: ExternalProviders) -> str | None:
+        from sentry.integrations.message_builder import get_title_link
 
-        return get_title_link(self.group, None, False, True, self)
+        return get_title_link(self.group, None, False, True, self, provider)
 
-    def build_attachment_title(self, recipient: Team | User) -> str:
-        from sentry.integrations.slack.message_builder.issues import build_attachment_title
+    def build_attachment_title(self, recipient: RpcActor) -> str:
+        from sentry.integrations.message_builder import build_attachment_title
 
         return build_attachment_title(self.group)
 
-    def get_log_params(self, recipient: Team | User, **kwargs: Any) -> Mapping[str, Any]:
+    def get_log_params(self, recipient: RpcActor, **kwargs: Any) -> Mapping[str, Any]:
         return {"group": self.group.id, **super().get_log_params(recipient)}

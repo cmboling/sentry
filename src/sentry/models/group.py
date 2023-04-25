@@ -13,8 +13,10 @@ from typing import TYPE_CHECKING, Mapping, Sequence
 
 from django.db import models
 from django.db.models import Q, QuerySet
+from django.db.models.signals import pre_save
+from django.dispatch import receiver
 from django.utils import timezone
-from django.utils.http import urlencode, urlquote
+from django.utils.http import urlencode
 from django.utils.translation import ugettext_lazy as _
 
 from sentry import eventstore, eventtypes, tagstore
@@ -27,17 +29,27 @@ from sentry.db.models import (
     FlexibleForeignKey,
     GzippedDictField,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
-from sentry.eventstore.models import Event
+from sentry.eventstore.models import GroupEvent
+from sentry.issues.grouptype import ErrorGroupType, GroupCategory, get_group_type_by_type_id
+from sentry.issues.query import apply_performance_conditions
 from sentry.models.grouphistory import record_group_history_from_activity_type
+from sentry.snuba.dataset import Dataset
 from sentry.types.activity import ActivityType
-from sentry.utils.http import absolute_uri
+from sentry.types.group import (
+    IGNORED_SUBSTATUS_CHOICES,
+    UNRESOLVED_SUBSTATUS_CHOICES,
+    GroupSubStatus,
+)
 from sentry.utils.numbers import base32_decode, base32_encode
 from sentry.utils.strings import strip, truncatechars
 
 if TYPE_CHECKING:
-    from sentry.models import Integration, Organization, Team, User
+    from sentry.models import Organization, Team
+    from sentry.services.hybrid_cloud.integration import RpcIntegration
+    from sentry.services.hybrid_cloud.user import RpcUser
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +98,7 @@ def get_group_with_redirect(id_or_qualified_short_id, queryset=None, organizatio
             queryset = queryset.filter(project__organization=organization)
         getter = queryset.get
 
-    if not (
-        isinstance(id_or_qualified_short_id, int) or id_or_qualified_short_id.isdigit()  # noqa
-    ):  # NOQA
+    if not (isinstance(id_or_qualified_short_id, int) or id_or_qualified_short_id.isdigit()):
         short_id = parse_short_id(id_or_qualified_short_id)
         if not short_id or not organization:
             raise Group.DoesNotExist()
@@ -145,10 +155,11 @@ class GroupStatus:
 
 
 # Statuses that can be queried/searched for
-STATUS_QUERY_CHOICES = {
+STATUS_QUERY_CHOICES: Mapping[str, int] = {
     "resolved": GroupStatus.RESOLVED,
     "unresolved": GroupStatus.UNRESOLVED,
     "ignored": GroupStatus.IGNORED,
+    "archived": GroupStatus.IGNORED,
     # TODO(dcramer): remove in 9.0
     "muted": GroupStatus.IGNORED,
     "reprocessing": GroupStatus.REPROCESSING,
@@ -180,24 +191,41 @@ class EventOrdering(Enum):
 
 
 def get_oldest_or_latest_event_for_environments(
-    ordering, environments=(), issue_id=None, project_id=None
-) -> Event | None:
+    ordering: EventOrdering, environments: Sequence[str], group: Group
+) -> GroupEvent | None:
     conditions = []
 
     if len(environments) > 0:
         conditions.append(["environment", "IN", environments])
 
+    if group.issue_category == GroupCategory.PERFORMANCE:
+        apply_performance_conditions(conditions, group)
+        _filter = eventstore.Filter(
+            conditions=conditions,
+            project_ids=[group.project_id],
+        )
+        dataset = Dataset.Transactions
+    else:
+        if group.issue_category == GroupCategory.ERROR:
+            dataset = Dataset.Events
+        else:
+            dataset = Dataset.IssuePlatform
+
+        _filter = eventstore.Filter(
+            conditions=conditions, project_ids=[group.project_id], group_ids=[group.id]
+        )
+
     events = eventstore.get_events(
-        filter=eventstore.Filter(
-            conditions=conditions, project_ids=[project_id], group_ids=[issue_id]
-        ),
+        filter=_filter,
         limit=1,
         orderby=ordering.value,
         referrer="Group.get_latest",
+        dataset=dataset,
+        tenant_ids={"organization_id": group.project.organization_id},
     )
 
     if events:
-        return events[0]
+        return events[0].for_group(group)
 
     return None
 
@@ -271,7 +299,7 @@ class GroupManager(BaseManager):
 
         return self.get(id=group_id)
 
-    def filter_by_event_id(self, project_ids, event_id):
+    def filter_by_event_id(self, project_ids, event_id, tenant_ids=None):
         events = eventstore.get_events(
             filter=eventstore.Filter(
                 event_ids=[event_id],
@@ -280,16 +308,18 @@ class GroupManager(BaseManager):
             ),
             limit=max(len(project_ids), 100),
             referrer="Group.filter_by_event_id",
+            tenant_ids=tenant_ids,
         )
         return self.filter(id__in={event.group_id for event in events})
 
     def get_groups_by_external_issue(
         self,
-        integration: Integration,
+        integration: RpcIntegration,
         organizations: Sequence[Organization],
         external_issue_key: str,
     ) -> QuerySet:
         from sentry.models import ExternalIssue, GroupLink
+        from sentry.services.hybrid_cloud.integration import integration_service
 
         external_issue_subquery = ExternalIssue.objects.get_for_integration(
             integration, external_issue_key
@@ -299,20 +329,32 @@ class GroupManager(BaseManager):
             linked_id__in=external_issue_subquery
         ).values_list("group_id", flat=True)
 
+        org_ids_with_integration = list(
+            i.organization_id
+            for i in integration_service.get_organization_integrations(
+                organization_ids=[o.id for o in organizations], integration_id=integration.id
+            )
+        )
+
         return self.filter(
             id__in=group_link_subquery,
-            project__organization__in=organizations,
-            project__organization__organizationintegration__integration=integration,
+            project__organization_id__in=org_ids_with_integration,
         ).select_related("project")
 
     def update_group_status(
-        self, groups: Sequence[Group], status: GroupStatus, activity_type: ActivityType
+        self,
+        groups: Sequence[Group],
+        status: GroupStatus,
+        substatus: GroupSubStatus | None,
+        activity_type: ActivityType,
     ) -> None:
         """For each groups, update status to `status` and create an Activity."""
         from sentry.models import Activity
 
         updated_count = (
-            self.filter(id__in=[g.id for g in groups]).exclude(status=status).update(status=status)
+            self.filter(id__in=[g.id for g in groups])
+            .exclude(status=status)
+            .update(status=status, substatus=substatus)
         )
         if updated_count:
             for group in groups:
@@ -355,6 +397,7 @@ class GroupManager(BaseManager):
         }
 
 
+@region_silo_only_model
 class Group(Model):
     """
     Aggregated message which summarizes a set of Events.
@@ -379,13 +422,23 @@ class Group(Model):
     num_comments = BoundedPositiveIntegerField(default=0, null=True)
     platform = models.CharField(max_length=64, null=True)
     status = BoundedPositiveIntegerField(
-        default=0,
+        default=GroupStatus.UNRESOLVED,
         choices=(
             (GroupStatus.UNRESOLVED, _("Unresolved")),
             (GroupStatus.RESOLVED, _("Resolved")),
             (GroupStatus.IGNORED, _("Ignored")),
         ),
         db_index=True,
+    )
+    substatus = BoundedIntegerField(
+        null=True,
+        choices=(
+            (GroupSubStatus.UNTIL_ESCALATING, _("Until escalating")),
+            (GroupSubStatus.ONGOING, _("Ongoing")),
+            (GroupSubStatus.ESCALATING, _("Escalating")),
+            (GroupSubStatus.UNTIL_CONDITION_MET, _("Until condition met")),
+            (GroupSubStatus.FOREVER, _("Forever")),
+        ),
     )
     times_seen = BoundedPositiveIntegerField(default=1, db_index=True)
     last_seen = models.DateTimeField(default=timezone.now, db_index=True)
@@ -401,6 +454,7 @@ class Group(Model):
     is_public = models.NullBooleanField(default=False, null=True)
     data = GzippedDictField(blank=True, null=True)
     short_id = BoundedBigIntegerField(null=True)
+    type = BoundedPositiveIntegerField(default=ErrorGroupType.type_id, db_index=True)
 
     objects = GroupManager(cache_fields=("id",))
 
@@ -414,6 +468,9 @@ class Group(Model):
             ("project", "first_release"),
             ("project", "id"),
             ("project", "status", "last_seen", "id"),
+            ("project", "status", "type", "last_seen", "id"),
+            ("project", "status", "substatus", "last_seen", "id"),
+            ("project", "status", "substatus", "type", "last_seen", "id"),
         ]
         unique_together = (
             ("project", "short_id"),
@@ -423,7 +480,7 @@ class Group(Model):
     __repr__ = sane_repr("project_id")
 
     def __str__(self):
-        return f"({self.times_seen}) {self.error()}"
+        return f"({self.times_seen}) {self.title}"
 
     def save(self, *args, **kwargs):
         if not self.last_seen:
@@ -447,21 +504,17 @@ class Group(Model):
         self,
         params: Mapping[str, str] | None = None,
         event_id: int | None = None,
-        organization_slug: str | None = None,
     ) -> str:
         # Built manually in preference to django.urls.reverse,
         # because reverse has a measured performance impact.
-        event_path = f"events/{event_id}/" if event_id else ""
-        url = "organizations/{org}/issues/{id}/{event_path}{params}".format(
-            # Pass organization_slug if this needs to be called multiple times to avoid n+1 queries
-            org=urlquote(
-                self.organization.slug if organization_slug is None else organization_slug
-            ),
-            id=self.id,
-            event_path=event_path,
-            params="?" + urlencode(params) if params else "",
-        )
-        return absolute_uri(url)
+        organization = self.organization
+        path = f"/organizations/{organization.slug}/issues/{self.id}/"
+        if event_id:
+            path += f"events/{event_id}/"
+        query = None
+        if params:
+            query = urlencode(params)
+        return organization.absolute_url(path, query=query)
 
     @property
     def qualified_short_id(self):
@@ -517,26 +570,28 @@ class Group(Model):
     def get_score(self):
         return type(self).calculate_score(self.times_seen, self.last_seen)
 
-    def get_latest_event(self) -> Event | None:
+    def get_latest_event(self) -> GroupEvent | None:
         if not hasattr(self, "_latest_event"):
             self._latest_event = self.get_latest_event_for_environments()
 
         return self._latest_event
 
-    def get_latest_event_for_environments(self, environments=()):
+    def get_latest_event_for_environments(
+        self, environments: Sequence[str] = ()
+    ) -> GroupEvent | None:
         return get_oldest_or_latest_event_for_environments(
             EventOrdering.LATEST,
-            environments=environments,
-            issue_id=self.id,
-            project_id=self.project_id,
+            environments,
+            self,
         )
 
-    def get_oldest_event_for_environments(self, environments=()):
+    def get_oldest_event_for_environments(
+        self, environments: Sequence[str] = ()
+    ) -> GroupEvent | None:
         return get_oldest_or_latest_event_for_environments(
             EventOrdering.OLDEST,
-            environments=environments,
-            issue_id=self.id,
-            project_id=self.project_id,
+            environments,
+            self,
         )
 
     def get_first_release(self) -> str | None:
@@ -607,14 +662,18 @@ class Group(Model):
 
     def count_users_seen(self):
         return tagstore.get_groups_user_counts(
-            [self.project_id], [self.id], environment_ids=None, start=self.first_seen
+            [self.project_id],
+            [self.id],
+            environment_ids=None,
+            start=self.first_seen,
+            tenant_ids={"organization_id": self.project.organization_id},
         )[self.id]
 
     @classmethod
     def calculate_score(cls, times_seen, last_seen):
         return math.log(float(times_seen or 1)) * 600 + float(last_seen.strftime("%s"))
 
-    def get_assignee(self) -> Team | User | None:
+    def get_assignee(self) -> Team | RpcUser | None:
         from sentry.models import GroupAssignee
 
         try:
@@ -648,3 +707,45 @@ class Group(Model):
     @times_seen_pending.setter
     def times_seen_pending(self, times_seen: int):
         self._times_seen_pending = times_seen
+
+    @property
+    def issue_type(self):
+        return get_group_type_by_type_id(self.type)
+
+    @property
+    def issue_category(self):
+        return GroupCategory(self.issue_type.category)
+
+
+@receiver(pre_save, sender=Group, dispatch_uid="pre_save_group_default_substatus", weak=False)
+def pre_save_group_default_substatus(instance, sender, *args, **kwargs):
+    # TODO(snigdha): Replace the logging with a ValueError once we are confident that this is working as expected.
+    if instance:
+        # We only support substatuses for UNRESOLVED and IGNORED groups
+        if (
+            instance.status not in [GroupStatus.UNRESOLVED, GroupStatus.IGNORED]
+            and instance.substatus is not None
+        ):
+            logger.exception(
+                "No substatus allowed for group",
+                extra={"status": instance.status, "substatus": instance.substatus},
+            )
+
+        if (
+            instance.status == GroupStatus.IGNORED
+            and instance.substatus not in IGNORED_SUBSTATUS_CHOICES
+        ):
+            logger.exception(
+                "Invalid substatus for IGNORED group.", extra={"substatus": instance.substatus}
+            )
+
+        if instance.status == GroupStatus.UNRESOLVED:
+            if instance.substatus is None:
+                instance.substatus = GroupSubStatus.ONGOING
+
+            # UNRESOLVED groups must have a substatus
+            if instance.substatus not in UNRESOLVED_SUBSTATUS_CHOICES:
+                logger.exception(
+                    "Invalid substatus for UNRESOLVED group",
+                    extra={"substatus": instance.substatus},
+                )

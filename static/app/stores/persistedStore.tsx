@@ -6,10 +6,11 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import {useMutation} from '@tanstack/react-query';
 
 import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
-import {OnboardingState} from 'sentry/views/onboarding/targetedOnboarding/types';
+import {OnboardingState} from 'sentry/views/onboarding/types';
+import {OrganizationContext} from 'sentry/views/organizationContext';
 
 import OrganizationStore from './organizationStore';
 import {useLegacyStore} from './useLegacyStore';
@@ -73,7 +74,7 @@ export function PersistedStoreProvider(props: {children: React.ReactNode}) {
     return () => {
       shouldCancelRequest = true;
     };
-  }, [organization]);
+  }, [api, organization]);
 
   return (
     <PersistedStoreContext.Provider value={[state, setState]}>
@@ -83,38 +84,56 @@ export function PersistedStoreProvider(props: {children: React.ReactNode}) {
 }
 
 type UsePersistedCategory<T> = [T | null, (nextState: T | null) => void];
+
 export function usePersistedStoreCategory<C extends keyof PersistedStore>(
   category: C
 ): UsePersistedCategory<PersistedStore[C]> {
-  const api = useApi();
-  const organization = useOrganization();
+  const api = useApi({persistInFlight: true});
+  const organization = useContext(OrganizationContext);
   const [state, setState] = usePersistedStore();
+
+  const endpointLocation = `/organizations/${organization?.slug}/client-state/${category}/`;
+  const {mutate: clearState} = useMutation({
+    mutationFn: () =>
+      api.requestPromise(endpointLocation, {
+        method: 'DELETE',
+      }),
+    retry: 3,
+  });
+  const {mutate: syncState} = useMutation({
+    mutationFn: (val: PersistedStore[C]) =>
+      api.requestPromise(endpointLocation, {
+        method: 'PUT',
+        data: val,
+      }),
+    retry: 3,
+  });
 
   const setCategoryState = useCallback(
     (val: PersistedStore[C] | null) => {
+      if (!organization) {
+        return;
+      }
+
       setState(oldState => ({...oldState, [category]: val}));
 
       // If a state is set with null, we can clear it from the server.
-      const endpointLocation = `/organizations/${organization.slug}/client-state/${category}/`;
       if (val === null) {
-        api.requestPromise(endpointLocation, {
-          method: 'DELETE',
-        });
+        clearState();
         return;
       }
 
       // Else we want to sync our state with the server
-      api.requestPromise(endpointLocation, {
-        method: 'PUT',
-        data: val,
-      });
+      syncState(val);
     },
-    [category, organization]
+    [setState, syncState, category, clearState, organization]
   );
 
+  const result = state[category];
+
   const stableState: UsePersistedCategory<PersistedStore[C]> = useMemo(() => {
-    return [state[category] ?? null, setCategoryState];
-  }, [state[category], setCategoryState]);
+    return [result ?? null, setCategoryState];
+  }, [result, setCategoryState]);
 
   return stableState;
 }

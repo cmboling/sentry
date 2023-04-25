@@ -1,13 +1,14 @@
 from typing import Any, Iterable
 
-from django.db import models
+from django.db import models, transaction
 from django.db.models.signals import post_save
 
 from sentry.db.models import (
     BaseManager,
-    BoundedPositiveIntegerField,
+    BoundedBigIntegerField,
     FlexibleForeignKey,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
 
@@ -19,12 +20,13 @@ class CommitFileChangeManager(BaseManager):
         return int(self.filter(commit__in=commits).values("filename").distinct().count())
 
 
+@region_silo_only_model
 class CommitFileChange(Model):
     __include_in_export__ = False
 
-    organization_id = BoundedPositiveIntegerField(db_index=True)
+    organization_id = BoundedBigIntegerField(db_index=True)
     commit = FlexibleForeignKey("sentry.Commit")
-    filename = models.CharField(max_length=255)
+    filename = models.TextField()
     type = models.CharField(
         max_length=1, choices=(("A", "Added"), ("D", "Deleted"), ("M", "Modified"))
     )
@@ -48,13 +50,19 @@ def process_resource_change(instance, **kwargs):
     from sentry.integrations.gitlab.integration import GitlabIntegration
     from sentry.tasks.codeowners import code_owners_auto_sync
 
-    filepaths = set(GitHubIntegration.codeowners_locations) | set(
-        GitlabIntegration.codeowners_locations
-    )
+    def _spawn_task():
+        filepaths = set(GitHubIntegration.codeowners_locations) | set(
+            GitlabIntegration.codeowners_locations
+        )
 
-    # CODEOWNERS file added or modified, trigger auto-sync
-    if instance.filename in filepaths and instance.type in ["A", "M"]:
-        code_owners_auto_sync.delay(instance.commit_id)
+        # CODEOWNERS file added or modified, trigger auto-sync
+        if instance.filename in filepaths and instance.type in ["A", "M"]:
+            # Trigger the task after 5min to make sure all records in the transactions has been saved.
+            code_owners_auto_sync.apply_async(
+                kwargs={"commit_id": instance.commit_id}, countdown=60 * 5
+            )
+
+    transaction.on_commit(_spawn_task)
 
 
 post_save.connect(

@@ -25,6 +25,7 @@ from sentry.web.frontend.home import HomeView
 from sentry.web.frontend.idp_email_verification import AccountConfirmationView
 from sentry.web.frontend.js_sdk_loader import JavaScriptSdkLoader
 from sentry.web.frontend.mailgun_inbound_webhook import MailgunInboundWebhookView
+from sentry.web.frontend.newest_issue import NewestIssueView
 from sentry.web.frontend.oauth_authorize import OAuthAuthorizeView
 from sentry.web.frontend.oauth_token import OAuthTokenView
 from sentry.web.frontend.organization_auth_settings import OrganizationAuthSettingsView
@@ -40,6 +41,7 @@ from sentry.web.frontend.release_webhook import ReleaseWebhookView
 from sentry.web.frontend.restore_organization import RestoreOrganizationView
 from sentry.web.frontend.sentryapp_avatar import SentryAppAvatarPhotoView
 from sentry.web.frontend.setup_wizard import SetupWizardView
+from sentry.web.frontend.shared_group_details import SharedGroupDetailsView
 from sentry.web.frontend.sudo import SudoView
 from sentry.web.frontend.team_avatar import TeamAvatarPhotoView
 from sentry.web.frontend.twofactor import TwoFactorAuthView, u2f_appid
@@ -70,7 +72,7 @@ if getattr(settings, "SERVE_UPLOADED_FILES", settings.DEBUG):
     # would typically be handled by some static server.
     urlpatterns += [
         url(
-            fr"^{re.escape(settings.MEDIA_URL)}(?P<path>.*)$",
+            rf"^{re.escape(settings.MEDIA_URL)}(?P<path>.*)$",
             serve,
             {"document_root": settings.MEDIA_ROOT},
             name="sentry-serve-media",
@@ -94,7 +96,11 @@ urlpatterns += [
         name="sentry-api-crossdomain-xml",
     ),
     # Frontend client config
-    url(r"^api/client-config/?$", api.ClientConfigView.as_view(), name="sentry-api-client-config"),
+    url(
+        r"^api/client-config/?$",
+        api.ClientConfigView.as_view(),
+        name="sentry-api-client-config",
+    ),
     # We do not want to have webpack assets served under a versioned URL, as these assets have
     # a filecontent-based hash in its filenames so that it can be cached long term
     url(
@@ -115,7 +121,10 @@ urlpatterns += [
         name="sentry-js-sdk-loader",
     ),
     # Versioned API
-    url(r"^api/0/", include("sentry.api.urls")),
+    url(
+        r"^api/0/",
+        include("sentry.api.urls"),
+    ),
     # Legacy unversioned endpoints
     url(
         r"^api/hooks/mailgun/inbound/",
@@ -127,14 +136,24 @@ urlpatterns += [
         ReleaseWebhookView.as_view(),
         name="sentry-release-hook",
     ),
-    url(r"^api/embed/error-page/$", ErrorPageEmbedView.as_view(), name="sentry-error-page-embed"),
+    url(
+        r"^api/embed/error-page/$",
+        ErrorPageEmbedView.as_view(),
+        name="sentry-error-page-embed",
+    ),
     # OAuth
     url(
         r"^oauth/",
         include(
             [
-                url(r"^authorize/$", OAuthAuthorizeView.as_view()),
-                url(r"^token/$", OAuthTokenView.as_view()),
+                url(
+                    r"^authorize/$",
+                    OAuthAuthorizeView.as_view(),
+                ),
+                url(
+                    r"^token/$",
+                    OAuthTokenView.as_view(),
+                ),
             ]
         ),
     ),
@@ -166,7 +185,11 @@ urlpatterns += [
         r"^auth/",
         include(
             [
-                url(r"^login/$", AuthLoginView.as_view(), name="sentry-login"),
+                url(
+                    r"^login/$",
+                    AuthLoginView.as_view(),
+                    name="sentry-login",
+                ),
                 url(
                     r"^login/(?P<organization_slug>[^/]+)/$",
                     AuthOrganizationLoginView.as_view(),
@@ -177,27 +200,59 @@ urlpatterns += [
                     AuthOrganizationLoginView.as_view(),
                     name="sentry-auth-link-identity",
                 ),
-                url(r"^2fa/$", TwoFactorAuthView.as_view(), name="sentry-2fa-dialog"),
-                url(r"^2fa/u2fappid\.json$", u2f_appid, name="sentry-u2f-app-id"),
-                url(r"^sso/$", AuthProviderLoginView.as_view(), name="sentry-auth-sso"),
-                url(r"^logout/$", AuthLogoutView.as_view(), name="sentry-logout"),
+                url(
+                    r"^2fa/$",
+                    TwoFactorAuthView.as_view(),
+                    name="sentry-2fa-dialog",
+                ),
+                url(
+                    r"^2fa/u2fappid\.json$",
+                    u2f_appid,
+                    name="sentry-u2f-app-id",
+                ),
+                url(
+                    r"^sso/$",
+                    AuthProviderLoginView.as_view(),
+                    name="sentry-auth-sso",
+                ),
+                url(
+                    r"^logout/$",
+                    AuthLogoutView.as_view(),
+                    name="sentry-logout",
+                ),
                 url(
                     r"^reactivate/$",
                     ReactivateAccountView.as_view(),
                     name="sentry-reactivate-account",
                 ),
-                url(r"^register/$", AuthLoginView.as_view(), name="sentry-register"),
-                url(r"^close/$", AuthCloseView.as_view(), name="sentry-auth-close"),
+                url(
+                    r"^register/$",
+                    AuthLoginView.as_view(),
+                    name="sentry-register",
+                ),
+                url(
+                    r"^close/$",
+                    AuthCloseView.as_view(),
+                    name="sentry-auth-close",
+                ),
             ]
         ),
     ),
-    url(r"^login-redirect/$", accounts.login_redirect, name="sentry-login-redirect"),
+    url(
+        r"^login-redirect/$",
+        accounts.login_redirect,
+        name="sentry-login-redirect",
+    ),
     # Account
     url(
         r"^account/",
         include(
             [
-                url(r"^sudo/$", SudoView.as_view(), name="sentry-sudo"),
+                url(
+                    r"^sudo/$",
+                    SudoView.as_view(),
+                    name="sentry-sudo",
+                ),
                 url(
                     r"^confirm-email/$",
                     accounts.start_confirm_email,
@@ -219,7 +274,11 @@ urlpatterns += [
                     AccountConfirmationView.as_view(),
                     name="sentry-idp-email-verification",
                 ),
-                url(r"^recover/$", accounts.recover, name="sentry-account-recover"),
+                url(
+                    r"^recover/$",
+                    accounts.recover,
+                    name="sentry-account-recover",
+                ),
                 url(
                     r"^recover/confirm/(?P<user_id>[\d]+)/(?P<hash>[0-9a-zA-Z]+)/$",
                     accounts.recover_confirm,
@@ -248,9 +307,7 @@ urlpatterns += [
                 ),
                 url(
                     r"^settings/appearance/$",
-                    RedirectView.as_view(
-                        pattern_name="sentry-account-settings-appearance", permanent=False
-                    ),
+                    RedirectView.as_view(pattern_name="sentry-account-settings", permanent=False),
                 ),
                 url(
                     r"^settings/identities/$",
@@ -315,17 +372,32 @@ urlpatterns += [
                 ),
                 url(
                     r"^remove/$",
-                    RedirectView.as_view(pattern_name="sentry-remove-account", permanent=False),
+                    RedirectView.as_view(
+                        pattern_name="sentry-account-close-account", permanent=False
+                    ),
                 ),
-                url(r"^settings/social/", include("social_auth.urls")),
-                url(r"^", generic_react_page_view),
+                url(
+                    r"^settings/social/",
+                    include("social_auth.urls"),
+                ),
+                url(
+                    r"^",
+                    generic_react_page_view,
+                ),
             ]
         ),
     ),
     # Onboarding
-    url(r"^onboarding/", generic_react_page_view),
+    url(
+        r"^onboarding/",
+        generic_react_page_view,
+    ),
     # Admin
-    url(r"^manage/", react_page_view, name="sentry-admin-overview"),
+    url(
+        r"^manage/",
+        react_page_view,
+        name="sentry-admin-overview",
+    ),
     # Legacy Redirects
     url(
         r"^docs/?$",
@@ -337,22 +409,40 @@ urlpatterns += [
         RedirectView.as_view(url="https://docs.sentry.io/api/", permanent=False),
         name="sentry-api-docs-redirect",
     ),
-    url(r"^api/$", RedirectView.as_view(pattern_name="sentry-api", permanent=False)),
+    url(
+        r"^api/$",
+        RedirectView.as_view(pattern_name="sentry-api", permanent=False),
+    ),
     url(
         r"^api/applications/$",
-        RedirectView.as_view(pattern_name="sentry-api-applications", permanent=False),
+        RedirectView.as_view(pattern_name="sentry-account-api-applications", permanent=False),
     ),
     url(
         r"^api/new-token/$",
-        RedirectView.as_view(pattern_name="sentry-api-new-auth-token", permanent=False),
+        RedirectView.as_view(pattern_name="sentry-account-api-new-auth-token", permanent=False),
     ),
-    url(r"^api/[^0]+/", RedirectView.as_view(pattern_name="sentry-api", permanent=False)),
-    url(r"^out/$", OutView.as_view()),
-    url(r"^accept-transfer/$", react_page_view, name="sentry-accept-project-transfer"),
+    url(
+        r"^api/[^0]+/",
+        RedirectView.as_view(pattern_name="sentry-api", permanent=False),
+    ),
+    url(
+        r"^out/$",
+        OutView.as_view(),
+    ),
+    url(
+        r"^accept-transfer/$",
+        react_page_view,
+        name="sentry-accept-project-transfer",
+    ),
     url(
         r"^accept/(?P<member_id>\d+)/(?P<token>\w+)/$",
         GenericReactPageView.as_view(auth_required=False),
         name="sentry-accept-invite",
+    ),
+    url(
+        r"^accept/(?P<organization_slug>[^/]+)/(?P<member_id>\d+)/(?P<token>\w+)/$",
+        GenericReactPageView.as_view(auth_required=False),
+        name="sentry-organization-accept-invite",
     ),
     # User settings use generic_react_page_view, while any view acting on
     # behalf of an organization should use react_page_view
@@ -360,11 +450,10 @@ urlpatterns += [
         r"^settings/",
         include(
             [
-                url(r"^account/$", generic_react_page_view, name="sentry-account-settings"),
                 url(
                     r"^account/$",
                     generic_react_page_view,
-                    name="sentry-account-settings-appearance",
+                    name="sentry-account-settings",
                 ),
                 url(
                     r"^account/authorizations/$",
@@ -404,20 +493,118 @@ urlpatterns += [
                 url(
                     r"^account/api/applications/$",
                     generic_react_page_view,
-                    name="sentry-api-applications",
+                    name="sentry-account-api-applications",
                 ),
                 url(
                     r"^account/api/auth-tokens/new-token/$",
                     generic_react_page_view,
-                    name="sentry-api-new-auth-token",
+                    name="sentry-account-api-new-auth-token",
                 ),
-                url(r"^account/api/", generic_react_page_view, name="sentry-api"),
+                url(
+                    r"^account/api/",
+                    generic_react_page_view,
+                    name="sentry-api",
+                ),
                 url(
                     r"^account/close-account/$",
                     generic_react_page_view,
-                    name="sentry-remove-account",
+                    name="sentry-account-close-account",
                 ),
-                url(r"^account/", generic_react_page_view),
+                url(
+                    r"^account/",
+                    generic_react_page_view,
+                    name="sentry-account-settings-generic",
+                ),
+                url(
+                    r"^organization/auth/configure/$",
+                    OrganizationAuthSettingsView.as_view(),
+                    name="sentry-customer-domain-organization-auth-provider-settings",
+                ),
+                url(
+                    r"^organization/",
+                    react_page_view,
+                    name="sentry-customer-domain-organization-settings",
+                ),
+                url(
+                    r"^projects/",
+                    react_page_view,
+                    name="sentry-customer-domain-projects-settings",
+                ),
+                url(
+                    r"^teams/",
+                    react_page_view,
+                    name="sentry-customer-domain-teams-settings",
+                ),
+                url(
+                    r"^members/",
+                    react_page_view,
+                    name="sentry-customer-domain-members-settings",
+                ),
+                url(
+                    r"^security-and-privacy/",
+                    react_page_view,
+                    name="sentry-customer-domain-security-and-privacy-settings",
+                ),
+                url(
+                    r"^auth/",
+                    react_page_view,
+                    name="sentry-customer-domain-auth-settings",
+                ),
+                url(
+                    r"^audit-log/",
+                    react_page_view,
+                    name="sentry-customer-domain-audit-log-settings",
+                ),
+                url(
+                    r"^relay/",
+                    react_page_view,
+                    name="sentry-customer-domain-relay-settings",
+                ),
+                url(
+                    r"^repos/",
+                    react_page_view,
+                    name="sentry-customer-domain-repos-settings",
+                ),
+                url(
+                    r"^integrations/",
+                    react_page_view,
+                    name="sentry-customer-domain-integrations-settings",
+                ),
+                url(
+                    r"^developer-settings/",
+                    react_page_view,
+                    name="sentry-customer-domain-developer-settings-settings",
+                ),
+                url(
+                    r"^document-integrations/",
+                    react_page_view,
+                    name="sentry-customer-domain-document-integrations-settings",
+                ),
+                url(
+                    r"^sentry-apps/",
+                    react_page_view,
+                    name="sentry-customer-domain-sentry-apps-settings",
+                ),
+                url(
+                    r"^billing/",
+                    react_page_view,
+                    name="sentry-customer-domain-billing-settings",
+                ),
+                url(
+                    r"^subscription/",
+                    react_page_view,
+                    name="sentry-customer-domain-subscription-settings",
+                ),
+                url(
+                    r"^spike-protection/",
+                    react_page_view,
+                    name="sentry-customer-domain-spike-protection-settings",
+                ),
+                url(
+                    r"^legal/",
+                    react_page_view,
+                    name="sentry-customer-domain-legal-settings",
+                ),
                 url(
                     r"^(?P<organization_slug>[\w_-]+)/$",
                     react_page_view,
@@ -443,8 +630,15 @@ urlpatterns += [
                     react_page_view,
                     name="sentry-organization-auth-settings",
                 ),
-                url(r"^(?P<organization_slug>[\w_-]+)/[\w_-]+/$", react_page_view),
-                url(r"^", react_page_view),
+                url(
+                    r"^(?P<organization_slug>[\w_-]+)/(?P<sub_page>[\w_-]+)/$",
+                    react_page_view,
+                    name="sentry-organization-sub-page-settings",
+                ),
+                url(
+                    r"^",
+                    react_page_view,
+                ),
             ]
         ),
     ),
@@ -453,13 +647,157 @@ urlpatterns += [
         react_page_view,
         name="integration-installation",
     ),
+    # Issues
+    url(
+        r"^issues/(?P<project_slug>[\w_-]+)/(?P<group_id>\d+)/tags/(?P<key>[^\/]+)/export/$",
+        GroupTagExportView.as_view(),
+        name="sentry-customer-domain-sentry-group-tag-export",
+    ),
+    url(
+        r"^issues/",
+        react_page_view,
+        name="issues",
+    ),
+    # Alerts
+    url(
+        r"^alerts/",
+        react_page_view,
+        name="alerts",
+    ),
+    # Performance
+    url(
+        r"^performance/",
+        react_page_view,
+        name="performance",
+    ),
+    # Starfish
+    url(
+        r"^starfish/",
+        react_page_view,
+        name="starfish",
+    ),
+    # Profiling
+    url(
+        r"^profiling/",
+        react_page_view,
+        name="profiling",
+    ),
+    # Projects
+    url(
+        r"^projects/",
+        react_page_view,
+        name="projects",
+    ),
+    url(
+        r"^projects/(?P<project_slug>[\w_-]+)/",
+        react_page_view,
+        name="project-details",
+    ),
+    # Dashboards
+    url(
+        r"^dashboard/",
+        react_page_view,
+        name="dashboard",
+    ),
+    url(
+        r"^dashboards/",
+        react_page_view,
+        name="dashboards",
+    ),
+    # Discover
+    url(
+        r"^discover/",
+        react_page_view,
+        name="discover",
+    ),
+    # Request to join an organization
+    url(
+        r"^join-request/",
+        GenericReactPageView.as_view(auth_required=False),
+        name="join-request",
+    ),
+    # Activity
+    url(
+        r"^activity/",
+        react_page_view,
+        name="activity",
+    ),
+    # Stats
+    url(
+        r"^stats/",
+        react_page_view,
+        name="stats",
+    ),
+    # Replays
+    url(
+        r"^replays/",
+        react_page_view,
+        name="replays",
+    ),
+    # Crons
+    url(
+        r"^crons/",
+        react_page_view,
+        name="crons",
+    ),
+    # Releases
+    url(
+        r"^releases/",
+        react_page_view,
+        name="releases",
+    ),
+    # User Feedback
+    url(
+        r"^user-feedback/",
+        react_page_view,
+        name="user-feedback",
+    ),
+    # Data Export
+    url(
+        r"^data-export/",
+        react_page_view,
+        name="data-export",
+    ),
+    # Disabled Member
+    url(
+        r"^disabled-member/",
+        DisabledMemberView.as_view(),
+        name="sentry-customer-domain-organization-disabled-member",
+    ),
+    # Newest performance issue
+    url(
+        r"^newest-(?P<issue_type>[\w_-]+)-issue/$",
+        NewestIssueView.as_view(),
+        name="sentry-customer-domain-organization-newest-issue",
+    ),
+    # Restore organization
+    url(
+        r"^restore/",
+        RestoreOrganizationView.as_view(),
+        name="sentry-customer-domain-restore-organization",
+    ),
+    # Project on-boarding
+    # We map /:orgid/:projectid/getting-started/* to /getting-started/:projectid/*
+    url(
+        r"^getting-started/(?P<project_slug>[\w_-]+)/",
+        react_page_view,
+        name="project-getting-started",
+    ),
     # Organizations
-    url(r"^(?P<organization_slug>[\w_-]+)/$", react_page_view, name="sentry-organization-home"),
+    url(
+        r"^(?P<organization_slug>[\w_-]+)/$",
+        react_page_view,
+        name="sentry-organization-home",
+    ),
     url(
         r"^organizations/",
         include(
             [
-                url(r"^new/$", generic_react_page_view),
+                url(
+                    r"^new/$",
+                    generic_react_page_view,
+                    name="sentry-organization-create",
+                ),
                 url(
                     r"^(?P<organization_slug>[\w_-]+)/$",
                     react_page_view,
@@ -495,6 +833,11 @@ urlpatterns += [
                     r"^(?P<organization_slug>[\w_-]+)/issues/(?P<group_id>\d+)/events/(?P<event_id_or_latest>[\w-]+)/json/$",
                     GroupEventJsonView.as_view(),
                     name="sentry-group-event-json",
+                ),
+                url(
+                    r"^(?P<organization_slug>[\w_-]+)/projects/(?P<project_slug>[\w_-]+)/$",
+                    react_page_view,
+                    name="sentry-organization-project-details",
                 ),
                 url(
                     r"^(?P<organization_slug>[\w_-]+)/projects/(?P<project_slug>[\w_-]+)/events/(?P<client_event_id>[\w_-]+)/$",
@@ -536,6 +879,16 @@ urlpatterns += [
                     name="sentry-organization-member-settings-old",
                 ),
                 url(
+                    r"^(?P<organization_slug>[\w_-]+)/performance/$",
+                    react_page_view,
+                    name="sentry-organization-performance",
+                ),
+                url(
+                    r"^(?P<organization_slug>[\w_-]+)/performance/summary/$",
+                    react_page_view,
+                    name="sentry-organization-performance-summary",
+                ),
+                url(
                     r"^(?P<organization_slug>[\w_-]+)/stats/$",
                     react_page_view,
                     name="sentry-organization-stats",
@@ -550,8 +903,17 @@ urlpatterns += [
                     DisabledMemberView.as_view(),
                     name="sentry-organization-disabled-member",
                 ),
+                url(
+                    r"^(?P<organization_slug>[^/]+)/newest-(?P<issue_type>[\w_-]+)-issue/$",
+                    NewestIssueView.as_view(),
+                    name="sentry-organization-newest-issue",
+                ),
                 # need to force these to React and ensure organization_slug is captured
-                url(r"^(?P<organization_slug>[\w_-]+)/[\w_-]+/", react_page_view),
+                url(
+                    r"^(?P<organization_slug>[\w_-]+)/(?P<sub_page>[\w_-]+)/",
+                    react_page_view,
+                    name="sentry-organization-sub-page",
+                ),
             ]
         ),
     ),
@@ -565,6 +927,7 @@ urlpatterns += [
         react_page_view,
         name="sentry-manage-project",
     ),
+    # Avatars
     url(
         r"^avatar/(?P<avatar_id>[^\/]+)/$",
         UserAvatarPhotoView.as_view(),
@@ -602,17 +965,31 @@ urlpatterns += [
         name="sentry-chartcuterie-config",
     ),
     # Generic
-    url(r"^$", HomeView.as_view(), name="sentry"),
-    url(r"^robots\.txt$", api.robots_txt, name="sentry-api-robots-txt"),
+    url(
+        r"^$",
+        HomeView.as_view(),
+        name="sentry",
+    ),
+    url(
+        r"^robots\.txt$",
+        api.robots_txt,
+        name="sentry-api-robots-txt",
+    ),
     # Force a 404 of favicon.ico.
     # This url is commonly requested by browsers, and without
     # blocking this, it was treated as a 200 OK for a react page view.
     # A side effect of this is it may cause a bad redirect when logging in
     # since this gets stored in session as the last viewed page.
     # See: https://github.com/getsentry/sentry/issues/2195
-    url(r"favicon\.ico$", lambda r: HttpResponse(status=404)),
+    url(
+        r"favicon\.ico$",
+        lambda r: HttpResponse(status=404),
+    ),
     # crossdomain.xml
-    url(r"^crossdomain\.xml$", lambda r: HttpResponse(status=404)),
+    url(
+        r"^crossdomain\.xml$",
+        lambda r: HttpResponse(status=404),
+    ),
     # plugins
     # XXX(dcramer): preferably we'd be able to use 'integrations' as the URL
     # prefix here, but unfortunately sentry.io has that mapped to marketing
@@ -626,26 +1003,65 @@ urlpatterns += [
                     PipelineAdvancerView.as_view(),
                     name="sentry-extension-setup",
                 ),
-                url(r"^cloudflare/", include("sentry.integrations.cloudflare.urls")),
-                url(r"^jira/", include("sentry.integrations.jira.urls")),
-                url(r"^jira-server/", include("sentry.integrations.jira_server.urls")),
-                url(r"^slack/", include("sentry.integrations.slack.urls")),
-                url(r"^github/", include("sentry.integrations.github.urls")),
-                url(r"^github-enterprise/", include("sentry.integrations.github_enterprise.urls")),
-                url(r"^gitlab/", include("sentry.integrations.gitlab.urls")),
-                url(r"^vsts/", include("sentry.integrations.vsts.urls")),
-                url(r"^bitbucket/", include("sentry.integrations.bitbucket.urls")),
-                url(r"^bitbucket-server/", include("sentry.integrations.bitbucket_server.urls")),
-                url(r"^vercel/", include("sentry.integrations.vercel.urls")),
-                url(r"^msteams/", include("sentry.integrations.msteams.urls")),
+                url(
+                    r"^cloudflare/",
+                    include("sentry.integrations.cloudflare.urls"),
+                ),
+                url(
+                    r"^jira/",
+                    include("sentry.integrations.jira.urls"),
+                ),
+                url(
+                    r"^jira-server/",
+                    include("sentry.integrations.jira_server.urls"),
+                ),
+                url(
+                    r"^slack/",
+                    include("sentry.integrations.slack.urls"),
+                ),
+                url(
+                    r"^github/",
+                    include("sentry.integrations.github.urls"),
+                ),
+                url(
+                    r"^github-enterprise/",
+                    include("sentry.integrations.github_enterprise.urls"),
+                ),
+                url(
+                    r"^gitlab/",
+                    include("sentry.integrations.gitlab.urls"),
+                ),
+                url(
+                    r"^vsts/",
+                    include("sentry.integrations.vsts.urls"),
+                ),
+                url(
+                    r"^bitbucket/",
+                    include("sentry.integrations.bitbucket.urls"),
+                ),
+                url(
+                    r"^bitbucket-server/",
+                    include("sentry.integrations.bitbucket_server.urls"),
+                ),
+                url(
+                    r"^vercel/",
+                    include("sentry.integrations.vercel.urls"),
+                ),
+                url(
+                    r"^msteams/",
+                    include("sentry.integrations.msteams.urls"),
+                ),
             ]
         ),
     ),
-    url(r"^plugins/", include("sentry.plugins.base.urls")),
+    url(
+        r"^plugins/",
+        include("sentry.plugins.base.urls"),
+    ),
     # Generic API
     url(
         r"^share/(?:group|issue)/(?P<share_id>[\w_-]+)/$",
-        GenericReactPageView.as_view(auth_required=False),
+        SharedGroupDetailsView.as_view(auth_required=False),
         name="sentry-group-shared",
     ),
     url(
@@ -680,6 +1096,11 @@ urlpatterns += [
         name="sentry-metric-alert",
     ),
     url(
+        r"^organizations/(?P<organization_slug>[\w_-]+)/alerts/rules/details/(?P<alert_rule_id>\d+)/$",
+        react_page_view,
+        name="sentry-metric-alert-details",
+    ),
+    url(
         r"^settings/(?P<organization_slug>[\w_-]+)/projects/(?P<project_slug>[\w_-]+)/alerts/metric-rules/(?P<alert_rule_id>\d+)/$",
         react_page_view,
         name="sentry-alert-rule",
@@ -701,5 +1122,8 @@ urlpatterns += [
     ),
     # Legacy
     # This triggers a false positive for the urls.W002 Django warning
-    url(r"/$", react_page_view),
+    url(
+        r"^.*/$",
+        react_page_view,
+    ),
 ]

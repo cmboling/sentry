@@ -1,10 +1,10 @@
 import datetime
 from datetime import timedelta
+from functools import cached_property
 from unittest import mock
 
 from django.db.models import F
 from django.utils import timezone
-from exam import fixture
 
 from sentry import features
 from sentry.api.serializers import serialize
@@ -25,9 +25,11 @@ from sentry.models import (
 )
 from sentry.testutils import SnubaTestCase, TestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils.samples import load_data
 
 
+@region_silo_test
 class ProjectSerializerTest(TestCase):
     def setUp(self):
         super().setUp()
@@ -128,6 +130,35 @@ class ProjectSerializerTest(TestCase):
         assert result["hasAccess"] is True
         assert result["isMember"] is True
 
+    def test_member_on_owner_team_access(self):
+        organization = self.create_organization()
+        manager_team = self.create_team(organization=organization, org_role="manager")
+        owner_team = self.create_team(organization=organization, org_role="owner")
+        self.create_member(
+            user=self.user,
+            organization=self.organization,
+            role="member",
+            teams=[manager_team, owner_team],
+        )
+
+        result = serialize(self.project, self.user)
+
+        assert result["hasAccess"] is True
+        assert result["isMember"] is False
+
+        self.organization.flags.allow_joinleave = False
+        self.organization.save()
+        result = serialize(self.project, self.user)
+        # after changing to allow_joinleave=False
+        assert result["hasAccess"] is True
+        assert result["isMember"] is False
+
+        self.create_team_membership(user=self.user, team=self.team)
+        result = serialize(self.project, self.user)
+        # after giving them access to team
+        assert result["hasAccess"] is True
+        assert result["isMember"] is True
+
     @mock.patch("sentry.features.batch_has")
     def test_project_batch_has(self, mock_batch):
         mock_batch.return_value = {
@@ -140,7 +171,14 @@ class ProjectSerializerTest(TestCase):
         assert "test-feature" in result["features"]
         assert "disabled-feature" not in result["features"]
 
-    def test_project_features(self):
+    @mock.patch("sentry.api.serializers.project.features")
+    def test_project_features(self, mock_features):
+        test_features = features.FeatureManager()
+        mock_features.all = test_features.all
+        mock_features.has = test_features.has
+        mock_features.batch_has = test_features.batch_has
+        mock_features.has_for_batch = test_features.has_for_batch
+
         early_flag = "projects:TEST_early"
         red_flag = "projects:TEST_red"
         blue_flag = "projects:TEST_blue"
@@ -168,13 +206,13 @@ class ProjectSerializerTest(TestCase):
 
             return ProjectColorFeatureHandler()
 
-        features.add(early_flag, features.ProjectFeature)
-        features.add(red_flag, features.ProjectFeature)
-        features.add(blue_flag, features.ProjectFeature)
+        test_features.add(early_flag, features.ProjectFeature)
+        test_features.add(red_flag, features.ProjectFeature)
+        test_features.add(blue_flag, features.ProjectFeature)
         red_handler = create_color_handler(red_flag, [early_red, late_red])
         blue_handler = create_color_handler(blue_flag, [early_blue, late_blue])
         for handler in (EarlyAdopterFeatureHandler(), red_handler, blue_handler):
-            features.add_handler(handler)
+            test_features.add_handler(handler)
 
         def api_form(flag):
             return flag[len("projects:") :]
@@ -192,6 +230,7 @@ class ProjectSerializerTest(TestCase):
         assert_has_features(late_blue, [blue_flag])
 
 
+@region_silo_test
 class ProjectWithTeamSerializerTest(TestCase):
     def test_simple(self):
         user = self.create_user(username="foo")
@@ -211,6 +250,7 @@ class ProjectWithTeamSerializerTest(TestCase):
         }
 
 
+@region_silo_test
 class ProjectSummarySerializerTest(SnubaTestCase, TestCase):
     def setUp(self):
         super().setUp()
@@ -306,6 +346,46 @@ class ProjectSummarySerializerTest(SnubaTestCase, TestCase):
 
         result = serialize(self.project, self.user, ProjectSummarySerializer())
         assert result["hasSessions"] is True
+
+    def test_has_profiles_flag(self):
+        result = serialize(self.project, self.user, ProjectSummarySerializer())
+        assert result["hasProfiles"] is False
+
+        self.project.first_event = timezone.now()
+        self.project.update(flags=F("flags").bitor(Project.flags.has_profiles))
+
+        result = serialize(self.project, self.user, ProjectSummarySerializer())
+        assert result["hasProfiles"] is True
+
+    def test_has_replays_flag(self):
+        result = serialize(self.project, self.user, ProjectSummarySerializer())
+        assert result["hasReplays"] is False
+
+        self.project.first_event = timezone.now()
+        self.project.update(flags=F("flags").bitor(Project.flags.has_replays))
+
+        result = serialize(self.project, self.user, ProjectSummarySerializer())
+        assert result["hasReplays"] is True
+
+    def test_has_monitors_flag(self):
+        result = serialize(self.project, self.user, ProjectSummarySerializer())
+        assert result["hasMonitors"] is False
+
+        self.project.first_event = timezone.now()
+        self.project.update(flags=F("flags").bitor(Project.flags.has_cron_monitors))
+
+        result = serialize(self.project, self.user, ProjectSummarySerializer())
+        assert result["hasMonitors"] is True
+
+    def test_has_minified_stracktrace_flag(self):
+        result = serialize(self.project, self.user, ProjectSummarySerializer())
+        assert result["hasMinifiedStackTrace"] is False
+
+        self.project.first_event = timezone.now()
+        self.project.update(flags=F("flags").bitor(Project.flags.has_minified_stack_trace))
+
+        result = serialize(self.project, self.user, ProjectSummarySerializer())
+        assert result["hasMinifiedStackTrace"] is True
 
     def test_no_environments(self):
         # remove environments and related models
@@ -473,7 +553,7 @@ class ProjectSummarySerializerTest(SnubaTestCase, TestCase):
         assert results[0]["sessionStats"]["currentCrashFreeRate"] == 75.63453
         assert results[0]["sessionStats"]["hasHealthData"]
 
-        check_has_health_data.assert_not_called()  # NOQA
+        assert check_has_health_data.call_count == 0
 
     @mock.patch("sentry.api.serializers.models.project.release_health.check_has_health_data")
     @mock.patch(
@@ -502,9 +582,10 @@ class ProjectSummarySerializerTest(SnubaTestCase, TestCase):
         assert results[0]["sessionStats"]["currentCrashFreeRate"] is None
         assert results[0]["sessionStats"]["hasHealthData"]
 
-        check_has_health_data.assert_called()  # NOQA
+        assert check_has_health_data.call_count == 1
 
 
+@region_silo_test
 class ProjectWithOrganizationSerializerTest(TestCase):
     def test_simple(self):
         user = self.create_user(username="foo")
@@ -520,12 +601,13 @@ class ProjectWithOrganizationSerializerTest(TestCase):
         assert result["organization"] == serialize(organization, user)
 
 
+@region_silo_test
 class BulkFetchProjectLatestReleases(TestCase):
-    @fixture
+    @cached_property
     def project(self):
         return self.create_project(teams=[self.team], organization=self.organization)
 
-    @fixture
+    @cached_property
     def other_project(self):
         return self.create_project(teams=[self.team], organization=self.organization)
 

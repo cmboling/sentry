@@ -1,17 +1,18 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import styled from '@emotion/styled';
+import findIndex from 'lodash/findIndex';
 import groupBy from 'lodash/groupBy';
 import moment from 'moment';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
 import DateTime from 'sentry/components/dateTime';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
 import Switch from 'sentry/components/switchButton';
 import {IconToggle} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import AsyncView from 'sentry/views/asyncView';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
 import TextBlock from 'sentry/views/settings/components/text/textBlock';
 
@@ -40,12 +41,13 @@ class AccountSubscriptions extends AsyncView<AsyncView['props'], State> {
     return 'Subscriptions';
   }
 
-  handleToggle = (subscription: Subscription, index: number, _e: React.MouseEvent) => {
+  handleToggle = (subscription: Subscription, listId: number, _e: React.MouseEvent) => {
     const subscribed = !subscription.subscribed;
     const oldSubscriptions = this.state.subscriptions;
 
     this.setState(state => {
       const newSubscriptions = state.subscriptions.slice();
+      const index = findIndex(newSubscriptions, {listId});
       newSubscriptions[index] = {
         ...subscription,
         subscribed,
@@ -102,14 +104,14 @@ class AccountSubscriptions extends AsyncView<AsyncView['props'], State> {
               <PanelHeader>{t('Subscription')}</PanelHeader>
               <PanelBody>
                 {subGroups.map(([email, subscriptions]) => (
-                  <React.Fragment key={email}>
+                  <Fragment key={email}>
                     {subGroups.length > 1 && (
                       <Heading>
                         <IconToggle /> {t('Subscriptions for %s', email)}
                       </Heading>
                     )}
 
-                    {subscriptions.map((subscription, index) => (
+                    {subscriptions.map(subscription => (
                       <PanelItem center key={subscription.listId}>
                         <SubscriptionDetails>
                           <SubscriptionName>{subscription.listName}</SubscriptionName>
@@ -123,7 +125,6 @@ class AccountSubscriptions extends AsyncView<AsyncView['props'], State> {
                                   email: subscription.email,
                                   date: (
                                     <DateTime
-                                      shortDate
                                       date={moment(subscription.subscribedDate!)}
                                     />
                                   ),
@@ -140,12 +141,16 @@ class AccountSubscriptions extends AsyncView<AsyncView['props'], State> {
                           <Switch
                             isActive={subscription.subscribed}
                             size="lg"
-                            toggle={this.handleToggle.bind(this, subscription, index)}
+                            toggle={this.handleToggle.bind(
+                              this,
+                              subscription,
+                              subscription.listId
+                            )}
                           />
                         </div>
                       </PanelItem>
                     ))}
-                  </React.Fragment>
+                  </Fragment>
                 ))}
               </PanelBody>
             </div>
@@ -188,16 +193,16 @@ const SubscriptionDetails = styled('div')`
 `;
 
 const SubscriptionName = styled('div')`
-  font-size: ${p => p.theme.fontSizeExtraLarge};
+  font-size: ${p => p.theme.fontSizeMedium};
 `;
 const Description = styled('div')`
   font-size: ${p => p.theme.fontSizeSmall};
-  margin-top: ${space(0.75)};
   color: ${p => p.theme.subText};
+  margin-top: ${space(0.5)};
 `;
 
 const SubscribedDescription = styled(Description)`
-  color: ${p => p.theme.gray300};
+  color: ${p => p.theme.subText};
 `;
 
 export default AccountSubscriptions;

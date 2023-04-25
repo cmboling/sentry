@@ -3,15 +3,17 @@ from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry import features
+from sentry import audit_log, features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.serializers import serialize
 from sentry.api.serializers.rest_framework import ProjectKeySerializer
 from sentry.loader.browsersdkversion import get_default_sdk_version_for_project
-from sentry.models import AuditLogEntryEvent, ProjectKey, ProjectKeyStatus
+from sentry.models import ProjectKey, ProjectKeyStatus
 
 
+@region_silo_endpoint
 class ProjectKeyDetailsEndpoint(ProjectEndpoint):
     def get(self, request: Request, project, key_id) -> Response:
         try:
@@ -54,10 +56,22 @@ class ProjectKeyDetailsEndpoint(ProjectEndpoint):
             if result.get("name"):
                 key.label = result["name"]
 
-            if not result.get("browserSdkVersion"):
-                key.data = {"browserSdkVersion": default_version}
-            else:
-                key.data = {"browserSdkVersion": result["browserSdkVersion"]}
+            if not key.data:
+                key.data = {}
+
+            key.data["browserSdkVersion"] = (
+                default_version
+                if not result.get("browserSdkVersion")
+                else result["browserSdkVersion"]
+            )
+
+            result_dynamic_sdk_options = result.get("dynamicSdkLoaderOptions")
+
+            if result_dynamic_sdk_options:
+                if key.data.get("dynamicSdkLoaderOptions"):
+                    key.data["dynamicSdkLoaderOptions"].update(result_dynamic_sdk_options)
+                else:
+                    key.data["dynamicSdkLoaderOptions"] = result_dynamic_sdk_options
 
             if result.get("isActive") is True:
                 key.status = ProjectKeyStatus.ACTIVE
@@ -84,7 +98,7 @@ class ProjectKeyDetailsEndpoint(ProjectEndpoint):
                 request=request,
                 organization=project.organization,
                 target_object=key.id,
-                event=AuditLogEntryEvent.PROJECTKEY_EDIT,
+                event=audit_log.get_event_id("PROJECTKEY_EDIT"),
                 data=key.get_audit_log_data(),
             )
 
@@ -116,7 +130,7 @@ class ProjectKeyDetailsEndpoint(ProjectEndpoint):
             request=request,
             organization=project.organization,
             target_object=key.id,
-            event=AuditLogEntryEvent.PROJECTKEY_REMOVE,
+            event=audit_log.get_event_id("PROJECTKEY_REMOVE"),
             data=key.get_audit_log_data(),
         )
 

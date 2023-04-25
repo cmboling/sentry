@@ -10,17 +10,18 @@ from sentry.models import Group, GroupSubscription
 from sentry.notifications.helpers import get_reason_context
 from sentry.notifications.notifications.base import ProjectNotification
 from sentry.notifications.utils import send_activity_notification
+from sentry.notifications.utils.participants import ParticipantMap
+from sentry.services.hybrid_cloud.actor import RpcActor
 from sentry.types.integrations import ExternalProviders
-from sentry.utils.http import absolute_uri
 
 if TYPE_CHECKING:
-    from sentry.models import Project, Team, User
+    from sentry.models import Project
 
 logger = logging.getLogger(__name__)
 
 
 class UserReportNotification(ProjectNotification):
-    referrer_base = "user-report"
+    metrics_key = "user_report"
     template_path = "sentry/emails/activity/new-user-feedback"
 
     def __init__(self, project: Project, report: Mapping[str, Any]) -> None:
@@ -28,21 +29,14 @@ class UserReportNotification(ProjectNotification):
         self.group = Group.objects.get(id=report["issue"]["id"])
         self.report = report
 
-    def get_participants_with_group_subscription_reason(
-        self,
-    ) -> Mapping[ExternalProviders, Mapping[Team | User, int]]:
+    def get_participants_with_group_subscription_reason(self) -> ParticipantMap:
         data_by_provider = GroupSubscription.objects.get_participants(group=self.group)
-        return {
-            provider: data
-            for provider, data in data_by_provider.items()
-            if provider in [ExternalProviders.EMAIL]
-        }
+        email_participants = data_by_provider.get_participants_by_provider(ExternalProviders.EMAIL)
 
-    def get_category(self) -> str:
-        return "user_report_email"
-
-    def get_type(self) -> str:
-        return "notify.user-report"
+        result = ParticipantMap()
+        for (actor, reason) in email_participants:
+            result.add(ExternalProviders.EMAIL, actor, reason)
+        return result
 
     def get_subject(self, context: Mapping[str, Any] | None = None) -> str:
         # Explicitly typing to satisfy mypy.
@@ -50,32 +44,38 @@ class UserReportNotification(ProjectNotification):
         message = force_text(message)
         return message
 
-    def get_notification_title(self) -> str:
-        # This shouldn't be possible but adding a message just in case.
-        return self.get_subject()
+    def get_notification_title(
+        self, provider: ExternalProviders, context: Mapping[str, Any] | None = None
+    ) -> str:
+        return self.get_subject(context)
 
     @property
     def reference(self) -> Model | None:
         return self.project
 
     def get_context(self) -> MutableMapping[str, Any]:
+        organization = self.organization
         return {
-            "enhanced_privacy": self.organization.flags.enhanced_privacy,
+            "enhanced_privacy": organization.flags.enhanced_privacy,
             "group": self.group,
-            "issue_link": absolute_uri(
-                f"/{self.organization.slug}/{self.project.slug}/issues/{self.group.id}/"
+            "issue_link": organization.absolute_url(
+                f"/organizations/{organization.slug}/issues/{self.group.id}/",
+                query=f"project={self.project.id}",
             ),
             # TODO(dcramer): we don't have permalinks to feedback yet
-            "link": absolute_uri(
-                f"/{self.organization.slug}/{self.project.slug}/issues/{self.group.id}/feedback/"
+            "link": organization.absolute_url(
+                f"/organizations/{organization.slug}/issues/{self.group.id}/feedback/",
+                query=f"project={self.project.id}",
             ),
             "project": self.project,
-            "project_link": absolute_uri(f"/{self.organization.slug}/{self.project.slug}/"),
+            "project_link": organization.absolute_url(
+                f"/organizations/{self.organization.slug}/projects/{self.project.slug}/"
+            ),
             "report": self.report,
         }
 
     def get_recipient_context(
-        self, recipient: Team | User, extra_context: Mapping[str, Any]
+        self, recipient: RpcActor, extra_context: Mapping[str, Any]
     ) -> MutableMapping[str, Any]:
         context = super().get_recipient_context(recipient, extra_context)
         return {**context, **get_reason_context(context)}

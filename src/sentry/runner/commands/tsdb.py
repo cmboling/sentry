@@ -1,4 +1,3 @@
-from collections import OrderedDict
 from datetime import datetime, timedelta
 
 import click
@@ -6,7 +5,6 @@ import pytz
 from dateutil.parser import parse
 
 from sentry.runner.decorators import configuration
-from sentry.utils.compat import map
 from sentry.utils.iterators import chunked
 
 
@@ -64,7 +62,7 @@ def organizations(metrics, since, until):
     """
     from django.utils import timezone
 
-    from sentry.app import tsdb
+    from sentry import tsdb
     from sentry.models import Organization
 
     stdout = click.get_text_stream("stdout")
@@ -73,7 +71,7 @@ def organizations(metrics, since, until):
     def aggregate(series):
         return sum(value for timestamp, value in series)
 
-    metrics = OrderedDict((name, getattr(tsdb.models, name)) for name in metrics)
+    metrics = {name: getattr(tsdb.models, name) for name in metrics}
     if not metrics:
         return
 
@@ -91,7 +89,7 @@ def organizations(metrics, since, until):
     objects = Organization.objects.all()
 
     for chunk in chunked(objects, 100):
-        instances = OrderedDict((instance.pk, instance) for instance in chunk)
+        instances = {instance.pk: instance for instance in chunk}
 
         results = {}
         for metric in metrics.values():

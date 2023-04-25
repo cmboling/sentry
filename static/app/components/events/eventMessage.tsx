@@ -1,9 +1,7 @@
-import * as React from 'react';
 import styled from '@emotion/styled';
 
 import ErrorLevel from 'sentry/components/events/errorLevel';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Level} from 'sentry/types';
 
 type Props = {
@@ -15,40 +13,31 @@ type Props = {
   message?: React.ReactNode;
 };
 
-const BaseEventMessage = ({
-  className,
-  level,
-  levelIndicatorSize,
-  message,
-  annotations,
-}: Props) => (
-  <div className={className}>
-    {level && (
-      <StyledErrorLevel size={levelIndicatorSize} level={level}>
-        {level}
-      </StyledErrorLevel>
-    )}
+const EventMessage = styled(
+  ({className, level, levelIndicatorSize, message, annotations}: Props) => (
+    <div className={className}>
+      {level && (
+        <ErrorLevel size={levelIndicatorSize} level={level}>
+          {level}
+        </ErrorLevel>
+      )}
 
-    {message && <Message>{message}</Message>}
+      {message && <Message>{message}</Message>}
 
-    {annotations}
-  </div>
-);
-
-const EventMessage = styled(BaseEventMessage)`
+      {annotations}
+    </div>
+  )
+)`
   display: flex;
+  gap: ${space(1)};
   align-items: center;
   position: relative;
   line-height: 1.2;
   overflow: hidden;
 `;
 
-const StyledErrorLevel = styled(ErrorLevel)`
-  margin-right: ${space(1)};
-`;
-
 const Message = styled('span')`
-  ${overflowEllipsis}
+  ${p => p.theme.overflowEllipsis}
   width: auto;
   max-height: 38px;
 `;

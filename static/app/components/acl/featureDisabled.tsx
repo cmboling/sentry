@@ -1,14 +1,14 @@
 import {Fragment, useState} from 'react';
 import styled from '@emotion/styled';
 
-import Alert from 'sentry/components/alert';
-import Button, {ButtonLabel} from 'sentry/components/button';
+import {Alert} from 'sentry/components/alert';
+import {Button, ButtonLabel} from 'sentry/components/button';
 import Clipboard from 'sentry/components/clipboard';
 import ExternalLink from 'sentry/components/links/externalLink';
 import {CONFIG_DOCS_URL} from 'sentry/constants';
 import {IconChevron, IconCopy} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {selectText} from 'sentry/utils/selectText';
 
 const installText = (features: string[], featureName: string): string =>
@@ -77,25 +77,11 @@ function FeatureDisabled({
           )}
         </HelpText>
         <Clipboard hideUnsupported value={installText(features, featureName)}>
-          <CopyButton
-            borderless
-            size="xsmall"
-            onClick={e => {
-              e.stopPropagation();
-              e.preventDefault();
-            }}
-            icon={<IconCopy size="xs" />}
-          >
+          <CopyButton borderless size="xs" icon={<IconCopy size="xs" />}>
             {t('Copy to Clipboard')}
           </CopyButton>
         </Clipboard>
-        <Pre
-          onClick={e => {
-            e.stopPropagation();
-            e.preventDefault();
-            selectText(e.target as HTMLElement);
-          }}
-        >
+        <Pre onClick={e => selectText(e.target as HTMLElement)}>
           <code>{installText(features, featureName)}</code>
         </Pre>
       </Fragment>
@@ -111,7 +97,7 @@ function FeatureDisabled({
           {!hideHelpToggle && (
             <ToggleButton
               priority="link"
-              size="xsmall"
+              size="xs"
               onClick={() => setShowHelp(!showHelp)}
             >
               {t('Help')}
@@ -119,16 +105,7 @@ function FeatureDisabled({
             </ToggleButton>
           )}
         </FeatureDisabledMessage>
-        {showDescription && (
-          <HelpDescription
-            onClick={e => {
-              e.stopPropagation();
-              e.preventDefault();
-            }}
-          >
-            {renderHelp()}
-          </HelpDescription>
-        )}
+        {showDescription && <HelpDescription>{renderHelp()}</HelpDescription>}
       </Fragment>
     );
   }
@@ -187,6 +164,7 @@ const CopyButton = styled(Button)`
 
 const Pre = styled('pre')`
   margin-bottom: 0;
+  overflow: auto;
 `;
 
 export default FeatureDisabled;

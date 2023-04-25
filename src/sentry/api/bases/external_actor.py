@@ -15,13 +15,17 @@ from sentry.api.validators.external_actor import (
     validate_integration_id,
 )
 from sentry.api.validators.integrations import validate_provider
-from sentry.models import ExternalActor, Organization, Team, User
+from sentry.models import ExternalActor, Organization, Team
+from sentry.models.actor import get_actor_id_for_user
+from sentry.services.hybrid_cloud.organization import organization_service
+from sentry.services.hybrid_cloud.user import RpcUser, user_service
 from sentry.types.integrations import ExternalProviders, get_provider_choices
 
 AVAILABLE_PROVIDERS = {
     ExternalProviders.GITHUB,
     ExternalProviders.GITLAB,
     ExternalProviders.SLACK,
+    ExternalProviders.MSTEAMS,
     ExternalProviders.CUSTOM,
 }
 
@@ -59,7 +63,9 @@ class ExternalActorSerializerBase(CamelSnakeModelSerializer):  # type: ignore
         return int(provider.value)
 
     def get_actor_id(self, validated_data: MutableMapping[str, Any]) -> int:
-        return int(validated_data.pop(self._actor_key).actor_id)
+        user = validated_data.pop(self._actor_key)
+        actor_id = get_actor_id_for_user(user)
+        return int(actor_id)
 
     def create(self, validated_data: MutableMapping[str, Any]) -> ExternalActor:
         actor_id = self.get_actor_id(validated_data)
@@ -95,15 +101,17 @@ class ExternalUserSerializer(ExternalActorSerializerBase):
 
     user_id = serializers.IntegerField(required=True)
 
-    def validate_user_id(self, user_id: int) -> User:
+    def validate_user_id(self, user_id: int) -> RpcUser:
         """Ensure that this user exists and that they belong to the organization."""
-
-        try:
-            return User.objects.get(
-                id=user_id, sentry_orgmember_set__organization=self.organization
+        if (
+            organization_service.check_membership_by_id(
+                user_id=user_id, organization_id=self.organization.id
             )
-        except User.DoesNotExist:
+            is None
+            or (user := user_service.get_user(user_id=user_id)) is None
+        ):
             raise serializers.ValidationError("This member does not exist.")
+        return user
 
     class Meta:
         model = ExternalActor

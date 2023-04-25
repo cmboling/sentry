@@ -2,9 +2,10 @@ import {Fragment} from 'react';
 import {RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
 
+import EmptyMessage from 'sentry/components/emptyMessage';
+import SelectField from 'sentry/components/forms/fields/selectField';
 import Form from 'sentry/components/forms/form';
 import JsonForm from 'sentry/components/forms/jsonForm';
-import SelectField from 'sentry/components/forms/selectField';
 import Pagination from 'sentry/components/pagination';
 import {Panel, PanelBody, PanelHeader} from 'sentry/components/panels';
 import {fields} from 'sentry/data/forms/accountNotificationSettings';
@@ -18,10 +19,10 @@ import {
 } from 'sentry/views/settings/account/notifications/fields';
 import NotificationSettingsByType from 'sentry/views/settings/account/notifications/notificationSettingsByType';
 import {
+  getNotificationTypeFromPathname,
   groupByOrganization,
   isGroupedByProject,
 } from 'sentry/views/settings/account/notifications/utils';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
 import TextBlock from 'sentry/views/settings/components/text/textBlock';
 
@@ -32,12 +33,21 @@ const PanelBodyLineItem = styled(PanelBody)`
   }
 `;
 
+const accountNotifications = [
+  'alerts',
+  'deploy',
+  'workflow',
+  'approval',
+  'quota',
+  'spikeProtection',
+];
+
 type ANBPProps = {
   field: FineTuneField;
   projects: Project[];
 };
 
-const AccountNotificationsByProject = ({projects, field}: ANBPProps) => {
+function AccountNotificationsByProject({projects, field}: ANBPProps) {
   const projectsByOrg = groupByOrganization(projects);
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -74,14 +84,14 @@ const AccountNotificationsByProject = ({projects, field}: ANBPProps) => {
       ))}
     </Fragment>
   );
-};
+}
 
 type ANBOProps = {
   field: FineTuneField;
   organizations: Organization[];
 };
 
-const AccountNotificationsByOrganization = ({organizations, field}: ANBOProps) => {
+function AccountNotificationsByOrganization({organizations, field}: ANBOProps) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const {title, description, ...fieldConfig} = field;
 
@@ -108,7 +118,7 @@ const AccountNotificationsByOrganization = ({organizations, field}: ANBOProps) =
       ))}
     </Fragment>
   );
-};
+}
 
 const AccountNotificationsByOrganizationContainer = withOrganizations(
   AccountNotificationsByOrganization
@@ -128,7 +138,8 @@ type State = AsyncView['state'] & {
 
 class AccountNotificationFineTuning extends AsyncView<Props, State> {
   getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
-    const {fineTuneType} = this.props.params;
+    const {fineTuneType: pathnameType} = this.props.params;
+    const fineTuneType = getNotificationTypeFromPathname(pathnameType);
     const endpoints = [
       ['notifications', '/users/me/notifications/'],
       ['fineTuneData', `/users/me/notifications/${fineTuneType}/`],
@@ -167,9 +178,10 @@ class AccountNotificationFineTuning extends AsyncView<Props, State> {
 
   renderBody() {
     const {params} = this.props;
-    const {fineTuneType} = params;
+    const {fineTuneType: pathnameType} = params;
+    const fineTuneType = getNotificationTypeFromPathname(pathnameType);
 
-    if (['alerts', 'deploy', 'workflow', 'approval', 'quota'].includes(fineTuneType)) {
+    if (accountNotifications.includes(fineTuneType)) {
       return <NotificationSettingsByType notificationType={fineTuneType} />;
     }
 

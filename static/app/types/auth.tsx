@@ -1,8 +1,7 @@
 import type u2f from 'u2f-api';
 
-import type {Field} from 'sentry/components/forms/type';
-
-import type {Organization} from './organization';
+import type {Field} from 'sentry/components/forms/types';
+import {ControlSiloOrganization} from 'sentry/types/control_silo_organization';
 
 export type AuthenticatorDevice = {
   authId: string;
@@ -32,6 +31,10 @@ export type Authenticator = {
    */
   description: string;
   devices: AuthenticatorDevice[];
+  /**
+   * New enrollments of this 2FA interface are not allowed
+   */
+  disallowNewEnrollment: boolean;
   /**
    * String used to display on button for user as CTA to enroll
    */
@@ -152,7 +155,7 @@ export type UserIdentityConfig = {
   id: string;
   isLogin: boolean;
   name: string;
-  organization: Organization | null;
+  organization: ControlSiloOrganization | null;
   provider: UserIdentityProvider;
   status: UserIdentityStatus;
 };

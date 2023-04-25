@@ -1,13 +1,12 @@
 import {Fragment, useCallback, useRef, useState} from 'react';
-import {withRouter} from 'react-router';
 import styled from '@emotion/styled';
 
 import ErrorPanel from 'sentry/components/charts/errorPanel';
 import Placeholder from 'sentry/components/placeholder';
 import {IconWarning} from 'sentry/icons/iconWarning';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
-import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import getDynamicText from 'sentry/utils/getDynamicText';
 import {MEPDataProvider} from 'sentry/utils/performance/contexts/metricsEnhancedPerformanceDataContext';
 import useApi from 'sentry/utils/useApi';
@@ -42,6 +41,7 @@ export function GenericPerformanceWidget<T extends WidgetDataConstraint>(
       widgetDataRef.current = newWidgetData;
       setWidgetData({[props.chartSetting]: newWidgetData});
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [allWidgetData, setWidgetData]
   );
   const removeWidgetDataForKey = useCallback(
@@ -52,6 +52,7 @@ export function GenericPerformanceWidget<T extends WidgetDataConstraint>(
       widgetDataRef.current = newWidgetData;
       setWidgetData({[props.chartSetting]: newWidgetData});
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [allWidgetData, setWidgetData]
   );
   const widgetProps = {widgetData, setWidgetDataForKey, removeWidgetDataForKey};
@@ -77,7 +78,7 @@ export function GenericPerformanceWidget<T extends WidgetDataConstraint>(
           queries={queries}
           api={api}
         />
-        <_DataDisplay<T> {...props} {...widgetProps} totalHeight={totalHeight} />
+        <DataDisplay<T> {...props} {...widgetProps} totalHeight={totalHeight} />
       </MEPDataProvider>
     </Fragment>
   );
@@ -87,13 +88,13 @@ function trackDataComponentClicks(
   chartSetting: PerformanceWidgetSetting,
   organization: Organization
 ) {
-  trackAdvancedAnalyticsEvent('performance_views.landingv3.widget.interaction', {
+  trackAnalytics('performance_views.landingv3.widget.interaction', {
     organization,
     widget_type: chartSetting,
   });
 }
 
-function _DataDisplay<T extends WidgetDataConstraint>(
+export function DataDisplay<T extends WidgetDataConstraint>(
   props: GenericPerformanceWidgetProps<T> & WidgetDataProps<T> & {totalHeight: number}
 ) {
   const {Visualizations, chartHeight, totalHeight, containerType, EmptyComponent} = props;
@@ -156,15 +157,13 @@ function _DataDisplay<T extends WidgetDataConstraint>(
   );
 }
 
-export const DataDisplay = withRouter(_DataDisplay);
-
-const DefaultErrorComponent = (props: {height: number}) => {
+function DefaultErrorComponent(props: {height: number}) {
   return (
     <ErrorPanel data-test-id="widget-state-is-errored" height={`${props.height}px`}>
       <IconWarning color="gray300" size="lg" />
     </ErrorPanel>
   );
-};
+}
 
 const defaultGrid = {
   left: space(0),

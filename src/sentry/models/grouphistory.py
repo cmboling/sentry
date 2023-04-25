@@ -10,23 +10,32 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
+from sentry.types.activity import ActivityType
+from sentry.types.group import GROUP_SUBSTATUS_TO_GROUP_HISTORY_STATUS
 
 if TYPE_CHECKING:
     from sentry.models import Group, Release, Team, User
+    from sentry.services.hybrid_cloud.user import RpcUser
 
 
 class GroupHistoryStatus:
     # Note that we don't record the initial group creation unresolved here to save on creating a row
     # for every group.
+
+    # Prefer to use ONGOING instead of UNRESOLVED. We will be deprecating UNRESOLVED in the future.
+    # Use REGRESSED/ESCALATING to specify other substatuses for UNRESOLVED groups.
     UNRESOLVED = 0
+    ONGOING = UNRESOLVED
+
     RESOLVED = 1
     SET_RESOLVED_IN_RELEASE = 11
     SET_RESOLVED_IN_COMMIT = 12
     SET_RESOLVED_IN_PULL_REQUEST = 13
     AUTO_RESOLVED = 2
-    IGNORED = 3
+    IGNORED = 3  # use the ARCHIVED_XXX statuses instead
     UNIGNORED = 4
     ASSIGNED = 5
     UNASSIGNED = 6
@@ -34,12 +43,14 @@ class GroupHistoryStatus:
     DELETED = 8
     DELETED_AND_DISCARDED = 9
     REVIEWED = 10
+    ESCALATING = 14
+    ARCHIVED_UNTIL_ESCALATING = 15
     # Just reserving this for us with queries, we don't store the first time a group is created in
     # `GroupHistoryStatus`
     NEW = 20
 
 
-string_to_status_lookup = {
+STRING_TO_STATUS_LOOKUP = {
     "unresolved": GroupHistoryStatus.UNRESOLVED,
     "resolved": GroupHistoryStatus.RESOLVED,
     "set_resolved_in_release": GroupHistoryStatus.SET_RESOLVED_IN_RELEASE,
@@ -55,8 +66,10 @@ string_to_status_lookup = {
     "deleted_and_discarded": GroupHistoryStatus.DELETED_AND_DISCARDED,
     "reviewed": GroupHistoryStatus.REVIEWED,
     "new": GroupHistoryStatus.NEW,
+    "escalating": GroupHistoryStatus.ESCALATING,
+    "archived_until_escalating": GroupHistoryStatus.ARCHIVED_UNTIL_ESCALATING,
 }
-status_to_string_lookup = {status: string for string, status in string_to_status_lookup.items()}
+STATUS_TO_STRING_LOOKUP = {status: string for string, status in STRING_TO_STATUS_LOOKUP.items()}
 
 
 ACTIONED_STATUSES = [
@@ -68,9 +81,14 @@ ACTIONED_STATUSES = [
     GroupHistoryStatus.REVIEWED,
     GroupHistoryStatus.DELETED,
     GroupHistoryStatus.DELETED_AND_DISCARDED,
+    GroupHistoryStatus.ARCHIVED_UNTIL_ESCALATING,
 ]
 
-UNRESOLVED_STATUSES = (GroupHistoryStatus.UNRESOLVED, GroupHistoryStatus.REGRESSED)
+UNRESOLVED_STATUSES = (
+    GroupHistoryStatus.UNRESOLVED,
+    GroupHistoryStatus.REGRESSED,
+    GroupHistoryStatus.ESCALATING,
+)
 RESOLVED_STATUSES = (
     GroupHistoryStatus.RESOLVED,
     GroupHistoryStatus.SET_RESOLVED_IN_RELEASE,
@@ -91,6 +109,15 @@ PREVIOUS_STATUSES = {
     GroupHistoryStatus.ASSIGNED: (GroupHistoryStatus.UNASSIGNED,),
     GroupHistoryStatus.UNASSIGNED: (GroupHistoryStatus.ASSIGNED,),
     GroupHistoryStatus.REGRESSED: RESOLVED_STATUSES,
+    GroupHistoryStatus.ESCALATING: (GroupHistoryStatus.ARCHIVED_UNTIL_ESCALATING,),
+}
+
+ACTIVITY_STATUS_TO_GROUP_HISTORY_STATUS = {
+    ActivityType.SET_IGNORED.value: GroupHistoryStatus.IGNORED,
+    ActivityType.SET_RESOLVED.value: GroupHistoryStatus.RESOLVED,
+    ActivityType.SET_RESOLVED_IN_COMMIT.value: GroupHistoryStatus.SET_RESOLVED_IN_COMMIT,
+    ActivityType.SET_RESOLVED_IN_RELEASE.value: GroupHistoryStatus.SET_RESOLVED_IN_RELEASE,
+    ActivityType.SET_UNRESOLVED.value: GroupHistoryStatus.UNRESOLVED,
 }
 
 
@@ -109,6 +136,7 @@ class GroupHistoryManager(BaseManager):
         )
 
 
+@region_silo_only_model
 class GroupHistory(Model):
     """
     This model is used to track certain status changes for groups,
@@ -145,6 +173,7 @@ class GroupHistory(Model):
             (GroupHistoryStatus.SET_RESOLVED_IN_RELEASE, _("Resolved in Release")),
             (GroupHistoryStatus.SET_RESOLVED_IN_COMMIT, _("Resolved in Commit")),
             (GroupHistoryStatus.SET_RESOLVED_IN_PULL_REQUEST, _("Resolved in Pull Request")),
+            (GroupHistoryStatus.ESCALATING, _("Escalating")),
         ),
     )
     prev_history = FlexibleForeignKey(
@@ -191,7 +220,13 @@ def record_group_history_from_activity_type(
     Writes a `GroupHistory` row for an activity type if there's a relevant `GroupHistoryStatus` that
     maps to it
     """
-    status = activity_type_to_history_status(activity_type)
+    status = ACTIVITY_STATUS_TO_GROUP_HISTORY_STATUS.get(activity_type, None)
+
+    # Substatus-based GroupHistory should overritde activity-based GroupHistory since it's more specific.
+    if group.substatus:
+        status_str = GROUP_SUBSTATUS_TO_GROUP_HISTORY_STATUS.get(group.substatus, None)
+        status = STRING_TO_STATUS_LOOKUP.get(status_str, status)
+
     if status is not None:
         return record_group_history(group, status, actor, release)
 
@@ -199,7 +234,7 @@ def record_group_history_from_activity_type(
 def record_group_history(
     group: "Group",
     status: int,
-    actor: Optional[Union["User", "Team"]] = None,
+    actor: Optional[Union["RpcUser", "Team"]] = None,
     release: Optional["Release"] = None,
 ):
     prev_history = get_prev_history(group, status)
@@ -208,26 +243,8 @@ def record_group_history(
         group=group,
         project=group.project,
         release=release,
-        actor=actor.actor if actor is not None else None,
+        actor_id=actor.actor_id if actor is not None else None,
         status=status,
         prev_history=prev_history,
         prev_history_date=prev_history.date_added if prev_history else None,
     )
-
-
-def activity_type_to_history_status(status):
-    from sentry.models import Activity
-
-    # TODO: This could be improved; defined above at the very least
-    if status == Activity.SET_IGNORED:
-        return GroupHistoryStatus.IGNORED
-    elif status == Activity.SET_RESOLVED:
-        return GroupHistoryStatus.RESOLVED
-    elif status == Activity.SET_RESOLVED_IN_COMMIT:
-        return GroupHistoryStatus.SET_RESOLVED_IN_COMMIT
-    elif status == Activity.SET_RESOLVED_IN_RELEASE:
-        return GroupHistoryStatus.SET_RESOLVED_IN_RELEASE
-    elif status == Activity.SET_UNRESOLVED:
-        return GroupHistoryStatus.UNRESOLVED
-
-    return None

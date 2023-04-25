@@ -7,26 +7,33 @@ from django.db import IntegrityError, connections, models, router, transaction
 from django.utils import timezone
 from django.utils.translation import ugettext_lazy as _
 
-from sentry.app import env, locks
+from sentry.app import env
 from sentry.db.models import (
     BaseManager,
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
 from sentry.db.models.utils import slugify_instance
+from sentry.db.postgres.roles import in_test_psql_role_override
+from sentry.locks import locks
+from sentry.models.actor import Actor
+from sentry.models.outbox import OutboxCategory, OutboxScope, RegionOutbox
 from sentry.utils.retries import TimedRetryPolicy
+from sentry.utils.snowflake import SnowflakeIdMixin
 
 if TYPE_CHECKING:
     from sentry.models import Organization, Project, User
+    from sentry.services.hybrid_cloud.user import RpcUser
 
 
 class TeamManager(BaseManager):
     def get_for_user(
         self,
         organization: "Organization",
-        user: "User",
+        user: Union["User", "RpcUser"],
         scope: Optional[str] = None,
         with_projects: bool = False,
     ) -> Union[Sequence["Team"], Sequence[Tuple["Team", Sequence["Project"]]]]:
@@ -51,7 +58,7 @@ class TeamManager(BaseManager):
             team_list = list(base_team_qs)
         else:
             try:
-                om = OrganizationMember.objects.get(user=user, organization=organization)
+                om = OrganizationMember.objects.get(user_id=user.id, organization=organization)
             except OrganizationMember.DoesNotExist:
                 # User is not a member of the organization at all
                 return []
@@ -102,14 +109,21 @@ class TeamManager(BaseManager):
         self.process_resource_change(instance, **kwargs)
 
     def process_resource_change(self, instance, **kwargs):
+        from sentry.models import Organization, Project
         from sentry.tasks.codeowners import update_code_owners_schema
 
-        update_code_owners_schema.apply_async(
-            kwargs={
-                "organization": instance.organization,
-                "projects": instance.get_projects(),
-            }
-        )
+        def _spawn_task():
+            try:
+                update_code_owners_schema.apply_async(
+                    kwargs={
+                        "organization": instance.organization,
+                        "projects": list(instance.get_projects()),
+                    }
+                )
+            except (Organization.DoesNotExist, Project.DoesNotExist):
+                pass
+
+        transaction.on_commit(_spawn_task)
 
 
 # TODO(dcramer): pull in enum library
@@ -119,7 +133,8 @@ class TeamStatus:
     DELETION_IN_PROGRESS = 2
 
 
-class Team(Model):
+@region_silo_only_model
+class Team(Model, SnowflakeIdMixin):
     """
     A team represents a group of individuals which maintain ownership of projects.
     """
@@ -141,9 +156,15 @@ class Team(Model):
         default=TeamStatus.VISIBLE,
     )
     actor = FlexibleForeignKey(
-        "sentry.Actor", db_index=True, unique=True, null=True, on_delete=models.PROTECT
+        "sentry.Actor",
+        related_name="team_from_actor",
+        db_index=True,
+        unique=True,
+        null=True,
     )
+    idp_provisioned = models.BooleanField(default=False)
     date_added = models.DateTimeField(default=timezone.now, null=True)
+    org_role = models.CharField(max_length=32, null=True)
 
     objects = TeamManager(cache_fields=("pk", "slug"))
 
@@ -154,15 +175,24 @@ class Team(Model):
 
     __repr__ = sane_repr("name", "slug")
 
+    def class_name(self):
+        return "Team"
+
     def __str__(self):
         return f"{self.name} ({self.slug})"
 
     def save(self, *args, **kwargs):
         if not self.slug:
-            lock = locks.get("slug:team", duration=5)
+            lock = locks.get(f"slug:team:{self.organization_id}", duration=5, name="team_slug")
             with TimedRetryPolicy(10)(lock.acquire):
                 slugify_instance(self, self.name, organization=self.organization)
-        super().save(*args, **kwargs)
+        if settings.SENTRY_USE_SNOWFLAKE:
+            snowflake_redis_key = "team_snowflake_key"
+            self.save_with_snowflake_id(
+                snowflake_redis_key, lambda: super(Team, self).save(*args, **kwargs)
+            )
+        else:
+            super().save(*args, **kwargs)
 
     @property
     def member_set(self):
@@ -264,25 +294,51 @@ class Team(Model):
         ).delete()
 
         if new_team != self:
+            # Delete the old team
             cursor = connections[router.db_for_write(Team)].cursor()
             # we use a cursor here to avoid automatic cascading of relations
             # in Django
             try:
-                cursor.execute("DELETE FROM sentry_team WHERE id = %s", [self.id])
+                with transaction.atomic(), in_test_psql_role_override("postgres"):
+                    cursor.execute("DELETE FROM sentry_team WHERE id = %s", [self.id])
+                    self.outbox_for_update().save()
+                cursor.execute("DELETE FROM sentry_actor WHERE team_id = %s", [new_team.id])
             finally:
                 cursor.close()
 
+            # Change whatever new_team's actor is to the one from the old team.
+            with transaction.atomic():
+                Actor.objects.filter(id=self.actor_id).update(team_id=new_team.id)
+                new_team.actor_id = self.actor_id
+                new_team.save()
+
     def get_audit_log_data(self):
-        return {"id": self.id, "slug": self.slug, "name": self.name, "status": self.status}
+        return {
+            "id": self.id,
+            "slug": self.slug,
+            "name": self.name,
+            "status": self.status,
+            "org_role": self.org_role,
+        }
 
     def get_projects(self):
         from sentry.models import Project
 
         return Project.objects.get_for_team_ids({self.id})
 
+    def outbox_for_update(self) -> RegionOutbox:
+        return RegionOutbox(
+            shard_scope=OutboxScope.TEAM_SCOPE,
+            shard_identifier=self.organization_id,
+            category=OutboxCategory.TEAM_UPDATE,
+            object_identifier=self.id,
+        )
+
     def delete(self, **kwargs):
         from sentry.models import ExternalActor
 
         # There is no foreign key relationship so we have to manually delete the ExternalActors
-        ExternalActor.objects.filter(actor_id=self.actor_id).delete()
-        return super().delete(**kwargs)
+        with transaction.atomic(), in_test_psql_role_override("postgres"):
+            ExternalActor.objects.filter(actor_id=self.actor_id).delete()
+            self.outbox_for_update().save()
+            return super().delete(**kwargs)

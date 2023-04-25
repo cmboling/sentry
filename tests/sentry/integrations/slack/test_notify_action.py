@@ -312,7 +312,7 @@ class SlackNotifyActionTest(RuleTestCase):
 
         form = rule.get_form_instance()
         assert not form.is_valid()
-        assert ["Slack workspace is a required field."] in form.errors.values()
+        assert ["Slack: Workspace is a required field."] in form.errors.values()
 
     @responses.activate
     def test_display_name_conflict(self):
@@ -347,14 +347,14 @@ class SlackNotifyActionTest(RuleTestCase):
         form = rule.get_form_instance()
         assert not form.is_valid()
         assert [
-            'Multiple users were found with display name "@morty". Please use your username, found at sentry.slack.com/account/settings#username.'
+            "Slack: Multiple users were found with display name '@morty'. Please use your username, found at sentry.slack.com/account/settings#username."
         ] in form.errors.values()
 
     def test_disabled_org_integration(self):
         org = self.create_organization(owner=self.user)
-        OrganizationIntegration.objects.create(organization=org, integration=self.integration)
+        OrganizationIntegration.objects.create(organization_id=org.id, integration=self.integration)
         OrganizationIntegration.objects.filter(
-            integration=self.integration, organization=self.event.project.organization
+            integration=self.integration, organization_id=self.event.project.organization.id
         ).update(status=ObjectStatus.DISABLED)
         event = self.get_event()
 
@@ -396,7 +396,7 @@ class SlackNotifyActionTest(RuleTestCase):
     @responses.activate
     def test_multiple_integrations(self):
         org = self.create_organization(owner=self.user)
-        OrganizationIntegration.objects.create(organization=org, integration=self.integration)
+        OrganizationIntegration.objects.create(organization_id=org.id, integration=self.integration)
 
         event = self.get_event()
 

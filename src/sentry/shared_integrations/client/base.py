@@ -5,13 +5,14 @@ from typing import Any, Callable, Mapping, Sequence, Type, Union
 
 import sentry_sdk
 from django.core.cache import cache
+from requests import PreparedRequest
 from requests.exceptions import ConnectionError, HTTPError, Timeout
 
 from sentry.http import build_session
 from sentry.utils import json, metrics
 from sentry.utils.hashlib import md5_text
 
-from ..exceptions import ApiHostError, ApiTimeoutError
+from ..exceptions import ApiConnectionResetError, ApiHostError, ApiTimeoutError
 from ..exceptions.base import ApiError
 from ..response.base import BaseApiResponse
 from ..track_response import TrackResponseMixin
@@ -31,11 +32,11 @@ class BaseApiClient(TrackResponseMixin):
 
     log_path: str | None = None
 
-    datadog_prefix: str | None = None
+    metrics_prefix: str | None = None
 
     cache_time = 900
 
-    page_size = 100
+    page_size: int = 100
 
     page_number_limit = 10
 
@@ -80,6 +81,7 @@ class BaseApiClient(TrackResponseMixin):
         allow_redirects: bool | None = None,
         timeout: int | None = None,
         ignore_webhook_errors: bool = False,
+        prepared_request: PreparedRequest | None = None,
     ) -> BaseApiResponseX:
         if allow_text is None:
             allow_text = self.allow_text
@@ -96,18 +98,18 @@ class BaseApiClient(TrackResponseMixin):
         full_url = self.build_url(path)
 
         metrics.incr(
-            f"{self.datadog_prefix}.http_request",
+            f"{self.metrics_prefix}.http_request",
             sample_rate=1.0,
-            tags={self.integration_type: self.name},
+            tags={str(self.integration_type): self.name},
         )
 
-        try:
-            with sentry_sdk.configure_scope() as scope:
-                parent_span_id = scope.span.span_id
-                trace_id = scope.span.trace_id
-        except AttributeError:
-            parent_span_id = None
-            trace_id = None
+        with sentry_sdk.configure_scope() as scope:
+            if scope.span is not None:
+                parent_span_id: str | None = scope.span.span_id
+                trace_id: str | None = scope.span.trace_id
+            else:
+                parent_span_id = None
+                trace_id = None
 
         with sentry_sdk.start_transaction(
             op=f"{self.integration_type}.http",
@@ -118,24 +120,28 @@ class BaseApiClient(TrackResponseMixin):
         ) as span:
             try:
                 with build_session() as session:
-                    resp = getattr(session, method.lower())(
-                        url=full_url,
-                        headers=headers,
-                        json=data if json else None,
-                        data=data if not json else None,
-                        params=params,
-                        auth=auth,
-                        verify=self.verify_ssl,
-                        allow_redirects=allow_redirects,
-                        timeout=timeout,
+                    resp = (
+                        session.send(prepared_request)
+                        if prepared_request is not None
+                        else getattr(session, method.lower())(
+                            url=full_url,
+                            headers=headers,
+                            json=data if json else None,
+                            data=data if not json else None,
+                            params=params,
+                            auth=auth,
+                            verify=self.verify_ssl,
+                            allow_redirects=allow_redirects,
+                            timeout=timeout,
+                        )
                     )
                     resp.raise_for_status()
             except ConnectionError as e:
                 self.track_response_data("connection_error", span, e)
-                raise ApiHostError.from_exception(e)
+                raise ApiHostError.from_exception(e) from e
             except Timeout as e:
                 self.track_response_data("timeout", span, e)
-                raise ApiTimeoutError.from_exception(e)
+                raise ApiTimeoutError.from_exception(e) from e
             except HTTPError as e:
                 resp = e.response
                 if resp is None:
@@ -147,9 +153,27 @@ class BaseApiClient(TrackResponseMixin):
                         extra[self.integration_type] = self.name
                     self.logger.exception("request.error", extra=extra)
 
-                    raise ApiError("Internal Error", url=full_url)
+                    raise ApiError("Internal Error", url=full_url) from e
                 self.track_response_data(resp.status_code, span, e)
-                raise ApiError.from_response(resp, url=full_url)
+                raise ApiError.from_response(resp, url=full_url) from e
+
+            except Exception as e:
+                # Sometimes a ConnectionResetError shows up two or three deep in an exception
+                # chain, and you end up with an exception like
+                #     `ChunkedEncodingError("Connection broken: ConnectionResetError(104, 'Connection reset by peer')",
+                #          ConnectionResetError(104, 'Connection reset by peer'))`,
+                # which is a ChunkedEncodingError caused by a ProtocolError caused by a ConnectionResetError.
+                # Rather than worrying about what the other layers might be, we just stringify to detect this.
+                if "ConnectionResetError" in str(e):
+                    self.track_response_data("connection_reset_error", span, e)
+                    raise ApiConnectionResetError("Connection reset by peer", url=full_url) from e
+                # The same thing can happen with an InvalidChunkLength exception, which is a subclass of HTTPError
+                if "InvalidChunkLength" in str(e):
+                    self.track_response_data("invalid_chunk_length", span, e)
+                    raise ApiError("Connection broken: invalid chunk length", url=full_url) from e
+
+                # If it's not something we recognize, let the caller deal with it
+                raise e
 
             self.track_response_data(resp.status_code, span, None, resp)
 
@@ -170,7 +194,7 @@ class BaseApiClient(TrackResponseMixin):
     def _get_cached(self, path: str, method: str, *args: Any, **kwargs: Any) -> BaseApiResponseX:
         query = ""
         if kwargs.get("params", None):
-            query = json.dumps(kwargs.get("params"), sort_keys=True)
+            query = json.dumps(kwargs.get("params"))
         key = self.get_cache_prefix() + md5_text(self.build_url(path), query).hexdigest()
 
         result: BaseApiResponseX | None = cache.get(key)

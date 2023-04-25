@@ -1,17 +1,14 @@
 import {Component} from 'react';
 import styled from '@emotion/styled';
 
-import {Client} from 'sentry/api';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import Confirm from 'sentry/components/confirm';
 import {IconDelete, IconDownload, IconShow} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import withApi from 'sentry/utils/withApi';
+import {space} from 'sentry/styles/space';
 
 type Props = {
-  api: Client;
   attachmentId: string;
   onDelete: (attachmentId: string) => void;
   url: string | null;
@@ -43,7 +40,7 @@ class EventAttachmentActions extends Component<Props> {
           disabled={!url}
         >
           <Button
-            size="xsmall"
+            size="xs"
             icon={<IconDelete size="xs" />}
             aria-label={t('Delete')}
             disabled={!url}
@@ -52,7 +49,7 @@ class EventAttachmentActions extends Component<Props> {
         </Confirm>
 
         <DownloadButton
-          size="xsmall"
+          size="xs"
           icon={<IconDownload size="xs" />}
           href={url ? `${url}?download=1` : ''}
           disabled={!url}
@@ -62,7 +59,7 @@ class EventAttachmentActions extends Component<Props> {
 
         {withPreviewButton && (
           <DownloadButton
-            size="xsmall"
+            size="xs"
             disabled={!url || !hasPreview}
             priority={previewIsOpen ? 'primary' : 'default'}
             icon={<IconShow size="xs" />}
@@ -87,4 +84,4 @@ const DownloadButton = styled(Button)`
   margin-right: ${space(0.5)};
 `;
 
-export default withApi(EventAttachmentActions);
+export default EventAttachmentActions;

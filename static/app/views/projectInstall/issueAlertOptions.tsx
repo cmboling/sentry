@@ -1,16 +1,17 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
 import isEqual from 'lodash/isEqual';
 
 import AsyncComponent from 'sentry/components/asyncComponent';
-import Input from 'sentry/components/forms/controls/input';
 import RadioGroup from 'sentry/components/forms/controls/radioGroup';
-import SelectControl from 'sentry/components/forms/selectControl';
-import PageHeading from 'sentry/components/pageHeading';
+import SelectControl from 'sentry/components/forms/controls/selectControl';
+import Input from 'sentry/components/input';
+import * as Layout from 'sentry/components/layouts/thirds';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
+import {IssueAlertRuleAction} from 'sentry/types/alerts';
 import withOrganization from 'sentry/utils/withOrganization';
 
 enum MetricValues {
@@ -27,9 +28,17 @@ const UNIQUE_USER_FREQUENCY_CONDITION =
   'sentry.rules.conditions.event_frequency.EventUniqueUserFrequencyCondition';
 const EVENT_FREQUENCY_CONDITION =
   'sentry.rules.conditions.event_frequency.EventFrequencyCondition';
-const NOTIFY_EVENT_ACTION = 'sentry.rules.actions.notify_event.NotifyEventAction';
 export const EVENT_FREQUENCY_PERCENT_CONDITION =
   'sentry.rules.conditions.event_frequency.EventFrequencyPercentCondition';
+export const REAPPEARED_EVENT_CONDITION =
+  'sentry.rules.conditions.reappeared_event.ReappearedEventCondition';
+const ISSUE_ALERT_DEFAULT_ACTION: Omit<
+  IssueAlertRuleAction,
+  'label' | 'name' | 'prompt'
+> = {
+  id: 'sentry.mail.actions.NotifyEmailAction',
+  targetType: 'IssueOwners',
+};
 
 const METRIC_CONDITION_MAP = {
   [MetricValues.ERRORS]: EVENT_FREQUENCY_CONDITION,
@@ -51,12 +60,13 @@ type State = AsyncComponent['state'] & {
   interval: string;
   intervalChoices: [string, string][] | undefined;
   metric: MetricValues;
+
   threshold: string;
 };
 
 type RequestDataFragment = {
   actionMatch: string;
-  actions: {id: string}[];
+  actions: Omit<IssueAlertRuleAction, 'label' | 'name' | 'prompt'>[];
   conditions: {id: string; interval: string; value: string}[] | undefined;
   defaultRules: boolean;
   frequency: number;
@@ -107,7 +117,7 @@ class IssueAlertOptions extends AsyncComponent<Props, State> {
       ...super.getDefaultState(),
       conditions: [],
       intervalChoices: [],
-      alertSetting: Actions.CREATE_ALERT_LATER.toString(),
+      alertSetting: Actions.ALERT_ON_EVERY_ISSUE.toString(),
       metric: MetricValues.ERRORS,
       interval: '',
       threshold: '',
@@ -128,58 +138,53 @@ class IssueAlertOptions extends AsyncComponent<Props, State> {
   getIssueAlertsChoices(
     hasProperlyLoadedConditions: boolean
   ): [string, string | React.ReactElement][] {
-    const options: [string, React.ReactNode][] = [
-      [Actions.CREATE_ALERT_LATER.toString(), t("I'll create my own alerts later")],
-      [Actions.ALERT_ON_EVERY_ISSUE.toString(), t('Alert me on every new issue')],
+    const customizedAlertOption: [string, React.ReactNode] = [
+      Actions.CUSTOMIZED_ALERTS.toString(),
+      <CustomizeAlertsGrid
+        key={Actions.CUSTOMIZED_ALERTS}
+        onClick={e => {
+          // XXX(epurkhiser): The `e.preventDefault` here is needed to stop
+          // propagation of the click up to the label, causing it to focus
+          // the radio input and lose focus on the select.
+          e.preventDefault();
+          const alertSetting = Actions.CUSTOMIZED_ALERTS.toString();
+          this.setStateAndUpdateParents({alertSetting});
+        }}
+      >
+        {t('When there are more than')}
+        <InlineInput
+          type="number"
+          min="0"
+          name=""
+          placeholder={DEFAULT_PLACEHOLDER_VALUE}
+          value={this.state.threshold}
+          onChange={threshold =>
+            this.setStateAndUpdateParents({threshold: threshold.target.value})
+          }
+          data-test-id="range-input"
+        />
+        <InlineSelectControl
+          value={this.state.metric}
+          options={this.getAvailableMetricOptions()}
+          onChange={metric => this.setStateAndUpdateParents({metric: metric.value})}
+        />
+        {t('a unique error in')}
+        <InlineSelectControl
+          value={this.state.interval}
+          options={this.state.intervalChoices?.map(([value, label]) => ({
+            value,
+            label,
+          }))}
+          onChange={interval => this.setStateAndUpdateParents({interval: interval.value})}
+        />
+      </CustomizeAlertsGrid>,
     ];
 
-    if (hasProperlyLoadedConditions) {
-      options.push([
-        Actions.CUSTOMIZED_ALERTS.toString(),
-        <CustomizeAlertsGrid
-          key={Actions.CUSTOMIZED_ALERTS}
-          onClick={e => {
-            // XXX(epurkhiser): The `e.preventDefault` here is needed to stop
-            // propagation of the click up to the label, causing it to focus
-            // the radio input and lose focus on the select.
-            e.preventDefault();
-            const alertSetting = Actions.CUSTOMIZED_ALERTS.toString();
-            this.setStateAndUpdateParents({alertSetting});
-          }}
-        >
-          {t('When there are more than')}
-          <InlineInput
-            type="number"
-            min="0"
-            name=""
-            placeholder={DEFAULT_PLACEHOLDER_VALUE}
-            value={this.state.threshold}
-            onChange={threshold =>
-              this.setStateAndUpdateParents({threshold: threshold.target.value})
-            }
-            data-test-id="range-input"
-          />
-          <InlineSelectControl
-            value={this.state.metric}
-            options={this.getAvailableMetricOptions()}
-            onChange={metric => this.setStateAndUpdateParents({metric: metric.value})}
-            data-test-id="metric-select-control"
-          />
-          {t('a unique error in')}
-          <InlineSelectControl
-            value={this.state.interval}
-            options={this.state.intervalChoices?.map(([value, label]) => ({
-              value,
-              label,
-            }))}
-            onChange={interval =>
-              this.setStateAndUpdateParents({interval: interval.value})
-            }
-            data-test-id="interval-select-control"
-          />
-        </CustomizeAlertsGrid>,
-      ]);
-    }
+    const options: [string, React.ReactNode][] = [
+      [Actions.ALERT_ON_EVERY_ISSUE.toString(), t('Alert me on every new issue')],
+      ...(hasProperlyLoadedConditions ? [customizedAlertOption] : []),
+      [Actions.CREATE_ALERT_LATER.toString(), t("I'll create my own alerts later")],
+    ];
     return options.map(([choiceValue, node]) => [
       choiceValue,
       <RadioItemWrapper key={choiceValue}>{node}</RadioItemWrapper>,
@@ -221,7 +226,14 @@ class IssueAlertOptions extends AsyncComponent<Props, State> {
               ),
             ]
           : undefined,
-      actions: [{id: NOTIFY_EVENT_ACTION}],
+      actions: [
+        {
+          ...ISSUE_ALERT_DEFAULT_ACTION,
+          ...(this.props.organization.features.includes('issue-alert-fallback-targeting')
+            ? {fallthroughType: 'ActiveMembers'}
+            : {}),
+        },
+      ],
       actionMatch: 'all',
       frequency: 5,
     };
@@ -235,11 +247,9 @@ class IssueAlertOptions extends AsyncComponent<Props, State> {
         ) => Pick<State, K> | State | null)
       | Pick<State, K>
       | State
-      | null,
-    callback?: () => void
+      | null
   ): void {
     this.setState(state, () => {
-      callback?.();
       this.props.onChange(this.getUpdatedData());
     });
   }
@@ -287,22 +297,29 @@ class IssueAlertOptions extends AsyncComponent<Props, State> {
       this.state.conditions?.length > 0
     );
     return (
-      <React.Fragment>
+      <Fragment>
         <PageHeadingWithTopMargins withMargins>
-          {t('Set your default alert settings')}
+          {t('2. Set your alert frequency')}
         </PageHeadingWithTopMargins>
-        <RadioGroupWithPadding
-          choices={issueAlertOptionsChoices}
-          label={t('Options for creating an alert')}
-          onChange={alertSetting => this.setStateAndUpdateParents({alertSetting})}
-          value={this.state.alertSetting}
-        />
-      </React.Fragment>
+        <Content>
+          <RadioGroupWithPadding
+            choices={issueAlertOptionsChoices}
+            label={t('Options for creating an alert')}
+            onChange={alertSetting => this.setStateAndUpdateParents({alertSetting})}
+            value={this.state.alertSetting}
+          />
+        </Content>
+      </Fragment>
     );
   }
 }
 
 export default withOrganization(IssueAlertOptions);
+
+const Content = styled('div')`
+  padding-top: ${space(2)};
+  padding-bottom: ${space(4)};
+`;
 
 const CustomizeAlertsGrid = styled('div')`
   display: grid;
@@ -317,12 +334,13 @@ const InlineSelectControl = styled(SelectControl)`
   width: 160px;
 `;
 const RadioGroupWithPadding = styled(RadioGroup)`
-  padding: ${space(3)} 0;
-  margin-bottom: 50px;
-  box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.1);
+  margin-bottom: ${space(2)};
 `;
-const PageHeadingWithTopMargins = styled(PageHeading)`
+const PageHeadingWithTopMargins = styled(Layout.Title)`
   margin-top: 65px;
+  margin-bottom: 0;
+  padding-bottom: ${space(3)};
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
 `;
 const RadioItemWrapper = styled('div')`
   min-height: 35px;

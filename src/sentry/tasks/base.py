@@ -1,12 +1,58 @@
+from __future__ import annotations
+
 import resource
 from contextlib import contextmanager
 from functools import wraps
+from typing import Any, Callable, Iterable, Sequence, Type
 
-from celery.task import current
+# XXX(mdtro): backwards compatible imports for celery 4.4.7, remove after upgrade to 5.2.7
+import celery
+
+from sentry.silo.base import SiloLimit, SiloMode
+
+if celery.version_info >= (5, 2):
+    from celery import current_task
+else:
+    from celery.task import current as current_task
 
 from sentry.celery import app
 from sentry.utils import metrics
 from sentry.utils.sdk import capture_exception, configure_scope
+
+
+class TaskSiloLimit(SiloLimit):
+    """
+    Silo limiter for celery tasks
+
+    We don't want tasks to be spawned in the incorrect silo.
+    We can't reliably cause tasks to fail as not all tasks use
+    the ORM (which also has silo bound safety).
+    """
+
+    def handle_when_unavailable(
+        self,
+        original_method: Callable[..., Any],
+        current_mode: SiloMode,
+        available_modes: Iterable[SiloMode],
+    ) -> Callable[..., Any]:
+        def handle(*args: Any, **kwargs: Any) -> Any:
+            name = original_method.__name__
+            message = f"Cannot call or spawn {name} in {current_mode},"
+            raise self.AvailabilityError(message)
+
+        return handle
+
+    def __call__(self, decorated_task: Any) -> Any:
+        # Replace the celery.Task interface we use.
+        replacements = {"delay", "apply_async", "s", "signature", "retry", "apply", "run"}
+        for attr_name in replacements:
+            task_attr = getattr(decorated_task, attr_name)
+            if callable(task_attr):
+                limited_attr = self.create_override(task_attr)
+                setattr(decorated_task, attr_name, limited_attr)
+
+        limited_func = self.create_override(decorated_task)
+        return limited_func
 
 
 def get_rss_usage():
@@ -22,7 +68,27 @@ def track_memory_usage(metric, **kwargs):
         metrics.timing(metric, get_rss_usage() - before, **kwargs)
 
 
-def instrumented_task(name, stat_suffix=None, **kwargs):
+def load_model_from_db(cls, instance_or_id, allow_cache=True):
+    """Utility function to allow a task to transition to passing ids rather than model instances."""
+    if isinstance(instance_or_id, int):
+        if hasattr(cls.objects, "get_from_cache") and allow_cache:
+            return cls.objects.get_from_cache(pk=instance_or_id)
+        return cls.objects.get(pk=instance_or_id)
+    return instance_or_id
+
+
+def instrumented_task(name, stat_suffix=None, silo_mode=None, **kwargs):
+    """
+    Decorator for defining celery tasks.
+
+    Includes a few application specific batteries like:
+
+    - statsd metrics for duration and memory usage.
+    - sentry sdk tagging.
+    - hybrid cloud silo restrictions
+    - disabling of result collection.
+    """
+
     def wrapped(func):
         @wraps(func)
         def _wrapped(*args, **kwargs):
@@ -51,12 +117,22 @@ def instrumented_task(name, stat_suffix=None, **kwargs):
         # many tasks from a parent task, each task leaks memory. This can lead to the scheduler
         # being OOM killed.
         kwargs["trail"] = False
-        return app.task(name=name, **kwargs)(_wrapped)
+        task = app.task(name=name, **kwargs)(_wrapped)
+
+        if silo_mode:
+            silo_limiter = TaskSiloLimit(silo_mode)
+            return silo_limiter(task)
+        return task
 
     return wrapped
 
 
-def retry(func=None, on=(Exception,), exclude=(), ignore=()):
+def retry(
+    func: Callable[..., Any] | None = None,
+    on: Sequence[Type[Exception]] = (Exception,),
+    exclude: Sequence[Type[Exception]] = (),
+    ignore: Sequence[Type[Exception]] = (),
+) -> Callable[..., Callable[..., Any]]:
     """
     >>> @retry(on=(Exception,), exclude=(AnotherException,), ignore=(IgnorableException,))
     >>> def my_task():
@@ -77,7 +153,7 @@ def retry(func=None, on=(Exception,), exclude=(), ignore=()):
                 raise
             except on as exc:
                 capture_exception()
-                current.retry(exc=exc)
+                current_task.retry(exc=exc)
 
         return wrapped
 

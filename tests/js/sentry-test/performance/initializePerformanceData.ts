@@ -1,6 +1,7 @@
 import {initializeOrg} from 'sentry-test/initializeOrg';
 
-import {Project} from 'sentry/types';
+import {RawSpanType} from 'sentry/components/events/interfaces/spans/types';
+import {EntryType, EventTransaction, Project} from 'sentry/types';
 import {defined} from 'sentry/utils';
 import EventView from 'sentry/utils/discover/eventView';
 import {
@@ -11,9 +12,10 @@ import {
 
 export interface initializeDataSettings {
   features?: string[];
-  project?: Project;
+  project?: any; // TODO(k-fish): Fix this project type.
   projects?: Project[];
   query?: {};
+  selectedProject?: number | string;
 }
 
 export function initializeData(settings?: initializeDataSettings) {
@@ -25,7 +27,7 @@ export function initializeData(settings?: initializeDataSettings) {
     project: _defaultProject,
     ...settings,
   };
-  const {query, features, projects, project} = _settings;
+  const {query, features, projects, selectedProject: project} = _settings;
 
   const organization = TestStubs.Organization({
     features,
@@ -36,8 +38,8 @@ export function initializeData(settings?: initializeDataSettings) {
       ...query,
     },
   };
-  if (settings?.project) {
-    routerLocation.query.project = project;
+  if (settings?.selectedProject || settings?.project) {
+    routerLocation.query.project = (project || settings?.project) as any;
   }
   const router = {
     location: routerLocation,
@@ -173,4 +175,62 @@ export function generateSuspectSpansResponse(opts?: {
     }
     return suspectSpans;
   });
+}
+
+export function generateSampleEvent(): EventTransaction {
+  const event = {
+    id: '2b658a829a21496b87fd1f14a61abf65',
+    eventID: '2b658a829a21496b87fd1f14a61abf65',
+    title: '/organizations/:orgId/discover/results/',
+    type: 'transaction',
+    startTimestamp: 1622079935.86141,
+    endTimestamp: 1622079940.032905,
+    contexts: {
+      trace: {
+        trace_id: '8cbbc19c0f54447ab702f00263262726',
+        span_id: 'a000000000000000',
+        op: 'pageload',
+        status: 'unknown',
+        type: 'trace',
+      },
+    },
+    entries: [
+      {
+        data: [],
+        type: EntryType.SPANS,
+      },
+    ],
+  } as unknown as EventTransaction;
+
+  return event;
+}
+
+export function generateSampleSpan(
+  description: string | undefined,
+  op: string | undefined,
+  span_id: string,
+  parent_span_id: string,
+  event: EventTransaction
+) {
+  const span: RawSpanType = {
+    start_timestamp: 1000,
+    timestamp: 2000,
+    description,
+    op,
+    span_id,
+    parent_span_id,
+    trace_id: '8cbbc19c0f54447ab702f00263262726',
+    status: 'ok',
+    tags: {
+      'http.status_code': '200',
+    },
+    data: {},
+  };
+
+  if (!Array.isArray(event.entries[0].data)) {
+    throw new Error('Event entries data is not an array');
+  }
+
+  event.entries[0].data.push(span);
+  return span;
 }

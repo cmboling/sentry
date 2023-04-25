@@ -1,5 +1,4 @@
 import unittest
-from collections import OrderedDict
 from functools import partial
 from unittest.mock import Mock, patch
 
@@ -14,7 +13,6 @@ from sentry.utils.safe import (
     set_path,
     setdefault_path,
     trim,
-    trim_dict,
 )
 
 a_very_long_string = "a" * 1024
@@ -40,8 +38,8 @@ class TrimTest(unittest.TestCase):
     def test_sorted_trim(self):
         # Trim should always trim the keys in alpha order
         # regardless of the original order.
-        alpha = OrderedDict([("a", "12345"), ("z", "12345")])
-        reverse = OrderedDict([("z", "12345"), ("a", "12345")])
+        alpha = {"a": "12345", "z": "12345"}
+        reverse = {"z": "12345", "a": "12345"}
         trm = partial(trim, max_size=12)
         expected = {"a": "12345", "z": "1..."}
 
@@ -61,13 +59,6 @@ class TrimTest(unittest.TestCase):
 
         a = {"a": {"b": {"c": []}}}
         assert trm(a) == {"a": {"b": {"c": "[]"}}}
-
-
-class TrimDictTest(unittest.TestCase):
-    def test_large_dict(self):
-        value = {k: k for k in range(500)}
-        trim_dict(value)
-        assert len(value) == 50
 
 
 class SafeExecuteTest(TestCase):

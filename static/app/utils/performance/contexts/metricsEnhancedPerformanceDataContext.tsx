@@ -1,12 +1,11 @@
 import {ReactNode, useCallback, useState} from 'react';
 
 import Tag from 'sentry/components/tag';
-import {t} from 'sentry/locale';
 import useOrganization from 'sentry/utils/useOrganization';
 import {WIDGET_MAP_DENY_LIST} from 'sentry/views/performance/landing/widgets/utils';
 import {PerformanceWidgetSetting} from 'sentry/views/performance/landing/widgets/widgetDefinitions';
 
-import {AutoSampleState, MEPState, useMEPSettingContext} from './metricsEnhancedSetting';
+import {AutoSampleState, useMEPSettingContext} from './metricsEnhancedSetting';
 import {createDefinedContext} from './utils';
 
 interface MetricsEnhancedPerformanceDataContext {
@@ -19,13 +18,13 @@ const [_MEPDataProvider, _useMEPDataContext] =
     name: 'MetricsEnhancedPerformanceDataContext',
   });
 
-export const MEPDataProvider = ({
+export function MEPDataProvider({
   children,
   chartSetting,
 }: {
   children: ReactNode;
   chartSetting?: PerformanceWidgetSetting;
-}) => {
+}) {
   const {setAutoSampleState} = useMEPSettingContext();
   const [isMetricsData, _setIsMetricsData] = useState<boolean | undefined>(undefined); // Uses undefined to cover 'not initialized'
 
@@ -42,7 +41,7 @@ export const MEPDataProvider = ({
       }
       _setIsMetricsData(value);
     },
-    [setAutoSampleState, _setIsMetricsData]
+    [setAutoSampleState, _setIsMetricsData, chartSetting]
   );
 
   return (
@@ -50,30 +49,24 @@ export const MEPDataProvider = ({
       {children}
     </_MEPDataProvider>
   );
-};
+}
 
 export const useMEPDataContext = _useMEPDataContext;
 
-export const MEPTag = () => {
+export function MEPTag() {
   const {isMetricsData} = useMEPDataContext();
-  const {metricSettingState} = useMEPSettingContext();
   const organization = useOrganization();
 
   if (!organization.features.includes('performance-use-metrics')) {
     // Separate if for easier flag deletion
     return null;
   }
-  if (metricSettingState === MEPState.auto && isMetricsData === false) {
-    return (
-      <Tag
-        tooltipText={t(
-          'These search conditions are only applicable to sampled transaction data. To edit sampling rates, go to Filters & Sampling in settings.'
-        )}
-        data-test-id="has-metrics-data-tag"
-      >
-        {'Sampled'}
-      </Tag>
-    );
+
+  if (isMetricsData === undefined) {
+    return <span data-test-id="no-metrics-data-tag" />;
   }
-  return <span data-test-id="no-metrics-data-tag" />;
-};
+
+  const tagText = isMetricsData ? 'processed' : 'indexed';
+
+  return <Tag data-test-id="has-metrics-data-tag">{tagText}</Tag>;
+}

@@ -1,3 +1,5 @@
+import logging
+
 from django.db import transaction
 from django.utils.translation import ugettext_lazy as _
 from rest_framework.request import Request
@@ -15,10 +17,11 @@ from sentry.models import OrganizationIntegration, PagerDutyService
 from sentry.pipeline import PipelineView
 from sentry.shared_integrations.exceptions import IntegrationError
 from sentry.utils import json
-from sentry.utils.compat import filter
 from sentry.utils.http import absolute_uri
 
 from .client import PagerDutyClient
+
+logger = logging.getLogger("sentry.integrations.pagerduty")
 
 DESCRIPTION = """
 Connect your Sentry organization with one or more PagerDuty accounts, and start getting
@@ -81,18 +84,20 @@ class PagerDutyIntegration(IntegrationInstallation):
         if "service_table" in data:
             service_rows = data["service_table"]
             # validate fields
-            bad_rows = filter(lambda x: not x["service"] or not x["integration_key"], service_rows)
+            bad_rows = list(
+                filter(lambda x: not x["service"] or not x["integration_key"], service_rows)
+            )
             if bad_rows:
                 raise IntegrationError("Name and key are required")
 
             with transaction.atomic():
                 existing_service_items = PagerDutyService.objects.filter(
-                    organization_integration=self.org_integration
+                    organization_integration_id=self.org_integration.id
                 )
 
                 for service_item in existing_service_items:
                     # find the matching row from the input
-                    matched_rows = filter(lambda x: x["id"] == service_item.id, service_rows)
+                    matched_rows = list(filter(lambda x: x["id"] == service_item.id, service_rows))
                     if matched_rows:
                         matched_row = matched_rows[0]
                         service_item.integration_key = matched_row["integration_key"]
@@ -102,12 +107,12 @@ class PagerDutyIntegration(IntegrationInstallation):
                         service_item.delete()
 
                 # new rows don't have an id
-                new_rows = filter(lambda x: not x["id"], service_rows)
+                new_rows = list(filter(lambda x: not x["id"], service_rows))
                 for row in new_rows:
                     service_name = row["service"]
                     key = row["integration_key"]
                     PagerDutyService.objects.create(
-                        organization_integration=self.org_integration,
+                        organization_integration_id=self.org_integration.id,
                         service_name=service_name,
                         integration_key=key,
                     )
@@ -122,7 +127,9 @@ class PagerDutyIntegration(IntegrationInstallation):
 
     @property
     def services(self):
-        services = PagerDutyService.objects.filter(organization_integration=self.org_integration)
+        services = PagerDutyService.objects.filter(
+            organization_integration_id=self.org_integration.id
+        )
 
         return services
 
@@ -143,9 +150,10 @@ class PagerDutyIntegrationProvider(IntegrationProvider):
         services = integration.metadata["services"]
         try:
             org_integration = OrganizationIntegration.objects.get(
-                integration=integration, organization=organization
+                integration=integration, organization_id=organization.id
             )
         except OrganizationIntegration.DoesNotExist:
+            logger.exception("The PagerDuty post_install step failed.")
             return
 
         with transaction.atomic():

@@ -1,10 +1,13 @@
-import * as React from 'react';
+import {useContext} from 'react';
 
 import {FlamegraphTheme} from './flamegraphTheme';
-import {FlamegraphThemeContext} from './flamegraphThemeProvider';
+import {
+  FlamegraphThemeContext,
+  FlamegraphThemeMutationContext,
+} from './flamegraphThemeProvider';
 
-function useFlamegraphTheme(): FlamegraphTheme {
-  const ctx = React.useContext(FlamegraphThemeContext);
+export function useFlamegraphTheme(): FlamegraphTheme {
+  const ctx = useContext(FlamegraphThemeContext);
 
   if (!ctx) {
     throw new Error('useFlamegraphTheme was called outside of FlamegraphThemeProvider');
@@ -13,4 +16,12 @@ function useFlamegraphTheme(): FlamegraphTheme {
   return ctx;
 }
 
-export {useFlamegraphTheme};
+export function useMutateFlamegraphTheme() {
+  const ctx = useContext(FlamegraphThemeMutationContext);
+  if (!ctx) {
+    throw new Error(
+      'useMutateFlamegraphTheme was called outside of FlamegraphThemeProvider'
+    );
+  }
+  return ctx;
+}

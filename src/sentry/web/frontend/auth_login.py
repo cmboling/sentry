@@ -1,3 +1,6 @@
+from random import randint
+from typing import Optional
+
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import REDIRECT_FIELD_NAME
@@ -9,11 +12,15 @@ from django.views.decorators.cache import never_cache
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry.api.invite_helper import ApiInviteHelper, remove_invite_cookie
+from sentry import features
+from sentry.api.invite_helper import ApiInviteHelper, remove_invite_details_from_session
+from sentry.api.utils import generate_organization_url
 from sentry.auth.superuser import is_active_superuser
 from sentry.constants import WARN_SESSION_EXPIRED
 from sentry.http import get_server_hostname
-from sentry.models import AuthProvider, Organization, OrganizationMember, OrganizationStatus
+from sentry.models import AuthProvider, Organization, OrganizationStatus
+from sentry.services.hybrid_cloud import coerce_id_from
+from sentry.services.hybrid_cloud.organization import organization_service
 from sentry.signals import join_request_link_viewed, user_signup
 from sentry.utils import auth, json, metrics
 from sentry.utils.auth import (
@@ -23,6 +30,8 @@ from sentry.utils.auth import (
     is_valid_redirect,
     login,
 )
+from sentry.utils.client_state import get_client_state_redirect_uri
+from sentry.utils.http import absolute_uri
 from sentry.utils.sdk import capture_exception
 from sentry.utils.urls import add_params_to_url
 from sentry.web.forms.accounts import AuthenticationForm, RegistrationForm
@@ -69,7 +78,7 @@ class AuthLoginView(BaseView):
             return None
 
         try:
-            auth_provider = AuthProvider.objects.get(organization=organization)
+            auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         except AuthProvider.DoesNotExist:
             return None
 
@@ -116,11 +125,34 @@ class AuthLoginView(BaseView):
     def respond_login(self, request: Request, context, **kwargs):
         return self.respond("sentry/login.html", context)
 
-    def handle_basic_auth(self, request: Request, **kwargs):
-        can_register = self.can_register(request)
+    def _handle_login(self, request: Request, user, organization: Optional[Organization]):
+        login(request, user, organization_id=coerce_id_from(organization))
+        self.determine_active_organization(request)
 
+    def handle_basic_auth(self, request: Request, **kwargs):
         op = request.POST.get("op")
         organization = kwargs.pop("organization", None)
+
+        org_exists = bool(
+            organization_service.check_organization_by_slug(
+                slug=request.subdomain, only_visible=True
+            )
+        )
+
+        if request.method == "GET" and request.subdomain and org_exists:
+            urls = [
+                reverse("sentry-auth-organization", args=[request.subdomain]),
+                reverse("sentry-register"),
+            ]
+            # Only redirect if the URL is not register or login paths.
+            if request.path_info not in urls:
+                url_prefix = generate_organization_url(request.subdomain)
+                url = absolute_uri(urls[0], url_prefix=url_prefix)
+                if request.GET:
+                    url = f"{url}?{request.GET.urlencode()}"
+                return HttpResponseRedirect(url)
+
+        can_register = self.can_register(request)
 
         if not op:
             # Detect that we are on the register page by url /register/ and
@@ -130,6 +162,7 @@ class AuthLoginView(BaseView):
             elif request.GET.get("op") == "sso":
                 op = "sso"
 
+        # login_form either validated on post or renders form fields for GET
         login_form = self.get_login_form(request)
         if can_register:
             register_form = self.get_register_form(
@@ -147,15 +180,14 @@ class AuthLoginView(BaseView):
 
             # HACK: grab whatever the first backend is and assume it works
             user.backend = settings.AUTHENTICATION_BACKENDS[0]
-
-            login(request, user, organization_id=organization.id if organization else None)
+            self._handle_login(request, user, organization)
 
             # can_register should only allow a single registration
             request.session.pop("can_register", None)
             request.session.pop("invite_email", None)
 
             # Attempt to directly accept any pending invites
-            invite_helper = ApiInviteHelper.from_cookie(request=request, instance=self)
+            invite_helper = ApiInviteHelper.from_session(request=request, instance=self)
 
             # In single org mode, associate the user to the only organization.
             #
@@ -164,21 +196,24 @@ class AuthLoginView(BaseView):
             # the association for them.
             if settings.SENTRY_SINGLE_ORGANIZATION and not invite_helper:
                 organization = Organization.get_default()
-                OrganizationMember.objects.create(
-                    organization=organization, role=organization.default_role, user=user
+                organization_service.add_organization_member(
+                    organization_id=organization.id,
+                    default_org_role=organization.default_role,
+                    user_id=user.id,
                 )
 
             if invite_helper and invite_helper.valid_request:
                 invite_helper.accept_invite()
+                self.determine_active_organization(request, invite_helper.organization.slug)
                 response = self.redirect_to_org(request)
-                remove_invite_cookie(request, response)
+                remove_invite_details_from_session(request)
 
                 return response
 
             return self.redirect(self.get_post_register_url(request))
 
         elif request.method == "POST":
-            from sentry.app import ratelimiter
+            from sentry import ratelimits as ratelimiter
             from sentry.utils.hashlib import md5_text
 
             login_attempt = (
@@ -189,8 +224,8 @@ class AuthLoginView(BaseView):
                 "auth:login:username:{}".format(
                     md5_text(login_form.clean_username(request.POST["username"])).hexdigest()
                 ),
-                limit=10,
-                window=60,  # 10 per minute should be enough for anyone
+                limit=5,
+                window=60,  # 5 per minute should be enough for anyone
             ):
                 login_form.errors["__all__"] = [
                     "You have made too many login attempts. Please try again later."
@@ -201,7 +236,7 @@ class AuthLoginView(BaseView):
             elif login_form.is_valid():
                 user = login_form.get_user()
 
-                login(request, user, organization_id=organization.id if organization else None)
+                self._handle_login(request, user, organization)
                 metrics.incr(
                     "login.attempt", instance="success", skip_internal=True, sample_rate=1.0
                 )
@@ -209,26 +244,41 @@ class AuthLoginView(BaseView):
                 if not user.is_active:
                     return self.redirect(reverse("sentry-reactivate-account"))
                 if organization:
-                    if (
-                        self._is_org_member(user, organization)
-                        and request.user
-                        and not is_active_superuser(request)
-                    ):
-                        auth.set_active_org(request, organization.slug)
+                    # Refresh the organization we fetched prior to login in order to check its login state.
+                    org_context = organization_service.get_organization_by_slug(
+                        user_id=request.user.id,
+                        slug=organization.slug,
+                        only_visible=False,
+                    )
+                    if org_context:
+                        if org_context.member and request.user and not is_active_superuser(request):
+                            auth.set_active_org(request, org_context.organization.slug)
 
-                    if settings.SENTRY_SINGLE_ORGANIZATION:
-                        try:
-                            om = OrganizationMember.objects.get(
-                                organization=organization, email=user.email
+                        if settings.SENTRY_SINGLE_ORGANIZATION:
+                            om = organization_service.check_membership_by_email(
+                                organization_id=org_context.organization.id, email=user.email
                             )
-                            # XXX(jferge): if user is removed / invited but has an acct,
-                            # pop _next so they aren't in infinite redirect on Single Org Mode
-                        except OrganizationMember.DoesNotExist:
-                            request.session.pop("_next", None)
-                        else:
-                            if om.user is None:
+
+                            if om is None:
+                                om = organization_service.check_membership_by_id(
+                                    organization_id=org_context.organization.id, user_id=user.id
+                                )
+                            if om is None or om.user_id is None:
                                 request.session.pop("_next", None)
 
+                # On login, redirect to onboarding
+                if self.active_organization:
+                    onboarding_redirect = get_client_state_redirect_uri(
+                        self.active_organization.organization.slug, None
+                    )
+                    if onboarding_redirect:
+                        request.session["_next"] = onboarding_redirect
+                    if features.has(
+                        "organizations:customer-domains",
+                        self.active_organization.organization,
+                        actor=user,
+                    ):
+                        setattr(request, "subdomain", self.active_organization.organization.slug)
                 return self.redirect(get_login_redirect(request))
             else:
                 metrics.incr(
@@ -243,7 +293,10 @@ class AuthLoginView(BaseView):
             "register_form": register_form,
             "CAN_REGISTER": can_register,
             "join_request_link": self.get_join_request_link(organization),
+            "show_login_banner": settings.SHOW_LOGIN_BANNER,
+            "banner_choice": randint(0, 1),  # 2 possible banners
         }
+
         context.update(additional_context.run_callbacks(request))
         return self.respond_login(request, context, **kwargs)
 
@@ -262,10 +315,7 @@ class AuthLoginView(BaseView):
     def get(self, request: Request, **kwargs) -> Response:
         next_uri = self.get_next_uri(request)
         if request.user.is_authenticated:
-            # if the user is a superuser, but not 'superuser authenticated'
-            # we allow them to re-authenticate to gain superuser status
-            if not request.user.is_superuser or is_active_superuser(request):
-                return self.handle_authenticated(request)
+            return self.handle_authenticated(request)
 
         request.session.set_test_cookie()
 
@@ -293,10 +343,12 @@ class AuthLoginView(BaseView):
     def post(self, request: Request, **kwargs) -> Response:
         op = request.POST.get("op")
         if op == "sso" and request.POST.get("organization"):
+            # if post is from "Single Sign On tab"
             auth_provider = self.get_auth_provider(request.POST["organization"])
             if auth_provider:
                 next_uri = reverse("sentry-auth-organization", args=[request.POST["organization"]])
             else:
+                # Redirect to the org login route
                 next_uri = request.get_full_path()
                 messages.add_message(request, messages.ERROR, ERR_NO_SSO)
 

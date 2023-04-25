@@ -8,18 +8,19 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
-from sentry.api.base import EnvironmentMixin
+from sentry.api.base import EnvironmentMixin, region_silo_endpoint
 from sentry.api.bases.team import TeamEndpoint
 from sentry.api.helpers.environments import get_environments
 from sentry.api.utils import get_date_range_from_params
 from sentry.models import Group, GroupHistory, GroupHistoryStatus, Project, Team
 from sentry.models.grouphistory import (
     ACTIONED_STATUSES,
-    status_to_string_lookup,
-    string_to_status_lookup,
+    STATUS_TO_STRING_LOOKUP,
+    STRING_TO_STATUS_LOOKUP,
 )
 
 
+@region_silo_endpoint
 class TeamIssueBreakdownEndpoint(TeamEndpoint, EnvironmentMixin):  # type: ignore
     def get(self, request: Request, team: Team) -> Response:
         """
@@ -37,7 +38,7 @@ class TeamIssueBreakdownEndpoint(TeamEndpoint, EnvironmentMixin):  # type: ignor
 
         if "statuses" in request.GET:
             statuses = [
-                string_to_status_lookup[status] for status in request.GET.getlist("statuses")
+                STRING_TO_STATUS_LOOKUP[status] for status in request.GET.getlist("statuses")
             ]
             new_format = True
         else:
@@ -49,7 +50,7 @@ class TeamIssueBreakdownEndpoint(TeamEndpoint, EnvironmentMixin):  # type: ignor
         base_day_format = {"total": 0}
         if new_format:
             for status in statuses:
-                base_day_format[status_to_string_lookup[status]] = 0
+                base_day_format[STATUS_TO_STRING_LOOKUP[status]] = 0
         else:
             base_day_format["reviewed"] = 0
 
@@ -70,13 +71,13 @@ class TeamIssueBreakdownEndpoint(TeamEndpoint, EnvironmentMixin):  # type: ignor
                 )
             )
 
-        group_history_enviornment_filter = (
+        group_history_environment_filter = (
             Q(group__groupenvironment__environment_id=environments[0]) if environments else Q()
         )
         bucketed_issues = (
             GroupHistory.objects.filter_to_team(team)
             .filter(
-                group_history_enviornment_filter,
+                group_history_environment_filter,
                 status__in=statuses,
                 date_added__gte=start,
                 date_added__lte=end,
@@ -102,6 +103,6 @@ class TeamIssueBreakdownEndpoint(TeamEndpoint, EnvironmentMixin):  # type: ignor
             if not new_format and r["status"] != GroupHistoryStatus.UNRESOLVED:
                 bucket["reviewed"] += r["count"]
             if new_format:
-                bucket[status_to_string_lookup[r["status"]]] += r["count"]
+                bucket[STATUS_TO_STRING_LOOKUP[r["status"]]] += r["count"]
 
         return Response(agg_project_counts)

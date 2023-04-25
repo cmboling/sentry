@@ -4,25 +4,30 @@ import pytest
 from django.db import models
 from django.urls import reverse
 
+from sentry import audit_log
 from sentry.auth.authenticators import TotpInterface
 from sentry.auth.exceptions import IdentityNotValid
 from sentry.models import (
     AuditLogEntry,
-    AuditLogEntryEvent,
     AuthIdentity,
     AuthProvider,
     Organization,
     OrganizationMember,
     SentryAppInstallationForProvider,
 )
+from sentry.services.hybrid_cloud.organization import organization_service
 from sentry.testutils import AuthProviderTestCase, PermissionTestCase
+from sentry.testutils.helpers.features import with_feature
+from sentry.testutils.silo import region_silo_test
+from sentry.web.frontend.organization_auth_settings import get_scim_url
 
 
+@region_silo_test
 class OrganizationAuthSettingsPermissionTest(PermissionTestCase):
     def setUp(self):
         super().setUp()
         self.auth_provider = AuthProvider.objects.create(
-            organization=self.organization, provider="dummy"
+            organization_id=self.organization.id, provider="dummy"
         )
         AuthIdentity.objects.create(user=self.user, ident="foo", auth_provider=self.auth_provider)
         self.login_as(self.user, organization_id=self.organization.id)
@@ -90,6 +95,7 @@ class OrganizationAuthSettingsPermissionTest(PermissionTestCase):
             assert resp.status_code == 200
 
 
+@region_silo_test
 class OrganizationAuthSettingsTest(AuthProviderTestCase):
     def enroll_user_and_require_2fa(self, user, organization):
         TotpInterface().enroll(user)
@@ -101,9 +107,10 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
         assert not organization.flags.require_2fa.is_set
 
         event = AuditLogEntry.objects.get(
-            target_object=organization.id, event=AuditLogEntryEvent.ORG_EDIT, actor=user
+            target_object=organization.id, event=audit_log.get_event_id("ORG_EDIT"), actor=user
         )
-        assert "require_2fa to False when enabling SSO" in event.get_note()
+        audit_log_event = audit_log.get(event.event)
+        assert "require_2fa to False when enabling SSO" in audit_log_event.render(event)
         logger.info.assert_called_once_with(
             "Require 2fa disabled during sso setup", extra={"organization_id": organization.id}
         )
@@ -129,7 +136,7 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
         else:
             self.assertRedirects(resp, configure_path)
 
-        auth_provider = AuthProvider.objects.get(organization=organization, provider="dummy")
+        auth_provider = AuthProvider.objects.get(organization_id=organization.id, provider="dummy")
         auth_identity = AuthIdentity.objects.get(auth_provider=auth_provider)
         assert user == auth_identity.user
 
@@ -142,7 +149,9 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
         self.user.update(is_managed=True)
         organization = self.create_organization(name="foo", owner=self.user)
 
-        auth_provider = AuthProvider.objects.create(organization=organization, provider="dummy")
+        auth_provider = AuthProvider.objects.create(
+            organization_id=organization.id, provider="dummy"
+        )
 
         AuthIdentity.objects.create(user=self.user, ident="foo", auth_provider=auth_provider)
         return organization, auth_provider
@@ -188,9 +197,26 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
 
         # disable require 2fa logs not called
         assert not AuditLogEntry.objects.filter(
-            target_object=organization.id, event=AuditLogEntryEvent.ORG_EDIT, actor=user
+            target_object=organization.id, event=audit_log.get_event_id("ORG_EDIT"), actor=user
         ).exists()
         assert not logger.info.called
+
+    @with_feature("organizations:customer-domains")
+    @patch("sentry.auth.helper.logger")
+    def test_basic_flow_customer_domain(self, logger):
+        organization, auth_provider = self.create_org_and_auth_provider()
+        self.create_om_and_link_sso(organization)
+
+        path = reverse("sentry-customer-domain-organization-auth-provider-settings")
+        self.login_as(self.user, organization_id=organization.id)
+
+        with self.feature("organizations:sso-basic"):
+            resp = self.client.get(path, SERVER_NAME=f"{organization.slug}.testserver")
+
+        content = resp.content.decode("utf-8")
+        assert f"http://{organization.slug}.testserver" in content
+        assert f"http://{organization.slug}.testserver/issues" in content
+        assert f"/organziations/{organization.slug}/issues" not in content
 
     @patch("sentry.auth.helper.logger")
     @patch("sentry.auth.providers.dummy.DummyProvider.build_identity")
@@ -227,7 +253,7 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
 
         assert resp.status_code == 302
 
-        assert not AuthProvider.objects.filter(organization=organization).exists()
+        assert not AuthProvider.objects.filter(organization_id=organization.id).exists()
         assert not AuthProvider.objects.filter(id=auth_provider.id).exists()
 
         om = OrganizationMember.objects.get(id=om.id)
@@ -255,7 +281,7 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
 
         assert resp.status_code == 302
 
-        assert not AuthProvider.objects.filter(organization=organization).exists()
+        assert not AuthProvider.objects.filter(organization_id=organization.id).exists()
         assert not AuthProvider.objects.filter(id=auth_provider.id).exists()
 
         om = OrganizationMember.objects.get(id=om.id)
@@ -267,7 +293,7 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
 
         with pytest.raises(SentryAppInstallationForProvider.DoesNotExist):
             SentryAppInstallationForProvider.objects.get(
-                organization=self.organization, provider="dummy_scim"
+                organization_id=self.organization.id, provider="dummy_scim"
             )
 
     def test_edit_sso_settings(self):
@@ -286,15 +312,15 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
 
         assert resp.status_code == 200
 
-        auth_provider = AuthProvider.objects.get(organization=organization)
+        auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         assert getattr(auth_provider.flags, "allow_unlinked")
         organization = Organization.objects.get(id=organization.id)
         assert organization.default_role == "owner"
 
         result = AuditLogEntry.objects.filter(
-            organization=organization,
+            organization_id=organization.id,
             target_object=auth_provider.id,
-            event=AuditLogEntryEvent.SSO_EDIT,
+            event=audit_log.get_event_id("SSO_EDIT"),
             actor=self.user,
         )[0]
 
@@ -316,15 +342,15 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
 
         assert resp.status_code == 200
 
-        auth_provider = AuthProvider.objects.get(organization=organization)
+        auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         assert getattr(auth_provider.flags, "allow_unlinked")
         organization = Organization.objects.get(id=organization.id)
         assert organization.default_role == "member"
 
         result = AuditLogEntry.objects.filter(
-            organization=organization,
+            organization_id=organization.id,
             target_object=auth_provider.id,
-            event=AuditLogEntryEvent.SSO_EDIT,
+            event=audit_log.get_event_id("SSO_EDIT"),
             actor=self.user,
         )[0]
 
@@ -346,15 +372,15 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
 
         assert resp.status_code == 200
 
-        auth_provider = AuthProvider.objects.get(organization=organization)
+        auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         assert not getattr(auth_provider.flags, "allow_unlinked")
         organization = Organization.objects.get(id=organization.id)
         assert organization.default_role == "owner"
 
         result = AuditLogEntry.objects.filter(
-            organization=organization,
+            organization_id=organization.id,
             target_object=auth_provider.id,
-            event=AuditLogEntryEvent.SSO_EDIT,
+            event=audit_log.get_event_id("SSO_EDIT"),
             actor=self.user,
         )[0]
 
@@ -376,13 +402,13 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
 
         assert resp.status_code == 200
 
-        auth_provider = AuthProvider.objects.get(organization=organization)
+        auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         assert not getattr(auth_provider.flags, "allow_unlinked")
         organization = Organization.objects.get(id=organization.id)
         assert organization.default_role == "member"
 
         assert not AuditLogEntry.objects.filter(
-            organization=organization, event=AuditLogEntryEvent.SSO_EDIT
+            organization_id=organization.id, event=audit_log.get_event_id("SSO_EDIT")
         ).exists()
 
     def test_edit_sso_settings__scim(self):
@@ -407,10 +433,34 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
 
         assert resp.status_code == 200
 
-        auth_provider = AuthProvider.objects.get(organization=organization)
+        auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         assert getattr(auth_provider.flags, "scim_enabled")
         assert auth_provider.get_scim_token() is not None
-        assert auth_provider.get_scim_url() is not None
+        assert (
+            get_scim_url(
+                auth_provider,
+                organization_service.get_organization_by_id(
+                    id=auth_provider.organization_id
+                ).organization,
+            )
+            is not None
+        )
+
+        # "add" some scim users
+        u1 = self.create_user()
+        not_scim_member = OrganizationMember.objects.create(user=u1, organization=organization)
+        not_scim_member.save()
+        u2 = self.create_user()
+        scim_member = OrganizationMember.objects.create(user=u2, organization=organization)
+        scim_member.flags["idp:provisioned"] = True
+        scim_member.save()
+        u3 = self.create_user()
+        scim_role_restricted_user = OrganizationMember.objects.create(
+            user=u3, organization=organization
+        )
+        scim_role_restricted_user.flags["idp:provisioned"] = True
+        scim_role_restricted_user.flags["idp:role-restricted"] = True
+        scim_role_restricted_user.save()
 
         with self.feature({"organizations:sso-basic": True}):
             resp = self.client.post(
@@ -424,12 +474,34 @@ class OrganizationAuthSettingsTest(AuthProviderTestCase):
             )
 
         assert resp.status_code == 200
-        auth_provider = AuthProvider.objects.get(organization=organization)
+        auth_provider = AuthProvider.objects.get(organization_id=organization.id)
 
         assert not getattr(auth_provider.flags, "scim_enabled")
-        assert auth_provider.get_scim_token() is None
-        assert auth_provider.get_scim_url() is None
+        assert (
+            get_scim_url(
+                auth_provider,
+                organization_service.get_organization_by_id(
+                    id=auth_provider.organization_id
+                ).organization,
+            )
+            is None
+        )
         with pytest.raises(SentryAppInstallationForProvider.DoesNotExist):
             SentryAppInstallationForProvider.objects.get(
-                organization=self.organization, provider="dummy_scim"
+                organization_id=self.organization.id, provider="dummy_scim"
             )
+        not_scim_member.refresh_from_db()
+        scim_member.refresh_from_db()
+        scim_role_restricted_user.refresh_from_db()
+        assert not any(
+            (not_scim_member.flags["idp:provisioned"], not_scim_member.flags["idp:role-restricted"])
+        )
+        assert not any(
+            (scim_member.flags["idp:provisioned"], scim_member.flags["idp:role-restricted"])
+        )
+        assert not any(
+            (
+                scim_role_restricted_user.flags["idp:provisioned"],
+                scim_role_restricted_user.flags["idp:role-restricted"],
+            )
+        )

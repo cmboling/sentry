@@ -3,8 +3,10 @@ from sentry.api.serializers.models.user import DetailedSelfUserSerializer, Detai
 from sentry.models import Authenticator, AuthIdentity, AuthProvider, UserEmail, UserPermission
 from sentry.models.authenticator import available_authenticators
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 
 
+@control_silo_test
 class UserSerializerTest(TestCase):
     def test_simple(self):
         user = self.create_user()
@@ -43,6 +45,7 @@ class UserSerializerTest(TestCase):
         assert result["isSuperuser"] is True
 
 
+@control_silo_test
 class DetailedUserSerializerTest(TestCase):
     def test_simple(self):
         user = self.create_user()
@@ -50,7 +53,7 @@ class DetailedUserSerializerTest(TestCase):
 
         org = self.create_organization(owner=user)
 
-        auth_provider = AuthProvider.objects.create(organization=org, provider="dummy")
+        auth_provider = AuthProvider.objects.create(organization_id=org.id, provider="dummy")
         auth_identity = AuthIdentity.objects.create(
             auth_provider=auth_provider, ident=user.email, user=user
         )
@@ -78,6 +81,7 @@ class DetailedUserSerializerTest(TestCase):
         assert result["canReset2fa"] is False
 
 
+@control_silo_test
 class DetailedSelfUserSerializerTest(TestCase):
     def test_simple(self):
         user = self.create_user()
@@ -85,7 +89,7 @@ class DetailedSelfUserSerializerTest(TestCase):
 
         org = self.create_organization(owner=user)
 
-        auth_provider = AuthProvider.objects.create(organization=org, provider="dummy")
+        auth_provider = AuthProvider.objects.create(organization_id=org.id, provider="dummy")
         auth_identity = AuthIdentity.objects.create(
             auth_provider=auth_provider, ident=user.email, user=user
         )

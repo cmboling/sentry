@@ -1,7 +1,7 @@
+from functools import cached_property
 from unittest.mock import patch
 
-from django.test import RequestFactory
-from exam import fixture
+from django.test import RequestFactory, override_settings
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -24,8 +24,11 @@ class RateLimitedEndpoint(Endpoint):
 
 
 class RequestTimingMiddlewareTest(TestCase):
-    middleware = fixture(RequestTimingMiddleware)
-    factory = fixture(RequestFactory)
+    middleware = cached_property(RequestTimingMiddleware)
+
+    @cached_property
+    def factory(self):
+        return RequestFactory()
 
     @patch("sentry.utils.metrics.incr")
     def test_records_default_api_metrics(self, incr):
@@ -48,6 +51,7 @@ class RequestTimingMiddlewareTest(TestCase):
         )
 
     @patch("sentry.utils.metrics.incr")
+    @override_settings(SENTRY_SELF_HOSTED=False)
     def test_records_default_api_metrics_with_rate_limit_type(self, incr):
         rate_limit_middleware = RatelimitMiddleware(None)
         test_endpoint = RateLimitedEndpoint.as_view()

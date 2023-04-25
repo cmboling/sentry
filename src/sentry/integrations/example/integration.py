@@ -15,8 +15,9 @@ from sentry.integrations import (
 )
 from sentry.integrations.mixins import IssueSyncMixin, ResolveSyncAction
 from sentry.mediators.plugins import Migrator
-from sentry.models import ExternalIssue, Repository, User
+from sentry.models import ExternalIssue, Repository
 from sentry.pipeline import PipelineView
+from sentry.services.hybrid_cloud.user import RpcUser, user_service
 from sentry.shared_integrations.exceptions import IntegrationError
 
 
@@ -70,7 +71,7 @@ class ExampleIntegration(IntegrationInstallation, IssueSyncMixin):
         return f"https://example/issues/{key}"
 
     def create_comment(self, issue_id, user_id, group_note):
-        user = User.objects.get(id=user_id)
+        user = user_service.get_user(user_id)
         attribution = f"{user.name} wrote:\n\n"
         comment = {
             "id": "123456789",
@@ -136,7 +137,7 @@ class ExampleIntegration(IntegrationInstallation, IssueSyncMixin):
     def sync_assignee_outbound(
         self,
         external_issue: ExternalIssue,
-        user: User | None,
+        user: RpcUser | None,
         assign: bool = True,
         **kwargs: Any,
     ) -> None:

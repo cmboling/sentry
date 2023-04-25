@@ -1,5 +1,4 @@
-from collections import defaultdict
-from typing import TYPE_CHECKING, Iterable, Mapping, MutableMapping, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Iterable, Optional, Sequence, Union
 
 from django.conf import settings
 from django.db import IntegrityError, models, transaction
@@ -10,24 +9,29 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
 from sentry.notifications.helpers import (
     transform_to_notification_settings_by_recipient,
     where_should_be_participating,
 )
 from sentry.notifications.types import GroupSubscriptionReason, NotificationSettingTypes
-from sentry.types.integrations import ExternalProviders
+from sentry.services.hybrid_cloud.actor import RpcActor
+from sentry.services.hybrid_cloud.notifications import notifications_service
+from sentry.services.hybrid_cloud.user import RpcUser, user_service
 
 if TYPE_CHECKING:
     from sentry.models import Group, Team, User
+    from sentry.notifications.utils.participants import ParticipantMap
 
 
 class GroupSubscriptionManager(BaseManager):  # type: ignore
     def subscribe(
         self,
         group: "Group",
-        user: "User",
+        user: "RpcUser",
         reason: int = GroupSubscriptionReason.unknown,
     ) -> bool:
         """
@@ -37,7 +41,11 @@ class GroupSubscriptionManager(BaseManager):  # type: ignore
         try:
             with transaction.atomic():
                 self.create(
-                    user=user, group=group, project=group.project, is_active=True, reason=reason
+                    user_id=user.id,
+                    group=group,
+                    project=group.project,
+                    is_active=True,
+                    reason=reason,
                 )
         except IntegrityError:
             pass
@@ -46,12 +54,12 @@ class GroupSubscriptionManager(BaseManager):  # type: ignore
     def subscribe_actor(
         self,
         group: "Group",
-        actor: Union["Team", "User"],
+        actor: Union["Team", "User", "RpcUser"],
         reason: int = GroupSubscriptionReason.unknown,
     ) -> Optional[bool]:
         from sentry.models import Team, User
 
-        if isinstance(actor, User):
+        if isinstance(actor, RpcUser) or isinstance(actor, User):
             return self.subscribe(group, actor, reason)
         if isinstance(actor, Team):
             # subscribe the members of the team
@@ -104,19 +112,24 @@ class GroupSubscriptionManager(BaseManager):  # type: ignore
                     raise e
         return False
 
-    def get_participants(self, group: "Group") -> Mapping[ExternalProviders, Mapping["User", int]]:
+    def get_participants(self, group: "Group") -> "ParticipantMap":
         """
         Identify all users who are participating with a given issue.
         :param group: Group object
         """
-        from sentry.models import NotificationSetting, User
+        from sentry.notifications.utils.participants import ParticipantMap
 
-        all_possible_users = User.objects.get_from_group(group)
-        active_and_disabled_subscriptions = self.filter(group=group, user__in=all_possible_users)
-        notification_settings = NotificationSetting.objects.get_for_recipient_by_parent(
-            NotificationSettingTypes.WORKFLOW,
+        all_possible_users = [
+            RpcActor.from_rpc_user(u) for u in user_service.get_from_group(group=group)
+        ]
+        active_and_disabled_subscriptions = self.filter(
+            group=group, user_id__in=[u.id for u in all_possible_users]
+        )
+
+        notification_settings = notifications_service.get_settings_for_recipient_by_parent(
+            type=NotificationSettingTypes.WORKFLOW,
             recipients=all_possible_users,
-            parent=group.project,
+            parent_id=group.project_id,
         )
         subscriptions_by_user_id = {
             subscription.user_id: subscription for subscription in active_and_disabled_subscriptions
@@ -125,7 +138,7 @@ class GroupSubscriptionManager(BaseManager):  # type: ignore
             notification_settings, all_possible_users
         )
 
-        result: MutableMapping[ExternalProviders, MutableMapping["User", int]] = defaultdict(dict)
+        result = ParticipantMap()
         for user in all_possible_users:
             subscription_option = subscriptions_by_user_id.get(user.id)
             providers = where_should_be_participating(
@@ -134,24 +147,27 @@ class GroupSubscriptionManager(BaseManager):  # type: ignore
                 notification_settings_by_recipient,
             )
             for provider in providers:
-                result[provider][user] = (
+                reason = (
                     subscription_option
                     and subscription_option.reason
                     or GroupSubscriptionReason.implicit
                 )
+                result.add(provider, user, reason)
 
         return result
 
     @staticmethod
-    def get_participating_users(group: "Group") -> Sequence["User"]:
-        """Return the list of users participating in this issue."""
-        from sentry.models import User
+    def get_participating_user_ids(group: "Group") -> Sequence[int]:
+        """Return the list of user ids participating in this issue."""
 
         return list(
-            User.objects.filter(groupsubscription__is_active=True, groupsubscription__group=group)
+            GroupSubscription.objects.filter(group=group, is_active=True).values_list(
+                "user_id", flat=True
+            )
         )
 
 
+@region_silo_only_model
 class GroupSubscription(Model):  # type: ignore
     """
     Identifies a subscription relationship between a user and an issue.
@@ -161,8 +177,7 @@ class GroupSubscription(Model):  # type: ignore
 
     project = FlexibleForeignKey("sentry.Project", related_name="subscription_set")
     group = FlexibleForeignKey("sentry.Group", related_name="subscription_set")
-    # namespace related_name on User since we don't own the model
-    user = FlexibleForeignKey(settings.AUTH_USER_MODEL)
+    user_id = HybridCloudForeignKey(settings.AUTH_USER_MODEL, on_delete="CASCADE")
     is_active = models.BooleanField(default=True)
     reason = BoundedPositiveIntegerField(default=GroupSubscriptionReason.unknown)
     date_added = models.DateTimeField(default=timezone.now, null=True)
@@ -172,6 +187,6 @@ class GroupSubscription(Model):  # type: ignore
     class Meta:
         app_label = "sentry"
         db_table = "sentry_groupsubscription"
-        unique_together = (("group", "user"),)
+        unique_together = (("group", "user_id"),)
 
     __repr__ = sane_repr("project_id", "group_id", "user_id")

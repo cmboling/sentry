@@ -12,7 +12,7 @@ from django.utils.text import capfirst
 from django.utils.translation import ugettext_lazy as _
 
 from sentry import newsletter, options
-from sentry.app import ratelimiter
+from sentry import ratelimits as ratelimiter
 from sentry.auth import password_validation
 from sentry.models import User
 from sentry.utils.auth import find_users, logger
@@ -140,8 +140,11 @@ class AuthenticationForm(forms.Form):
         return self.cleaned_data
 
     def check_for_test_cookie(self):
-        if self.request and not self.request.session.test_cookie_worked():
-            raise forms.ValidationError(self.error_messages["no_cookies"])
+        if self.request:
+            if not self.request.session.test_cookie_worked():
+                raise forms.ValidationError(self.error_messages["no_cookies"])
+            else:
+                self.request.session.delete_test_cookie()
 
     def get_user_id(self):
         if self.user_cache:

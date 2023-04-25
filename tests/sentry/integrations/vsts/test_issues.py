@@ -1,10 +1,17 @@
+from functools import cached_property
 from time import time
 
 import pytest
 import responses
 from django.test import RequestFactory
-from exam import fixture
+from responses.matchers import query_string_matcher
 
+from fixtures.vsts import (
+    GET_PROJECTS_RESPONSE,
+    GET_USERS_RESPONSE,
+    WORK_ITEM_RESPONSE,
+    WORK_ITEM_STATES,
+)
 from sentry.integrations.mixins import ResolveSyncAction
 from sentry.integrations.vsts.integration import VstsIntegration
 from sentry.models import (
@@ -14,21 +21,17 @@ from sentry.models import (
     Integration,
     IntegrationExternalProject,
 )
+from sentry.services.hybrid_cloud.integration import integration_service
+from sentry.services.hybrid_cloud.user import user_service
 from sentry.shared_integrations.exceptions import IntegrationError
 from sentry.testutils import TestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils import json
-
-from .testutils import (
-    GET_PROJECTS_RESPONSE,
-    GET_USERS_RESPONSE,
-    WORK_ITEM_RESPONSE,
-    WORK_ITEM_STATES,
-)
 
 
 class VstsIssueBase(TestCase):
-    @fixture
+    @cached_property
     def request(self):
         return RequestFactory()
 
@@ -113,6 +116,7 @@ class VstsIssueBase(TestCase):
         )
 
 
+@region_silo_test
 class VstsIssueSyncTest(VstsIssueBase):
     def tearDown(self):
         responses.reset()
@@ -182,7 +186,7 @@ class VstsIssueSyncTest(VstsIssueBase):
             content_type="application/json",
         )
 
-        user = self.create_user("ftotten@vscsi.us")
+        user = user_service.get_user(user_id=self.create_user("ftotten@vscsi.us").id)
         external_issue = ExternalIssue.objects.create(
             organization_id=self.organization.id,
             integration_id=self.integration.model.id,
@@ -231,17 +235,16 @@ class VstsIssueSyncTest(VstsIssueBase):
                 ]
             },
             headers={"X-MS-ContinuationToken": "continuation-token"},
-            match_querystring=True,
         )
         responses.add(
             responses.GET,
-            "https://fabrikam-fiber-inc.vssps.visualstudio.com/_apis/graph/users?continuationToken=continuation-token",
+            "https://fabrikam-fiber-inc.vssps.visualstudio.com/_apis/graph/users",
+            match=[query_string_matcher("continuationToken=continuation-token")],
             body=GET_USERS_RESPONSE,
             content_type="application/json",
-            match_querystring=True,
         )
 
-        user = self.create_user("ftotten@vscsi.us")
+        user = user_service.get_user(user_id=self.create_user("ftotten@vscsi.us").id)
         external_issue = ExternalIssue.objects.create(
             organization_id=self.organization.id,
             integration_id=self.integration.model.id,
@@ -406,6 +409,7 @@ class VstsIssueSyncTest(VstsIssueBase):
         )
 
 
+@region_silo_test
 class VstsIssueFormTest(VstsIssueBase):
     def setUp(self):
         super().setUp()
@@ -430,10 +434,10 @@ class VstsIssueFormTest(VstsIssueBase):
         responses.reset()
 
     def update_issue_defaults(self, defaults):
-        self.integration.org_integration.config = {
-            "project_issue_defaults": {str(self.group.project_id): defaults}
-        }
-        self.integration.org_integration.save()
+        self.integration.org_integration = integration_service.update_organization_integration(
+            org_integration_id=self.integration.org_integration.id,
+            config={"project_issue_defaults": {str(self.group.project_id): defaults}},
+        )
 
     def assert_project_field(self, fields, default_value, choices):
         project_field = [field for field in fields if field["name"] == "project"][0]

@@ -1,12 +1,14 @@
 import logging
 
+import sentry_sdk
 from django.urls import reverse
+from sentry_sdk import set_tag
 
 from sentry.exceptions import InvalidIdentity, PluginError
 from sentry.models import (
     Deploy,
     LatestRepoReleaseEnvironment,
-    OrganizationMember,
+    Organization,
     Release,
     ReleaseCommitError,
     ReleaseHeadCommit,
@@ -14,6 +16,7 @@ from sentry.models import (
     User,
 )
 from sentry.plugins.base import bindings
+from sentry.services.hybrid_cloud.user import user_service
 from sentry.shared_integrations.exceptions import IntegrationError
 from sentry.tasks.base import instrumented_task, retry
 from sentry.utils.email import MessageBuilder
@@ -72,7 +75,11 @@ def fetch_commits(release_id, user_id, refs, prev_release_id=None, **kwargs):
     commit_list = []
 
     release = Release.objects.get(id=release_id)
-    user = User.objects.get(id=user_id)
+    set_tag("organization.slug", release.organization.slug)
+    # TODO: Need a better way to error handle no user_id. We need the SDK to be able to call this without user context
+    # to autoassociate commits to releases
+    user = user_service.get_user(user_id) if user_id is not None else None
+    # user = User.objects.get(id=user_id) if user_id is not None else None
     prev_release = None
     if prev_release_id is not None:
         try:
@@ -144,6 +151,9 @@ def fetch_commits(release_id, user_id, refs, prev_release_id=None, **kwargs):
                     "start_sha": start_sha,
                 },
             )
+            span = sentry_sdk.Hub.current.scope.span
+            span.set_status("unknown_error")
+            logger.exception(e)
             if isinstance(e, InvalidIdentity) and getattr(e, "identity", None):
                 handle_invalid_identity(identity=e.identity, commit_failure=True)
             elif isinstance(e, (PluginError, InvalidIdentity, IntegrationError)):
@@ -238,9 +248,9 @@ def is_integration_provider(provider):
 def get_emails_for_user_or_org(user, orgId):
     emails = []
     if user.is_sentry_app:
-        members = OrganizationMember.objects.filter(
-            organization_id=orgId, role="owner", user_id__isnull=False
-        ).select_related("user")
+        organization = Organization.objects.get(id=orgId)
+        members = organization.get_members_with_org_roles(roles=["owner"]).select_related("user")
+
         for m in list(members):
             emails.append(m.user.email)
     else:

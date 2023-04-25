@@ -18,6 +18,10 @@ _date_regex = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$")
 def _get_all_keys(config):
     for key in config:
         yield key
+        if key == "breakdownsV2":
+            # Breakdown keys are not field names and may contain underscores,
+            # e.g. span_ops
+            continue
         if isinstance(config[key], dict):
             for key in _get_all_keys(config[key]):
                 yield key
@@ -55,8 +59,8 @@ def setup_relay(default_project):
 
 @pytest.fixture
 def call_endpoint(client, relay, private_key, default_projectkey):
-    def inner(full_config, public_keys=None):
-        path = reverse("sentry-api-0-relay-projectconfigs") + "?version=2"
+    def inner(full_config, public_keys=None, version="2"):
+        path = reverse("sentry-api-0-relay-projectconfigs") + f"?version={version}"
 
         if public_keys is None:
             public_keys = [str(default_projectkey.public_key)]
@@ -132,7 +136,6 @@ def test_internal_relays_should_receive_full_configs(
     assert public_key["publicKey"] == default_projectkey.public_key
     assert public_key["numericId"] == default_projectkey.id
     assert public_key["isEnabled"]
-    assert "quotas" in public_key
 
     assert safe.get_path(cfg, "slug") == default_project.slug
     last_change = safe.get_path(cfg, "lastChange")
@@ -154,11 +157,9 @@ def test_internal_relays_should_receive_full_configs(
     assert safe.get_path(cfg, "config", "datascrubbingSettings", "scrubDefaults") is True
     assert safe.get_path(cfg, "config", "datascrubbingSettings", "scrubIpAddresses") is True
     assert safe.get_path(cfg, "config", "datascrubbingSettings", "sensitiveFields") == []
-    assert safe.get_path(cfg, "config", "quotas") == []
-
-    # Event retention depends on settings, so assert the actual value. Likely
-    # `None` in dev, but must not be missing.
-    assert cfg["config"]["eventRetention"] == quotas.get_event_retention(
+    assert safe.get_path(cfg, "config", "quotas") is None
+    # Event retention depends on settings, so assert the actual value.
+    assert safe.get_path(cfg, "config", "eventRetention") == quotas.get_event_retention(
         default_project.organization
     )
 
@@ -170,9 +171,11 @@ def test_relays_dyamic_sampling(
     """
     Tests that dynamic sampling configuration set in project details are retrieved in relay configs
     """
-    default_project.update_option("sentry:dynamic_sampling", dyn_sampling_data())
-
-    with Feature({"organizations:filters-and-sampling": True}):
+    with Feature(
+        {
+            "organizations:dynamic-sampling": True,
+        }
+    ):
         result, status_code = call_endpoint(full_config=False)
         assert status_code < 400
         dynamic_sampling = safe.get_path(
@@ -182,7 +185,7 @@ def test_relays_dyamic_sampling(
             "config",
             "dynamicSampling",
         )
-        assert dynamic_sampling == dyn_sampling_data()
+        assert dynamic_sampling == {"rules": [], "rulesV2": []}
 
 
 @pytest.mark.django_db
@@ -367,13 +370,37 @@ def test_relay_disabled_key(
 
 
 @pytest.mark.django_db
-def test_exposes_features(call_endpoint, task_runner):
-    with Feature({"organizations:metrics-extraction": True}):
+@pytest.mark.parametrize("drop_sessions", [False, True])
+def test_session_metrics_extraction(call_endpoint, task_runner, drop_sessions):
+    with Feature({"organizations:metrics-extraction": True}), Feature(
+        {"organizations:release-health-drop-sessions": drop_sessions}
+    ):
         with task_runner():
             result, status_code = call_endpoint(full_config=True)
             assert status_code < 400
 
         for config in result["configs"].values():
             config = config["config"]
-            assert "features" in config
-            assert config["features"] == ["organizations:metrics-extraction"]
+            assert config["sessionMetrics"] == {"version": 1, "drop": drop_sessions}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("abnormal_mechanism_rollout", [0, 1])
+def test_session_metrics_abnormal_mechanism_tag_extraction(
+    call_endpoint, task_runner, set_sentry_option, abnormal_mechanism_rollout
+):
+    with set_sentry_option(
+        "sentry-metrics.releasehealth.abnormal-mechanism-extraction-rate",
+        abnormal_mechanism_rollout,
+    ):
+        with Feature({"organizations:metrics-extraction": True}):
+            with task_runner():
+                result, status_code = call_endpoint(full_config=True)
+                assert status_code < 400
+
+            for config in result["configs"].values():
+                config = config["config"]
+                assert config["sessionMetrics"] == {
+                    "version": 2 if abnormal_mechanism_rollout else 1,
+                    "drop": False,
+                }

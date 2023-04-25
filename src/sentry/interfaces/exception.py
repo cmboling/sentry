@@ -90,7 +90,7 @@ def upgrade_legacy_mechanism(data):
         )
 
     # All remaining data has to be moved to the "data" key. We assume that even
-    # if someone accidentally sent a corret top-level key (such as "handled"),
+    # if someone accidentally sent a correct top-level key (such as "handled"),
     # it will not pass our interface validation and should be moved to "data"
     # instead.
     result.setdefault("data", {}).update(data)
@@ -128,7 +128,19 @@ class Mechanism(Interface):
 
     @classmethod
     def to_python(cls, data, **kwargs):
-        for key in ("type", "synthetic", "description", "help_link", "handled", "data", "meta"):
+        for key in (
+            "type",
+            "synthetic",
+            "description",
+            "help_link",
+            "handled",
+            "data",
+            "meta",
+            "source",
+            "is_exception_group",
+            "exception_id",
+            "parent_id",
+        ):
             data.setdefault(key, None)
 
         return super().to_python(data, **kwargs)
@@ -143,6 +155,10 @@ class Mechanism(Interface):
                 "handled": self.handled,
                 "data": self.data or None,
                 "meta": prune_empty_keys(self.meta) or None,
+                "source": self.source,
+                "is_exception_group": self.is_exception_group,
+                "exception_id": self.exception_id,
+                "parent_id": self.parent_id,
             }
         )
 

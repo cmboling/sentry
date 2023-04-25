@@ -13,14 +13,17 @@ from sentry.db.models import (
     ArrayField,
     BaseManager,
     BoundedPositiveIntegerField,
-    EncryptedJsonField,
     FlexibleForeignKey,
     Model,
+    control_silo_only_model,
 )
+from sentry.db.models.fields.jsonfield import JSONField
+from sentry.services.hybrid_cloud.user import RpcUser
 from sentry.types.integrations import ExternalProviders
 
 if TYPE_CHECKING:
     from sentry.models import User
+    from sentry.services.hybrid_cloud.identity import RpcIdentityProvider
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,7 @@ class IdentityStatus:
     INVALID = 2
 
 
+@control_silo_only_model
 class IdentityProvider(Model):
     """
     An IdentityProvider is an instance of a provider.
@@ -46,7 +50,7 @@ class IdentityProvider(Model):
     __include_in_export__ = False
 
     type = models.CharField(max_length=64)
-    config = EncryptedJsonField()
+    config = JSONField()
     date_added = models.DateTimeField(default=timezone.now, null=True)
     external_id = models.CharField(max_length=64, null=True)
 
@@ -62,16 +66,18 @@ class IdentityProvider(Model):
 
 
 class IdentityManager(BaseManager):
-    def get_identities_for_user(self, user: User, provider: ExternalProviders) -> QuerySet:
+    def get_identities_for_user(
+        self, user: User | RpcUser, provider: ExternalProviders
+    ) -> QuerySet:
         return self.filter(user_id=user.id, idp__type=provider.name)
 
-    def has_identity(self, user: User, provider: ExternalProviders) -> bool:
+    def has_identity(self, user: User | RpcUser, provider: ExternalProviders) -> bool:
         return self.get_identities_for_user(user, provider).exists()
 
     def link_identity(
         self,
-        user: User,
-        idp: IdentityProvider,
+        user: User | RpcUser,
+        idp: IdentityProvider | RpcIdentityProvider,
         external_id: str,
         should_reattach: bool = True,
         defaults: Mapping[str, Any | None] = None,
@@ -88,7 +94,7 @@ class IdentityManager(BaseManager):
         }
         try:
             identity, created = self.get_or_create(
-                idp=idp, user=user, external_id=external_id, defaults=defaults
+                idp_id=idp.id, user_id=user.id, external_id=external_id, defaults=defaults
             )
             if not created:
                 identity.update(**defaults)
@@ -100,13 +106,17 @@ class IdentityManager(BaseManager):
         analytics.record(
             "integrations.identity_linked",
             provider="slack",
-            actor_id=user.actor_id,
+            # Note that prior to circa March 2023 this was user.actor_id. It changed
+            # when actor ids were no longer stable between regions for the same user
+            actor_id=user.id,
             actor_type="user",
         )
         return identity
 
-    def delete_identity(self, user: User, idp: IdentityProvider, external_id: str) -> None:
-        self.filter(Q(external_id=external_id) | Q(user=user), idp=idp).delete()
+    def delete_identity(
+        self, user: User | RpcUser, idp: IdentityProvider | RpcIdentityProvider, external_id: str
+    ) -> None:
+        self.filter(Q(external_id=external_id) | Q(user_id=user.id), idp_id=idp.id).delete()
         logger.info(
             "deleted-identity",
             extra={"external_id": external_id, "idp_id": idp.id, "user_id": user.id},
@@ -114,12 +124,14 @@ class IdentityManager(BaseManager):
 
     def create_identity(
         self,
-        idp: IdentityProvider,
+        idp: IdentityProvider | RpcIdentityProvider,
         external_id: str,
-        user: User,
+        user: User | RpcUser,
         defaults: Mapping[str, Any],
     ) -> Identity:
-        identity_model = self.create(idp=idp, user=user, external_id=external_id, **defaults)
+        identity_model = self.create(
+            idp_id=idp.id, user_id=user.id, external_id=external_id, **defaults
+        )
         logger.info(
             "created-identity",
             extra={
@@ -133,9 +145,9 @@ class IdentityManager(BaseManager):
 
     def reattach(
         self,
-        idp: IdentityProvider,
+        idp: IdentityProvider | RpcIdentityProvider,
         external_id: str,
-        user: User,
+        user: User | RpcUser,
         defaults: Mapping[str, Any],
     ) -> Identity:
         """
@@ -149,14 +161,14 @@ class IdentityManager(BaseManager):
         self,
         idp: IdentityProvider,
         external_id: str,
-        user: User,
+        user: User | RpcUser,
         defaults: Mapping[str, Any],
     ) -> Identity:
         """
         Updates the identity object for a given user and identity provider
         with the new external id and other fields related to the identity status
         """
-        query = self.filter(user=user, idp=idp)
+        query = self.filter(user_id=user.id, idp=idp)
         query.update(external_id=external_id, **defaults)
         identity_model = query.first()
         logger.info(
@@ -171,6 +183,7 @@ class IdentityManager(BaseManager):
         return identity_model
 
 
+@control_silo_only_model
 class Identity(Model):
     """
     A verified link between a user and a third party identity.
@@ -181,7 +194,7 @@ class Identity(Model):
     idp = FlexibleForeignKey("sentry.IdentityProvider")
     user = FlexibleForeignKey(settings.AUTH_USER_MODEL)
     external_id = models.TextField()
-    data = EncryptedJsonField()
+    data = JSONField()
     status = BoundedPositiveIntegerField(default=IdentityStatus.UNKNOWN)
     scopes = ArrayField()
     date_verified = models.DateTimeField(default=timezone.now)

@@ -13,7 +13,8 @@ def snuba_is_available():
         return _service_status["snuba"]
     try:
         parsed = urlparse(settings.SENTRY_SNUBA)
-        socket.create_connection((parsed.hostname, parsed.port), 1.0)
+        with socket.create_connection((parsed.hostname, parsed.port), 1.0):
+            pass
     except OSError:
         _service_status["snuba"] = False
     else:
@@ -64,7 +65,8 @@ def relay_is_available():
     if "relay" in _service_status:
         return _service_status["relay"]
     try:
-        socket.create_connection(("127.0.0.1", settings.SENTRY_RELAY_PORT), 1.0)
+        with socket.create_connection(("127.0.0.1", settings.SENTRY_RELAY_PORT), 1.0):
+            pass
     except OSError:
         _service_status["relay"] = False
     else:
@@ -74,4 +76,25 @@ def relay_is_available():
 
 requires_relay = pytest.mark.skipif(
     not relay_is_available(), reason="requires relay server running"
+)
+
+
+def symbolicator_is_available():
+    from sentry import options
+
+    if "symbolicator" in _service_status:
+        return _service_status["symbolicator"]
+    try:
+        parsed = urlparse(options.get("symbolicator.options", True)["url"])
+        with socket.create_connection((parsed.hostname, parsed.port), 1.0):
+            pass
+    except OSError:
+        _service_status["symbolicator"] = False
+    else:
+        _service_status["symbolicator"] = True
+    return _service_status["symbolicator"]
+
+
+requires_symbolicator = pytest.mark.skipif(
+    not symbolicator_is_available(), reason="requires symbolicator server running"
 )

@@ -1,10 +1,9 @@
+from functools import cached_property
 from unittest.mock import patch
 
-from exam import fixture
-
+from sentry import audit_log
 from sentry.models import (
     AuditLogEntry,
-    AuditLogEntryEvent,
     InviteStatus,
     OrganizationMember,
     OrganizationMemberTeam,
@@ -12,28 +11,29 @@ from sentry.models import (
 )
 from sentry.testutils import APITestCase
 from sentry.testutils.helpers import Feature
+from sentry.testutils.silo import region_silo_test
 
 
 class InviteRequestBase(APITestCase):
     endpoint = "sentry-api-0-organization-invite-request-detail"
 
-    @fixture
+    @cached_property
     def org(self):
         return self.create_organization(owner=self.user)
 
-    @fixture
+    @cached_property
     def team(self):
         return self.create_team(organization=self.org)
 
-    @fixture
+    @cached_property
     def member(self):
         return self.create_member(organization=self.org, user=self.create_user(), role="member")
 
-    @fixture
+    @cached_property
     def manager(self):
         return self.create_member(organization=self.org, user=self.create_user(), role="manager")
 
-    @fixture
+    @cached_property
     def invite_request(self):
         return self.create_member(
             email="test@example.com",
@@ -42,7 +42,7 @@ class InviteRequestBase(APITestCase):
             invite_status=InviteStatus.REQUESTED_TO_BE_INVITED.value,
         )
 
-    @fixture
+    @cached_property
     def request_to_join(self):
         return self.create_member(
             email="example@gmail.com",
@@ -52,6 +52,7 @@ class InviteRequestBase(APITestCase):
         )
 
 
+@region_silo_test
 class OrganizationInviteRequestGetTest(InviteRequestBase):
     def test_get_invalid(self):
         self.login_as(user=self.user)
@@ -75,6 +76,7 @@ class OrganizationInviteRequestGetTest(InviteRequestBase):
         assert resp.data["teams"] == []
 
 
+@region_silo_test
 class OrganizationInviteRequestDeleteTest(InviteRequestBase):
     method = "delete"
 
@@ -85,10 +87,12 @@ class OrganizationInviteRequestDeleteTest(InviteRequestBase):
         assert resp.status_code == 204
         assert not OrganizationMember.objects.filter(id=self.invite_request.id).exists()
 
-        audit_log = AuditLogEntry.objects.get(
-            organization=self.org, actor=self.user, event=AuditLogEntryEvent.INVITE_REQUEST_REMOVE
+        audit_log_entry = AuditLogEntry.objects.get(
+            organization_id=self.org.id,
+            actor=self.user,
+            event=audit_log.get_event_id("INVITE_REQUEST_REMOVE"),
         )
-        assert audit_log.data == self.invite_request.get_audit_log_data()
+        assert audit_log_entry.data == self.invite_request.get_audit_log_data()
 
     def test_member_cannot_delete_invite_request(self):
         self.login_as(user=self.member.user)
@@ -98,6 +102,7 @@ class OrganizationInviteRequestDeleteTest(InviteRequestBase):
         assert OrganizationMember.objects.filter(id=self.invite_request.id).exists()
 
 
+@region_silo_test
 class OrganizationInviteRequestUpdateTest(InviteRequestBase):
     method = "put"
 
@@ -107,6 +112,7 @@ class OrganizationInviteRequestUpdateTest(InviteRequestBase):
 
         assert resp.status_code == 200
         assert resp.data["role"] == "admin"
+        assert resp.data["orgRole"] == "admin"
         assert resp.data["inviteStatus"] == "requested_to_be_invited"
 
         assert OrganizationMember.objects.filter(id=self.invite_request.id, role="admin").exists()
@@ -133,6 +139,7 @@ class OrganizationInviteRequestUpdateTest(InviteRequestBase):
 
         assert resp.status_code == 200
         assert resp.data["role"] == "manager"
+        assert resp.data["orgRole"] == "manager"
         assert resp.data["inviteStatus"] == "requested_to_be_invited"
 
         assert OrganizationMemberTeam.objects.filter(
@@ -160,6 +167,7 @@ class OrganizationInviteRequestUpdateTest(InviteRequestBase):
         assert resp.status_code == 403
 
 
+@region_silo_test
 class OrganizationInviteRequestApproveTest(InviteRequestBase):
     method = "put"
 
@@ -172,14 +180,16 @@ class OrganizationInviteRequestApproveTest(InviteRequestBase):
         assert resp.data["inviteStatus"] == "approved"
         assert mock_invite_email.call_count == 1
 
-        audit_log = AuditLogEntry.objects.get(
-            organization=self.org, actor=self.user, event=AuditLogEntryEvent.MEMBER_INVITE
+        audit_log_entry = AuditLogEntry.objects.get(
+            organization_id=self.org.id,
+            actor=self.user,
+            event=audit_log.get_event_id("MEMBER_INVITE"),
         )
         member = OrganizationMember.objects.get(
             id=self.invite_request.id, invite_status=InviteStatus.APPROVED.value
         )
 
-        assert audit_log.data == member.get_audit_log_data()
+        assert audit_log_entry.data == member.get_audit_log_data()
 
     def test_member_cannot_approve_invite_request(self):
         self.invite_request.inviter = self.member.user
@@ -250,6 +260,7 @@ class OrganizationInviteRequestApproveTest(InviteRequestBase):
 
         assert resp.status_code == 200
         assert resp.data["role"] == "admin"
+        assert resp.data["orgRole"] == "admin"
         assert resp.data["inviteStatus"] == "approved"
 
         assert OrganizationMember.objects.filter(

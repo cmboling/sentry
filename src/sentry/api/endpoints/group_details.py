@@ -1,14 +1,16 @@
 import functools
 import logging
 from datetime import timedelta
+from typing import Sequence
 
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import tagstore, tsdb
 from sentry.api import client
-from sentry.api.base import EnvironmentMixin
+from sentry.api.base import EnvironmentMixin, region_silo_endpoint
 from sentry.api.bases import GroupEndpoint
 from sentry.api.helpers.environments import get_environments
 from sentry.api.helpers.group_index import (
@@ -19,10 +21,14 @@ from sentry.api.helpers.group_index import (
 )
 from sentry.api.serializers import GroupSerializer, GroupSerializerSnuba, serialize
 from sentry.api.serializers.models.plugin import PluginSerializer, is_plugin_deprecated
+from sentry.issues.constants import get_issue_tsdb_group_model
+from sentry.issues.grouptype import GroupCategory
 from sentry.models import Activity, Group, GroupSeen, GroupSubscriptionManager, UserReport
 from sentry.models.groupinbox import get_inbox_details
+from sentry.models.groupowner import get_owner_details
 from sentry.plugins.base import plugins
 from sentry.plugins.bases import IssueTrackingPlugin2
+from sentry.services.hybrid_cloud.user import user_service
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 from sentry.utils import metrics
 from sentry.utils.safe import safe_execute
@@ -30,6 +36,7 @@ from sentry.utils.safe import safe_execute
 delete_logger = logging.getLogger("sentry.deletions.api")
 
 
+@region_silo_endpoint
 class GroupDetailsEndpoint(GroupEndpoint, EnvironmentMixin):
     enforce_rate_limit = True
     rate_limits = {
@@ -54,9 +61,7 @@ class GroupDetailsEndpoint(GroupEndpoint, EnvironmentMixin):
         return Activity.objects.get_activities_for_group(group, num)
 
     def _get_seen_by(self, request: Request, group):
-        seen_by = list(
-            GroupSeen.objects.filter(group=group).select_related("user").order_by("-last_seen")
-        )
+        seen_by = list(GroupSeen.objects.filter(group=group).order_by("-last_seen"))
         return serialize(seen_by, request.user)
 
     def _get_actions(self, request: Request, group):
@@ -113,6 +118,31 @@ class GroupDetailsEndpoint(GroupEndpoint, EnvironmentMixin):
             PluginSerializer(project),
         )
 
+    @staticmethod
+    def __group_hourly_daily_stats(group: Group, environment_ids: Sequence[int]):
+        get_range = functools.partial(
+            tsdb.get_range,
+            environment_ids=environment_ids,
+            tenant_ids={"organization_id": group.project.organization_id},
+        )
+        model = get_issue_tsdb_group_model(group.issue_category)
+        now = timezone.now()
+        hourly_stats = tsdb.rollup(
+            get_range(model=model, keys=[group.id], end=now, start=now - timedelta(days=1)),
+            3600,
+        )[group.id]
+        daily_stats = tsdb.rollup(
+            get_range(
+                model=model,
+                keys=[group.id],
+                end=now,
+                start=now - timedelta(days=30),
+            ),
+            3600 * 24,
+        )[group.id]
+
+        return hourly_stats, daily_stats
+
     def get(self, request: Request, group) -> Response:
         """
         Retrieve an Issue
@@ -155,48 +185,44 @@ class GroupDetailsEndpoint(GroupEndpoint, EnvironmentMixin):
                     }
                 )
 
-            get_range = functools.partial(tsdb.get_range, environment_ids=environment_ids)
-
             tags = tagstore.get_group_tag_keys(
-                group.project_id, group.id, environment_ids, limit=100
+                group,
+                environment_ids,
+                limit=100,
+                tenant_ids={"organization_id": group.project.organization_id},
             )
-            if not environment_ids:
-                user_reports = UserReport.objects.filter(group_id=group.id)
-            else:
-                user_reports = UserReport.objects.filter(
+
+            user_reports = (
+                UserReport.objects.filter(group_id=group.id)
+                if not environment_ids
+                else UserReport.objects.filter(
                     group_id=group.id, environment_id__in=environment_ids
                 )
+            )
 
-            now = timezone.now()
-            hourly_stats = tsdb.rollup(
-                get_range(
-                    model=tsdb.models.group, keys=[group.id], end=now, start=now - timedelta(days=1)
-                ),
-                3600,
-            )[group.id]
-            daily_stats = tsdb.rollup(
-                get_range(
-                    model=tsdb.models.group,
-                    keys=[group.id],
-                    end=now,
-                    start=now - timedelta(days=30),
-                ),
-                3600 * 24,
-            )[group.id]
-
-            participants = GroupSubscriptionManager.get_participating_users(group)
+            hourly_stats, daily_stats = self.__group_hourly_daily_stats(group, environment_ids)
 
             if "inbox" in expand:
                 inbox_map = get_inbox_details([group])
                 inbox_reason = inbox_map.get(group.id)
                 data.update({"inbox": inbox_reason})
 
+            if "owners" in expand:
+                owner_details = get_owner_details([group], request.user)
+                owners = owner_details.get(group.id)
+                data.update({"owners": owners})
+
             action_list = self._get_actions(request, group)
             data.update(
                 {
                     "activity": serialize(activity, request.user),
                     "seenBy": seen_by,
-                    "participants": serialize(participants, request.user),
+                    "participants": user_service.serialize_many(
+                        filter={
+                            "user_ids": GroupSubscriptionManager.get_participating_user_ids(group)
+                        },
+                        as_user=request.user,
+                    ),
                     "pluginActions": action_list,
                     "pluginIssues": self._get_available_issue_plugins(request, group),
                     "pluginContexts": self._get_context_plugins(request, group),
@@ -253,6 +279,8 @@ class GroupDetailsEndpoint(GroupEndpoint, EnvironmentMixin):
                                      the bookmark flag.
         :param boolean isSubscribed:
         :param boolean isPublic: sets the issue to public or private.
+        :param string substatus: the new substatus for the issues. Valid values
+                                 defined in GroupSubStatus.
         :auth: required
         """
         try:
@@ -306,6 +334,9 @@ class GroupDetailsEndpoint(GroupEndpoint, EnvironmentMixin):
         :auth: required
         """
         from sentry.utils import snuba
+
+        if group.issue_category != GroupCategory.ERROR:
+            raise ValidationError(detail="Only error issues can be deleted.", code=400)
 
         try:
             delete_group_list(request, group.project, [group], "delete")

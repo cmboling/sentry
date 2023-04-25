@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 
@@ -8,8 +8,7 @@ import TimeSince from 'sentry/components/timeSince';
 import Version from 'sentry/components/version';
 import VersionHoverCard from 'sentry/components/versionHoverCard';
 import {t} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Release} from 'sentry/types';
 import {defined, toTitleCase} from 'sentry/utils';
 
@@ -27,88 +26,79 @@ type Props = {
   release?: Release;
 };
 
-class SeenInfo extends React.Component<Props> {
-  shouldComponentUpdate(nextProps: Props) {
-    const {date, release} = this.props;
-
-    return release?.version !== nextProps.release?.version || date !== nextProps.date;
-  }
-
-  getReleaseTrackingUrl() {
-    const {organization, projectSlug} = this.props;
-    const orgSlug = organization.slug;
-
-    return `/settings/${orgSlug}/projects/${projectSlug}/release-tracking/`;
-  }
-
-  render() {
-    const {date, dateGlobal, environment, release, organization, projectSlug, projectId} =
-      this.props;
-
-    return (
-      <HovercardWrapper>
-        <StyledHovercard
-          header={
-            <div>
+function SeenInfo({
+  date,
+  dateGlobal,
+  environment,
+  release,
+  organization,
+  projectSlug,
+  projectId,
+}: Props) {
+  return (
+    <HovercardWrapper>
+      <StyledHovercard
+        showUnderline
+        header={
+          <div>
+            <TimeSinceWrapper>
+              {t('Any Environment')}
+              <TimeSince date={dateGlobal} disabledAbsoluteTooltip />
+            </TimeSinceWrapper>
+            {environment && (
               <TimeSinceWrapper>
-                {t('Any Environment')}
-                <TimeSince date={dateGlobal} disabledAbsoluteTooltip />
+                {toTitleCase(environment)}
+                {date ? (
+                  <TimeSince date={date} disabledAbsoluteTooltip />
+                ) : (
+                  <span>{t('N/A')}</span>
+                )}
               </TimeSinceWrapper>
-              {environment && (
-                <TimeSinceWrapper>
-                  {toTitleCase(environment)}
-                  {date ? (
-                    <TimeSince date={date} disabledAbsoluteTooltip />
-                  ) : (
-                    <span>{t('N/A')}</span>
-                  )}
-                </TimeSinceWrapper>
-              )}
-            </div>
-          }
-          body={
-            date ? (
-              <StyledDateTime date={date} />
-            ) : (
-              <NoEnvironment>{t(`N/A for ${environment}`)}</NoEnvironment>
-            )
-          }
-          position="top"
-        >
-          <DateWrapper>
-            {date ? (
-              <TooltipWrapper>
-                <StyledTimeSince date={date} disabledAbsoluteTooltip />
-              </TooltipWrapper>
-            ) : dateGlobal && environment === '' ? (
-              <React.Fragment>
-                <TimeSince date={dateGlobal} disabledAbsoluteTooltip />
-                <StyledTimeSince date={dateGlobal} disabledAbsoluteTooltip />
-              </React.Fragment>
-            ) : (
-              <NoDateTime>{t('N/A')}</NoDateTime>
             )}
-          </DateWrapper>
-        </StyledHovercard>
+          </div>
+        }
+        body={
+          date ? (
+            <StyledDateTime date={date} />
+          ) : (
+            <NoEnvironment>{t('N/A for %s', environment)}</NoEnvironment>
+          )
+        }
+        position="top"
+      >
         <DateWrapper>
-          {defined(release) ? (
-            <React.Fragment>
-              {t('in release ')}
-              <VersionHoverCard
-                organization={organization}
-                projectSlug={projectSlug}
-                releaseVersion={release.version}
-              >
-                <span>
-                  <Version version={release.version} projectId={projectId} />
-                </span>
-              </VersionHoverCard>
-            </React.Fragment>
-          ) : null}
+          {date ? (
+            <TooltipWrapper>
+              <StyledTimeSince date={date} disabledAbsoluteTooltip />
+            </TooltipWrapper>
+          ) : dateGlobal && environment === '' ? (
+            <Fragment>
+              <TimeSince date={dateGlobal} disabledAbsoluteTooltip />
+              <StyledTimeSince date={dateGlobal} disabledAbsoluteTooltip />
+            </Fragment>
+          ) : (
+            <NoDateTime>{t('N/A')}</NoDateTime>
+          )}
         </DateWrapper>
-      </HovercardWrapper>
-    );
-  }
+      </StyledHovercard>
+      <DateWrapper>
+        {defined(release) && (
+          <Fragment>
+            {t('in release ')}
+            <VersionHoverCard
+              organization={organization}
+              projectSlug={projectSlug}
+              releaseVersion={release.version}
+            >
+              <span>
+                <Version version={release.version} projectId={projectId} />
+              </span>
+            </VersionHoverCard>
+          </Fragment>
+        )}
+      </DateWrapper>
+    </HovercardWrapper>
+  );
 }
 
 const dateTimeCss = p => css`
@@ -120,11 +110,12 @@ const dateTimeCss = p => css`
 
 const HovercardWrapper = styled('div')`
   display: flex;
+  align-items: baseline;
 `;
 
 const DateWrapper = styled('div')`
   margin-bottom: 0;
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
 `;
 
 const StyledDateTime = styled(DateTime)`
@@ -156,6 +147,7 @@ const TimeSinceWrapper = styled('div')`
 
 const StyledTimeSince = styled(TimeSince)`
   font-size: ${p => p.theme.fontSizeMedium};
+  line-height: 1.2;
 `;
 
 const StyledHovercard = styled(Hovercard)`

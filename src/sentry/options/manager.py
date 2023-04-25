@@ -3,6 +3,7 @@ import sys
 
 from django.conf import settings
 
+from sentry.utils.hashlib import md5_text
 from sentry.utils.types import Any, type_from_value
 
 # Prevent ourselves from clobbering the builtin
@@ -32,11 +33,26 @@ FLAG_REQUIRED = 1 << 4
 FLAG_PRIORITIZE_DISK = 1 << 5
 # If the value is allowed to be empty to be considered valid
 FLAG_ALLOW_EMPTY = 1 << 6
+# Values that are credentials should not show up in web UI.
+FLAG_CREDENTIAL = 1 << 7
+# Values that are meant to be modified live, eg. for rollout etc.
+FLAG_ADMIN_MODIFIABLE = 1 << 8
+# Values that are rates, between [0,1]
+FLAG_RATE = 1 << 9
+# Values that are bools
+FLAG_BOOL = 1 << 10
+
+FLAG_MODIFIABLE_RATE = FLAG_ADMIN_MODIFIABLE | FLAG_RATE
+FLAG_MODIFIABLE_BOOL = FLAG_ADMIN_MODIFIABLE | FLAG_BOOL
 
 # How long will a cache key exist in local memory before being evicted
 DEFAULT_KEY_TTL = 10
 # How long will a cache key exist in local memory *after ttl* while the backing store is erroring
 DEFAULT_KEY_GRACE = 60
+
+
+def _make_cache_key(key):
+    return "o:%s" % md5_text(key).hexdigest()
 
 
 class OptionsManager:
@@ -98,8 +114,15 @@ class OptionsManager:
                 logger.debug("Using legacy key: %s", key, exc_info=True)
                 # History shows, there was an expectation of no types, and empty string
                 # as the default response value
-                return self.store.make_key(key, lambda: "", Any, DEFAULT_FLAGS, 0, 0)
+                return self.make_key(key, lambda: "", Any, DEFAULT_FLAGS, 0, 0, None)
             raise UnknownOption(key)
+
+    def make_key(self, name, default, type, flags, ttl, grace, grouping_info):
+        from sentry.options.store import Key
+
+        return Key(
+            name, default, type, flags, int(ttl), int(grace), _make_cache_key(name), grouping_info
+        )
 
     def isset(self, key):
         """
@@ -152,16 +175,20 @@ class OptionsManager:
         # Some values we don't want to allow them to be configured through
         # config files and should only exist in the datastore
         if opt.flags & FLAG_STOREONLY:
-            return opt.default()
-
-        try:
-            # default to the hardcoded local configuration for this key
-            return settings.SENTRY_OPTIONS[key]
-        except KeyError:
+            optval = opt.default()
+        else:
             try:
-                return settings.SENTRY_DEFAULT_OPTIONS[key]
+                # default to the hardcoded local configuration for this key
+                optval = settings.SENTRY_OPTIONS[key]
             except KeyError:
-                return opt.default()
+                try:
+                    optval = settings.SENTRY_DEFAULT_OPTIONS[key]
+                except KeyError:
+                    optval = opt.default()
+        # options already present in store are cached by store
+        # caching here to avoid database queries
+        self.store.set_cache(opt, optval)
+        return optval
 
     def delete(self, key):
         """
@@ -190,11 +217,14 @@ class OptionsManager:
         flags=DEFAULT_FLAGS,
         ttl=DEFAULT_KEY_TTL,
         grace=DEFAULT_KEY_GRACE,
+        # Optional info about how to group options together in the _admin ui. Only applies to
+        # options marked `FLAG_ADMIN_MODIFIABLE`
+        grouping_info=None,
     ):
         assert key not in self.registry, "Option already registered: %r" % key
 
-        if len(key) > 64:
-            raise ValueError("Option key has max length of 64 characters")
+        if len(key) > 128:
+            raise ValueError("Option key has max length of 128 characters")
 
         # If our default is a callable, execute it to
         # see what value is returns, so we can use that to derive the type
@@ -242,7 +272,7 @@ class OptionsManager:
 
         settings.SENTRY_DEFAULT_OPTIONS[key] = default_value
 
-        self.registry[key] = self.store.make_key(key, default, type, flags, ttl, grace)
+        self.registry[key] = self.make_key(key, default, type, flags, ttl, grace, grouping_info)
 
     def unregister(self, key):
         try:

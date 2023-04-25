@@ -1,12 +1,11 @@
-import * as React from 'react';
+import {memo} from 'react';
 import styled from '@emotion/styled';
 
 import Avatar from 'sentry/components/avatar';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {AvatarProject, Organization, Team} from 'sentry/types';
 
-type Props = {
+export interface BaseBadgeProps {
   displayName: React.ReactNode;
   avatarProps?: Record<string, any>;
   avatarSize?: number;
@@ -18,9 +17,9 @@ type Props = {
   organization?: Organization;
   project?: AvatarProject;
   team?: Team;
-};
+}
 
-const BaseBadge = React.memo(
+const BaseBadge = memo(
   ({
     displayName,
     hideName = false,
@@ -32,7 +31,7 @@ const BaseBadge = React.memo(
     organization,
     project,
     className,
-  }: Props) => (
+  }: BaseBadgeProps) => (
     <Wrapper className={className}>
       {!hideAvatar && (
         <StyledAvatar
@@ -89,5 +88,5 @@ const Description = styled('div')`
   margin-top: ${space(0.25)};
   color: ${p => p.theme.gray300};
   line-height: 14px;
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
 `;

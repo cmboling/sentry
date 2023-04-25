@@ -6,6 +6,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from sentry.api.base import control_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint, OrganizationPermission
 from sentry.api.paginator import DateTimePaginator
 from sentry.api.serializers import AdminBroadcastSerializer, BroadcastSerializer, serialize
@@ -21,6 +22,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 
+@control_silo_endpoint
 class BroadcastIndexEndpoint(OrganizationEndpoint):
     permission_classes = (OrganizationPermission,)
 
@@ -127,13 +129,13 @@ class BroadcastIndexEndpoint(OrganizationEndpoint):
                 unseen_queryset = queryset
             else:
                 unseen_queryset = queryset.exclude(
-                    id__in=queryset.filter(broadcastseen__user=request.user).values("id")
+                    id__in=queryset.filter(broadcastseen__user_id=request.user.id).values("id")
                 )
 
             for broadcast in unseen_queryset:
                 try:
                     with transaction.atomic():
-                        BroadcastSeen.objects.create(broadcast=broadcast, user=request.user)
+                        BroadcastSeen.objects.create(broadcast=broadcast, user_id=request.user.id)
                 except IntegrityError:
                     pass
 
@@ -170,7 +172,7 @@ class BroadcastIndexEndpoint(OrganizationEndpoint):
         if result.get("hasSeen"):
             try:
                 with transaction.atomic():
-                    BroadcastSeen.objects.create(broadcast=broadcast, user=request.user)
+                    BroadcastSeen.objects.create(broadcast=broadcast, user_id=request.user.id)
             except IntegrityError:
                 pass
 

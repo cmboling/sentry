@@ -1,5 +1,5 @@
+import io
 import platform
-import tempfile
 from unittest.mock import patch
 
 import brotli
@@ -66,24 +66,16 @@ def test_garbage_ip():
         http.safe_urlopen("http://0177.0000.0000.0001")
 
 
-@override_blacklist("127.0.0.1")
-def test_safe_socket_connect():
-    with pytest.raises(SuspiciousOperation):
-        http.safe_socket_connect(("127.0.0.1", 80))
-
-
 @responses.activate
 def test_fetch_file():
     responses.add(
         responses.GET, "http://example.com", body="foo bar", content_type="application/json"
     )
 
-    temp = tempfile.TemporaryFile()
+    temp = io.BytesIO()
     result = http.fetch_file(url="http://example.com", domain_lock_enabled=False, outfile=temp)
-    temp.seek(0)
     assert result.body is None
-    assert temp.read() == b"foo bar"
-    temp.close()
+    assert temp.getvalue() == b"foo bar"
 
 
 @responses.activate
@@ -97,9 +89,7 @@ def test_fetch_file_brotli():
         adding_headers={"Content-Encoding": "br"},
     )
 
-    temp = tempfile.TemporaryFile()
+    temp = io.BytesIO()
     result = http.fetch_file(url="http://example.com", domain_lock_enabled=False, outfile=temp)
-    temp.seek(0)
     assert result.body is None
-    assert temp.read() == b"foo bar"
-    temp.close()
+    assert temp.getvalue() == b"foo bar"

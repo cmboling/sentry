@@ -1,41 +1,61 @@
+from typing import Optional
+
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry.api.base import Endpoint
-from sentry.api.invite_helper import ApiInviteHelper, add_invite_cookie, remove_invite_cookie
+from sentry.api.base import Endpoint, region_silo_endpoint
+from sentry.api.invite_helper import (
+    ApiInviteHelper,
+    add_invite_details_to_session,
+    remove_invite_details_from_session,
+)
 from sentry.models import AuthProvider, OrganizationMember
 from sentry.utils import auth
 
 
+@region_silo_endpoint
 class AcceptOrganizationInvite(Endpoint):
     # Disable authentication and permission requirements.
     permission_classes = []
 
-    def respond_invalid(self, request: Request) -> Response:
+    @staticmethod
+    def respond_invalid() -> Response:
         return Response(status=status.HTTP_400_BAD_REQUEST, data={"details": "Invalid invite code"})
 
-    def get_helper(self, request: Request, member_id, token):
+    def get_helper(self, request: Request, member_id: int, token: str) -> ApiInviteHelper:
         return ApiInviteHelper(request=request, member_id=member_id, instance=self, token=token)
 
-    def get(self, request: Request, member_id, token) -> Response:
+    def get(
+        self, request: Request, member_id: int, token: str, organization_slug: Optional[str] = None
+    ) -> Response:
         try:
             helper = self.get_helper(request, member_id, token)
         except OrganizationMember.DoesNotExist:
-            return self.respond_invalid(request)
+            return self.respond_invalid()
 
-        om = helper.om
-        organization = om.organization
+        organization_member = helper.om
+        organization = helper.organization
 
-        if not helper.member_pending or not helper.valid_token or not om.invite_approved:
-            return self.respond_invalid(request)
+        if organization_slug:
+            if organization_slug != organization.slug:
+                return self.respond_invalid()
+        else:
+            organization_slug = organization.slug
 
-        # Keep track of the invite email for when we land back on the login page
-        request.session["invite_email"] = om.email
+        if (
+            not helper.member_pending
+            or not helper.valid_token
+            or not organization_member.invite_approved
+        ):
+            return self.respond_invalid()
+
+        # Keep track of the invite details in the request session
+        request.session["invite_email"] = organization_member.email
 
         try:
-            auth_provider = AuthProvider.objects.get(organization=organization)
+            auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         except AuthProvider.DoesNotExist:
             auth_provider = None
 
@@ -56,7 +76,9 @@ class AcceptOrganizationInvite(Endpoint):
         # Allow users to register an account when accepting an invite
         if not helper.user_authenticated:
             request.session["can_register"] = True
-            add_invite_cookie(request, response, member_id, token)
+            add_invite_details_to_session(
+                request, organization_member.id, organization_member.token
+            )
 
             # When SSO is required do *not* set a next_url to return to accept
             # invite. The invite will be accepted after SSO is completed.
@@ -72,24 +94,31 @@ class AcceptOrganizationInvite(Endpoint):
         # to come back to the accept invite page since 2FA will *not* be
         # required if SSO is required.
         if auth_provider is not None:
-            add_invite_cookie(request, response, member_id, token)
+            add_invite_details_to_session(
+                request, organization_member.id, organization_member.token
+            )
+
             provider = auth_provider.get_provider()
             data["ssoProvider"] = provider.name
 
         onboarding_steps = helper.get_onboarding_steps()
         data.update(onboarding_steps)
         if any(onboarding_steps.values()):
-            add_invite_cookie(request, response, member_id, token)
+            add_invite_details_to_session(
+                request, organization_member.id, organization_member.token
+            )
 
         response.data = data
 
         return response
 
-    def post(self, request: Request, member_id, token) -> Response:
+    def post(
+        self, request: Request, member_id: int, token: str, organization_slug: Optional[str] = None
+    ) -> Response:
         try:
             helper = self.get_helper(request, member_id, token)
         except OrganizationMember.DoesNotExist:
-            return self.respond_invalid(request)
+            return self.respond_invalid()
 
         if not helper.valid_request:
             return Response(
@@ -104,7 +133,13 @@ class AcceptOrganizationInvite(Endpoint):
         else:
             response = Response(status=status.HTTP_204_NO_CONTENT)
 
+        organization = helper.organization
+
+        if organization_slug:
+            if organization_slug != organization.slug:
+                return self.respond_invalid()
+
         helper.accept_invite()
-        remove_invite_cookie(request, response)
+        remove_invite_details_from_session(request)
 
         return response

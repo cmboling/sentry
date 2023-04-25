@@ -1,12 +1,11 @@
 import logging
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from functools import reduce
 from typing import Any, Mapping, Optional, Tuple
 
 from django.db import transaction
 
-from sentry import eventstore, similarity
-from sentry.app import tsdb
+from sentry import eventstore, similarity, tsdb
 from sentry.constants import DEFAULT_LOGGER_NAME, LOG_LEVELS_MAP
 from sentry.event_manager import generate_culprit
 from sentry.models import (
@@ -23,6 +22,7 @@ from sentry.models import (
     UserReport,
 )
 from sentry.tasks.base import instrumented_task
+from sentry.types.activity import ActivityType
 from sentry.unmerge import InitialUnmergeArgs, SuccessiveUnmergeArgs, UnmergeArgs, UnmergeArgsBase
 from sentry.utils.query import celery_run_batch_query
 from sentry.utils.safe import get_path
@@ -214,7 +214,7 @@ def migrate_events(
         Activity.objects.create(
             project_id=project.id,
             group_id=destination_id,
-            type=Activity.UNMERGE_DESTINATION,
+            type=ActivityType.UNMERGE_DESTINATION.value,
             user_id=args.actor_id,
             data={"source_id": args.source_id, **args.replacement.get_activity_args()},
         )
@@ -222,7 +222,7 @@ def migrate_events(
         Activity.objects.create(
             project_id=project.id,
             group_id=args.source_id,
-            type=Activity.UNMERGE_SOURCE,
+            type=ActivityType.UNMERGE_SOURCE.value,
             user_id=args.actor_id,
             data={"destination_id": destination_id, **args.replacement.get_activity_args()},
         )
@@ -251,7 +251,7 @@ def truncate_denormalizations(project, group):
 
     # XXX: This can cause a race condition with the ``FirstSeenEventCondition``
     # where notifications can be erroneously sent if they occur in this group
-    # before the reprocessing of the denormalizated data completes, since a new
+    # before the reprocessing of the denormalized data completes, since a new
     # ``GroupEnvironment`` will be created.
     for instance in GroupEnvironment.objects.filter(group_id=group.id):
         instance.delete()
@@ -279,7 +279,7 @@ def collect_group_environment_data(events):
     Find the first release for a each group and environment pair from a
     date-descending sorted list of events.
     """
-    results = OrderedDict()
+    results = {}
     for event in events:
         results[(event.group_id, get_environment_name(event))] = event.get_tag("sentry:release")
     return results
@@ -300,7 +300,7 @@ def repair_group_environment_data(caches, project, events):
 
 
 def collect_tag_data(events):
-    results = OrderedDict()
+    results = {}
 
     for event in events:
         environment = get_environment_name(event)
@@ -323,7 +323,7 @@ def get_environment_name(event):
 
 
 def collect_release_data(caches, project, events):
-    results = OrderedDict()
+    results = {}
 
     for event in events:
         release = event.get_tag("sentry:release")
@@ -489,6 +489,7 @@ def unmerge(*posargs, **kwargs):
         batch_size=args.batch_size,
         state=last_event,
         referrer="unmerge",
+        tenant_ids={"organization_id": source.project.organization_id},
     )
 
     # If there are no more events to process, we're done with the migration.

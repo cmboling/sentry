@@ -1,37 +1,35 @@
 import {Fragment, MouseEvent, useContext, useState} from 'react';
-import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 import scrollToElement from 'scroll-to-element';
 
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import {
+  getLeadHint,
   hasAssembly,
   hasContextRegisters,
   hasContextSource,
   hasContextVars,
-  isDotnet,
   isExpandable,
   trimPackage,
 } from 'sentry/components/events/interfaces/frame/utils';
 import {formatAddress, parseAddress} from 'sentry/components/events/interfaces/utils';
-import AnnotatedText from 'sentry/components/events/meta/annotatedText';
-import {getMeta} from 'sentry/components/events/meta/metaProxy';
+import {AnnotatedText} from 'sentry/components/events/meta/annotatedText';
 import {TraceEventDataSectionContext} from 'sentry/components/events/traceEventDataSection';
-import {DisplayOption} from 'sentry/components/events/traceEventDataSection/displayOptions';
-import {STACKTRACE_PREVIEW_TOOLTIP_DELAY} from 'sentry/components/stacktracePreview';
 import StrictClick from 'sentry/components/strictClick';
-import Tooltip from 'sentry/components/tooltip';
+import Tag from 'sentry/components/tag';
+import {Tooltip} from 'sentry/components/tooltip';
+import {SLOW_TOOLTIP_DELAY} from 'sentry/constants';
+import {IconCheckmark} from 'sentry/icons/iconCheckmark';
 import {IconChevron} from 'sentry/icons/iconChevron';
-import {IconInfo} from 'sentry/icons/iconInfo';
-import {IconQuestion} from 'sentry/icons/iconQuestion';
+import {IconFileBroken} from 'sentry/icons/iconFileBroken';
+import {IconRefresh} from 'sentry/icons/iconRefresh';
 import {IconWarning} from 'sentry/icons/iconWarning';
 import {t} from 'sentry/locale';
-import {DebugMetaActions} from 'sentry/stores/debugMetaStore';
-import space from 'sentry/styles/space';
+import DebugMetaStore from 'sentry/stores/debugMetaStore';
+import {space} from 'sentry/styles/space';
 import {Frame, PlatformType, SentryAppComponent} from 'sentry/types';
 import {Event} from 'sentry/types/event';
 import {defined} from 'sentry/utils';
-import {Color} from 'sentry/utils/theme';
 import withSentryAppComponents from 'sentry/utils/withSentryAppComponents';
 
 import DebugImage from './debugMeta/debugImage';
@@ -47,6 +45,7 @@ type Props = {
   platform: PlatformType;
   registers: Record<string, string>;
   emptySourceNotation?: boolean;
+  frameMeta?: Record<any, any>;
   image?: React.ComponentProps<typeof DebugImage>['image'];
   includeSystemFrames?: boolean;
   isExpanded?: boolean;
@@ -55,6 +54,7 @@ type Props = {
   maxLengthOfRelativeAddress?: number;
   nextFrame?: Frame;
   prevFrame?: Frame;
+  registersMeta?: Record<any, any>;
 };
 
 function NativeFrame({
@@ -71,6 +71,8 @@ function NativeFrame({
   components,
   isExpanded,
   platform,
+  registersMeta,
+  frameMeta,
   emptySourceNotation = false,
   /**
    * Is the stack trace being previewed in a hovercard?
@@ -79,23 +81,18 @@ function NativeFrame({
 }: Props) {
   const traceEventDataSectionContext = useContext(TraceEventDataSectionContext);
 
-  const absolute = traceEventDataSectionContext?.activeDisplayOptions.includes(
-    DisplayOption.ABSOLUTE_ADDRESSES
+  const absolute = traceEventDataSectionContext?.display.includes('absolute-addresses');
+
+  const fullStackTrace = traceEventDataSectionContext?.fullStackTrace;
+
+  const fullFunctionName = traceEventDataSectionContext?.display.includes(
+    'verbose-function-names'
   );
 
-  const fullStackTrace = traceEventDataSectionContext?.activeDisplayOptions.includes(
-    DisplayOption.FULL_STACK_TRACE
-  );
+  const absoluteFilePaths =
+    traceEventDataSectionContext?.display.includes('absolute-file-paths');
 
-  const fullFunctionName = traceEventDataSectionContext?.activeDisplayOptions.includes(
-    DisplayOption.VERBOSE_FUNCTION_NAMES
-  );
-
-  const absoluteFilePaths = traceEventDataSectionContext?.activeDisplayOptions.includes(
-    DisplayOption.ABSOLUTE_FILE_PATHS
-  );
-
-  const tooltipDelay = isHoverPreviewed ? STACKTRACE_PREVIEW_TOOLTIP_DELAY : undefined;
+  const tooltipDelay = isHoverPreviewed ? SLOW_TOOLTIP_DELAY : undefined;
   const foundByStackScanning = frame.trust === 'scan' || frame.trust === 'cfi-scan';
   const startingAddress = image ? image.image_addr : null;
   const packageClickable =
@@ -160,14 +157,14 @@ function NativeFrame({
     if (functionNameHiddenDetails && fullFunctionName && frame.rawFunction) {
       return {
         value: frame.rawFunction,
-        meta: getMeta(frame, 'rawFunction'),
+        meta: frameMeta?.rawFunction?.[''],
       };
     }
 
     if (frame.function) {
       return {
         value: frame.function,
-        meta: getMeta(frame, 'function'),
+        meta: frameMeta?.function?.[''],
       };
     }
 
@@ -201,7 +198,7 @@ function NativeFrame({
           ? `${image.debug_id}!${frame.instructionAddr}`
           : frame.instructionAddr;
 
-      DebugMetaActions.updateFilter(searchTerm);
+      DebugMetaStore.updateFilter(searchTerm);
     }
 
     scrollToElement('#images-loaded');
@@ -221,67 +218,52 @@ function NativeFrame({
   const status = getStatus();
 
   return (
-    <GridRow
-      inApp={frame.inApp}
-      expandable={expandable}
-      expanded={expanded}
-      data-test-id="stack-trace-frame"
-    >
+    <StackTraceFrame data-test-id="stack-trace-frame">
       <StrictClick onClick={handleToggleContext}>
-        <StrictClickContent>
-          <StatusCell>
-            {(status === 'error' || status === undefined) &&
-              (packageClickable ? (
-                <PackageStatusButton
-                  onClick={handleGoToImagesLoaded}
-                  title={t('Go to images loaded')}
-                  aria-label={t('Go to images loaded')}
-                  icon={
-                    status === 'error' ? (
-                      <IconQuestion size="sm" color="red300" />
-                    ) : (
-                      <IconWarning size="sm" color="red300" />
-                    )
-                  }
-                  size="zero"
-                  borderless
-                />
-              ) : status === 'error' ? (
-                <IconQuestion size="sm" color="red300" />
-              ) : (
-                <IconWarning size="sm" color="red300" />
-              ))}
-          </StatusCell>
-          <PackageCell>
+        <RowHeader expandable={expandable} expanded={expanded}>
+          <div>
+            {status === 'error' ? (
+              <Tooltip
+                title={t(
+                  'This frame has missing debug files and could not be symbolicated'
+                )}
+              >
+                <IconFileBroken size="sm" color="errorText" />
+              </Tooltip>
+            ) : status === undefined ? (
+              <Tooltip
+                title={t(
+                  'This frame has an unknown problem and could not be symbolicated'
+                )}
+              >
+                <IconWarning size="sm" color="warningText" />
+              </Tooltip>
+            ) : (
+              <Tooltip title={t('This frame has been successfully symbolicated')}>
+                <IconCheckmark size="sm" color="successText" />
+              </Tooltip>
+            )}
+          </div>
+          <div>
             {!fullStackTrace && !expanded && leadsToApp && (
               <Fragment>
-                {!nextFrame ? t('Crashed in non-app') : t('Called from')}
-                {':'}&nbsp;
+                <PackageNote>
+                  {getLeadHint({event, hasNextFrame: defined(nextFrame)})}
+                </PackageNote>
               </Fragment>
             )}
-            <span>
-              <Tooltip
-                title={frame.package ?? t('Go to images loaded')}
-                delay={tooltipDelay}
-                disabled={frame.package ? false : !packageClickable}
-                containerDisplayMode="inline-flex"
-              >
-                <Package
-                  color={
-                    status === undefined || status === 'error'
-                      ? 'red300'
-                      : packageClickable
-                      ? 'blue300'
-                      : undefined
-                  }
-                  onClick={packageClickable ? handleGoToImagesLoaded : undefined}
-                >
-                  {frame.package ? trimPackage(frame.package) : `<${t('unknown')}>`}
-                </Package>
-              </Tooltip>
-            </span>
-          </PackageCell>
-          <AddressCell>
+            <Tooltip
+              title={frame.package ?? t('Go to images loaded')}
+              position="bottom"
+              containerDisplayMode="inline-flex"
+              delay={tooltipDelay}
+            >
+              <Package>
+                {frame.package ? trimPackage(frame.package) : `<${t('unknown')}>`}
+              </Package>
+            </Tooltip>
+          </div>
+          <AddressCell onClick={packageClickable ? handleGoToImagesLoaded : undefined}>
             <Tooltip
               title={addressTooltip}
               disabled={!(foundByStackScanning || inlineFrame)}
@@ -290,30 +272,17 @@ function NativeFrame({
               {!relativeAddress || absolute ? frame.instructionAddr : relativeAddress}
             </Tooltip>
           </AddressCell>
-          <GroupingCell>
-            {isUsedForGrouping && (
-              <Tooltip
-                title={t('This frame appears in all other events related to this issue')}
-                containerDisplayMode="inline-flex"
-              >
-                <IconInfo size="sm" color="gray300" />
-              </Tooltip>
-            )}
-          </GroupingCell>
           <FunctionNameCell>
-            <FunctionName>
-              {functionName ? (
-                <AnnotatedText value={functionName.value} meta={functionName.meta} />
-              ) : (
-                `<${t('unknown')}>`
-              )}
-            </FunctionName>
+            {functionName ? (
+              <AnnotatedText value={functionName.value} meta={functionName.meta} />
+            ) : (
+              `<${t('unknown')}>`
+            )}
             {frame.filename && (
               <Tooltip
                 title={frame.absPath}
                 disabled={!(defined(frame.absPath) && frame.absPath !== frame.filename)}
                 delay={tooltipDelay}
-                containerDisplayMode="inline-flex"
               >
                 <FileName>
                   {'('}
@@ -324,103 +293,90 @@ function NativeFrame({
               </Tooltip>
             )}
           </FunctionNameCell>
+          <GroupingCell>
+            {isUsedForGrouping && (
+              <Tooltip title={t('This frame is repeated in every event of this issue')}>
+                <IconRefresh size="sm" color="textColor" />
+              </Tooltip>
+            )}
+          </GroupingCell>
+          <TypeCell>
+            {frame.inApp ? (
+              <Tag type="info">{t('In App')}</Tag>
+            ) : (
+              <Tag>{t('System')}</Tag>
+            )}
+          </TypeCell>
           <ExpandCell>
             {expandable && (
               <ToggleButton
                 size="zero"
-                css={isDotnet(platform) && {display: 'block !important'}} // remove important once we get rid of css files
                 title={t('Toggle Context')}
                 aria-label={t('Toggle Context')}
-                tooltipProps={
-                  isHoverPreviewed ? {delay: STACKTRACE_PREVIEW_TOOLTIP_DELAY} : undefined
+                tooltipProps={isHoverPreviewed ? {delay: SLOW_TOOLTIP_DELAY} : undefined}
+                icon={
+                  <IconChevron legacySize="8px" direction={expanded ? 'up' : 'down'} />
                 }
-                icon={<IconChevron size="8px" direction={expanded ? 'up' : 'down'} />}
               />
             )}
           </ExpandCell>
-        </StrictClickContent>
+        </RowHeader>
       </StrictClick>
-      <RegistersCell>
-        {expanded && (
-          <Registers
-            frame={frame}
-            event={event}
-            registers={registers}
-            components={components}
-            hasContextSource={hasContextSource(frame)}
-            hasContextVars={hasContextVars(frame)}
-            hasContextRegisters={hasContextRegisters(registers)}
-            emptySourceNotation={emptySourceNotation}
-            hasAssembly={hasAssembly(frame, platform)}
-            expandable={expandable}
-            isExpanded={expanded}
-          />
-        )}
-      </RegistersCell>
-    </GridRow>
+      {expanded && (
+        <Registers
+          frame={frame}
+          event={event}
+          registers={registers}
+          components={components}
+          hasContextSource={hasContextSource(frame)}
+          hasContextVars={hasContextVars(frame)}
+          hasContextRegisters={hasContextRegisters(registers)}
+          emptySourceNotation={emptySourceNotation}
+          hasAssembly={hasAssembly(frame, platform)}
+          expandable={expandable}
+          isExpanded={expanded}
+          registersMeta={registersMeta}
+          frameMeta={frameMeta}
+        />
+      )}
+    </StackTraceFrame>
   );
 }
 
 export default withSentryAppComponents(NativeFrame, {componentType: 'stacktrace-link'});
 
-const Cell = styled('div')`
-  padding: ${space(0.5)};
-  display: flex;
-  flex-wrap: wrap;
-  word-break: break-all;
-  align-items: flex-start;
+const AddressCell = styled('div')`
+  ${p => p.onClick && `cursor: pointer`};
+  ${p => p.onClick && `color:` + p.theme.linkColor};
 `;
 
-const StatusCell = styled(Cell)`
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
-    grid-column: 1/1;
-    grid-row: 1/1;
-  }
-`;
-
-const PackageCell = styled(Cell)`
-  color: ${p => p.theme.subText};
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
-    grid-column: 2/2;
-    grid-row: 1/1;
-    display: grid;
-    grid-template-columns: 1fr;
-    grid-template-rows: repeat(2, auto);
-  }
-`;
-
-const AddressCell = styled(Cell)`
+const FunctionNameCell = styled('div')`
   font-family: ${p => p.theme.text.familyMono};
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
-    grid-column: 3/3;
-    grid-row: 1/1;
+  word-break: break-all;
+
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
+    grid-column: 2/6;
   }
 `;
 
-const GroupingCell = styled(Cell)`
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
-    grid-column: 1/1;
-    grid-row: 2/2;
+const GroupingCell = styled('div')`
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
+    grid-row: 2/3;
   }
 `;
 
-const FunctionNameCell = styled(Cell)`
-  color: ${p => p.theme.textColor};
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
-    grid-column: 2/-1;
-    grid-row: 2/2;
+const TypeCell = styled('div')`
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
+    grid-column: 5/6;
+    grid-row: 1/2;
   }
 `;
 
-const ExpandCell = styled(Cell)``;
-
-const RegistersCell = styled('div')`
-  grid-column: 1/-1;
-`;
-
-const Registers = styled(Context)`
-  margin: ${space(1)} 0 ${space(1)} ${space(0.5)};
-  padding: ${space(1)};
+const ExpandCell = styled('div')`
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
+    grid-column: 6/7;
+    grid-row: 1/2;
+  }
 `;
 
 const ToggleButton = styled(Button)`
@@ -428,15 +384,22 @@ const ToggleButton = styled(Button)`
   height: 16px;
 `;
 
-const Package = styled('span')<{color?: Color}>`
-  border-bottom: 1px dashed ${p => p.theme.border};
-  ${p => p.color && `color: ${p.theme[p.color]}`};
-  ${p => p.onClick && `cursor: pointer;`}
+const Registers = styled(Context)`
+  border-bottom: 1px solid ${p => p.theme.border};
+  padding: 0;
+  margin: 0;
 `;
 
-const FunctionName = styled('div')`
-  color: ${p => p.theme.headingColor};
-  margin-right: ${space(1)};
+const PackageNote = styled('div')`
+  color: ${p => p.theme.subText};
+  font-size: ${p => p.theme.fontSizeExtraSmall};
+`;
+
+const Package = styled('span')`
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
 `;
 
 const FileName = styled('span')`
@@ -444,42 +407,32 @@ const FileName = styled('span')`
   border-bottom: 1px dashed ${p => p.theme.border};
 `;
 
-const PackageStatusButton = styled(Button)`
-  padding: 0;
-  border: none;
-`;
-
-const GridRow = styled('div')<{expandable: boolean; expanded: boolean; inApp: boolean}>`
-  ${p => p.expandable && `cursor: pointer;`};
-  ${p => p.inApp && `background: ${p.theme.bodyBackground};`};
-  ${p =>
-    !p.inApp &&
-    css`
-      color: ${p.theme.subText};
-      ${FunctionName} {
-        color: ${p.theme.subText};
-      }
-      ${FunctionNameCell} {
-        color: ${p.theme.subText};
-      }
-    `};
-
+const RowHeader = styled('span')<{expandable: boolean; expanded: boolean}>`
   display: grid;
-  align-items: flex-start;
-  padding: ${space(0.5)};
-  :not(:last-child) {
-    border-bottom: 1px solid ${p => p.theme.border};
-  }
+  grid-template-columns: repeat(2, auto) 1fr repeat(2, auto);
+  grid-template-rows: repeat(2, auto);
+  align-items: center;
+  align-content: center;
+  column-gap: ${space(1)};
+  background-color: ${p => p.theme.bodyBackground};
+  font-size: ${p => p.theme.codeFontSize};
+  padding: ${space(1)};
+  ${p => p.expandable && `cursor: pointer;`};
+  ${p =>
+    p.expandable && `grid-template-columns: repeat(2, auto) 1fr repeat(2, auto) 16px;`};
 
-  grid-template-columns: 24px 132px 138px 24px 1fr 24px;
-  grid-template-rows: 1fr;
-
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
-    grid-template-columns: 24px auto minmax(138px, 1fr) 24px;
-    grid-template-rows: repeat(2, auto);
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    grid-template-columns: auto 150px 120px 4fr auto auto;
+    ${p => p.expandable && `grid-template-columns: auto 150px 120px 4fr auto auto 16px;`};
+    padding: ${space(0.5)} ${space(1.5)};
+    min-height: 32px;
   }
 `;
 
-const StrictClickContent = styled('div')`
-  display: contents;
+const StackTraceFrame = styled('li')`
+  :not(:last-child) {
+    ${RowHeader} {
+      border-bottom: 1px solid ${p => p.theme.border};
+    }
+  }
 `;

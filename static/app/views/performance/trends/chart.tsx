@@ -1,5 +1,5 @@
-import {browserHistory, withRouter, WithRouterProps} from 'react-router';
-import {useTheme} from '@emotion/react';
+import {browserHistory} from 'react-router';
+import {Theme, useTheme} from '@emotion/react';
 import type {LegendComponentOption} from 'echarts';
 
 import ChartZoom from 'sentry/components/charts/chartZoom';
@@ -15,10 +15,16 @@ import {t} from 'sentry/locale';
 import {EventsStatsData, OrganizationSummary, Project} from 'sentry/types';
 import {Series} from 'sentry/types/echarts';
 import {getUtcToLocalDateObject} from 'sentry/utils/dates';
-import {axisLabelFormatter, tooltipFormatter} from 'sentry/utils/discover/charts';
+import {
+  axisLabelFormatter,
+  getDurationUnit,
+  tooltipFormatter,
+} from 'sentry/utils/discover/charts';
+import {aggregateOutputType} from 'sentry/utils/discover/fields';
 import getDynamicText from 'sentry/utils/getDynamicText';
 import {decodeList} from 'sentry/utils/queryString';
-import {Theme} from 'sentry/utils/theme';
+import {useLocation} from 'sentry/utils/useLocation';
+import useRouter from 'sentry/utils/useRouter';
 
 import {ViewProps} from '../types';
 
@@ -37,21 +43,31 @@ import {
   trendToColor,
 } from './utils';
 
-type Props = WithRouterProps &
-  ViewProps & {
-    isLoading: boolean;
-    location: Location;
-    organization: OrganizationSummary;
-    projects: Project[];
-    statsData: TrendsStats;
-    trendChangeType: TrendChangeType;
-    disableLegend?: boolean;
-    disableXAxis?: boolean;
-    grid?: LineChartProps['grid'];
-    height?: number;
-    transaction?: NormalizedTrendsTransaction;
-    trendFunctionField?: TrendFunctionField;
-  };
+type Props = ViewProps & {
+  isLoading: boolean;
+  organization: OrganizationSummary;
+  projects: Project[];
+  statsData: TrendsStats;
+  trendChangeType: TrendChangeType;
+  disableLegend?: boolean;
+  disableXAxis?: boolean;
+  grid?: LineChartProps['grid'];
+  height?: number;
+  transaction?: NormalizedTrendsTransaction;
+  trendFunctionField?: TrendFunctionField;
+};
+
+function transformTransaction(
+  transaction: NormalizedTrendsTransaction
+): NormalizedTrendsTransaction {
+  if (transaction && transaction.breakpoint) {
+    return {
+      ...transaction,
+      breakpoint: transaction.breakpoint * 1000,
+    };
+  }
+  return transaction;
+}
 
 function transformEventStats(data: EventsStatsData, seriesName?: string): Series[] {
   return [
@@ -95,6 +111,8 @@ function getIntervalLine(
   if (!transaction || !series.length || !series[0].data || !series[0].data.length) {
     return [];
   }
+
+  const transformedTransaction = transformTransaction(transaction);
 
   const seriesStart = parseInt(series[0].data[0].name as string, 10);
   const seriesEnd = parseInt(series[0].data.slice(-1)[0].name as string, 10);
@@ -147,11 +165,14 @@ function getIntervalLine(
 
   const seriesDiff = seriesEnd - seriesStart;
   const seriesLine = seriesDiff * intervalRatio + seriesStart;
+  const {breakpoint} = transformedTransaction;
+
+  const divider = breakpoint || seriesLine;
 
   previousPeriod.markLine.data = [
     [
-      {value: 'Past', coord: [seriesStart, transaction.aggregate_range_1]},
-      {coord: [seriesLine, transaction.aggregate_range_1]},
+      {value: 'Past', coord: [seriesStart, transformedTransaction.aggregate_range_1]},
+      {coord: [divider, transformedTransaction.aggregate_range_1]},
     ],
   ];
   previousPeriod.markLine.tooltip = {
@@ -161,7 +182,7 @@ function getIntervalLine(
         '<div>',
         `<span class="tooltip-label"><strong>${t('Past Baseline')}</strong></span>`,
         // p50() coerces the axis to be time based
-        tooltipFormatter(transaction.aggregate_range_1, 'p50()'),
+        tooltipFormatter(transformedTransaction.aggregate_range_1, 'duration'),
         '</div>',
         '</div>',
         '<div class="tooltip-arrow"></div>',
@@ -170,8 +191,8 @@ function getIntervalLine(
   };
   currentPeriod.markLine.data = [
     [
-      {value: 'Present', coord: [seriesLine, transaction.aggregate_range_2]},
-      {coord: [seriesEnd, transaction.aggregate_range_2]},
+      {value: 'Present', coord: [divider, transformedTransaction.aggregate_range_2]},
+      {coord: [seriesEnd, transformedTransaction.aggregate_range_2]},
     ],
   ];
   currentPeriod.markLine.tooltip = {
@@ -181,7 +202,7 @@ function getIntervalLine(
         '<div>',
         `<span class="tooltip-label"><strong>${t('Present Baseline')}</strong></span>`,
         // p50() coerces the axis to be time based
-        tooltipFormatter(transaction.aggregate_range_2, 'p50()'),
+        tooltipFormatter(transformedTransaction.aggregate_range_2, 'duration'),
         '</div>',
         '</div>',
         '<div class="tooltip-arrow"></div>',
@@ -191,7 +212,7 @@ function getIntervalLine(
   periodDividingLine.markLine = {
     data: [
       {
-        xAxis: seriesLine,
+        xAxis: divider,
       },
     ],
     label: {show: false},
@@ -224,12 +245,10 @@ function getIntervalLine(
 
 export function Chart({
   trendChangeType,
-  router,
   statsPeriod,
   transaction,
   statsData,
   isLoading,
-  location,
   start: propsStart,
   end: propsEnd,
   trendFunctionField,
@@ -240,6 +259,8 @@ export function Chart({
   projects,
   project,
 }: Props) {
+  const location = useLocation();
+  const router = useRouter();
   const theme = useTheme();
 
   const handleLegendSelectChanged = legendChange => {
@@ -310,22 +331,41 @@ export function Chart({
     transaction?.aggregate_range_1 || Number.MAX_SAFE_INTEGER,
     transaction?.aggregate_range_2 || Number.MAX_SAFE_INTEGER
   );
+
+  const smoothedSeries = smoothedResults
+    ? smoothedResults.map(values => {
+        return {
+          ...values,
+          color: lineColor.default,
+          lineStyle: {
+            opacity: 1,
+          },
+        };
+      })
+    : [];
+
+  const intervalSeries = getIntervalLine(theme, smoothedResults || [], 0.5, transaction);
+
   const yDiff = yMax - yMin;
   const yMargin = yDiff * 0.1;
+  const series = [...smoothedSeries, ...intervalSeries];
+
+  const durationUnit = getDurationUnit(series);
 
   const chartOptions: Omit<LineChartProps, 'series'> = {
     tooltip: {
       valueFormatter: (value, seriesName) => {
-        return tooltipFormatter(value, seriesName);
+        return tooltipFormatter(value, aggregateOutputType(seriesName));
       },
     },
     yAxis: {
       min: Math.max(0, yMin - yMargin),
       max: yMax + yMargin,
+      minInterval: durationUnit,
       axisLabel: {
         color: theme.chartLabel,
-        // p50() coerces the axis to be time based
-        formatter: (value: number) => axisLabelFormatter(value, 'p50()'),
+        formatter: (value: number) =>
+          axisLabelFormatter(value, 'duration', undefined, durationUnit),
       },
     },
   };
@@ -339,25 +379,6 @@ export function Chart({
       utc={utc === 'true'}
     >
       {zoomRenderProps => {
-        const smoothedSeries = smoothedResults
-          ? smoothedResults.map(values => {
-              return {
-                ...values,
-                color: lineColor.default,
-                lineStyle: {
-                  opacity: 1,
-                },
-              };
-            })
-          : [];
-
-        const intervalSeries = getIntervalLine(
-          theme,
-          smoothedResults || [],
-          0.5,
-          transaction
-        );
-
         return (
           <TransitionChart loading={loading} reloading={reloading}>
             <TransparentLoadingMask visible={reloading} />
@@ -368,7 +389,7 @@ export function Chart({
                   {...zoomRenderProps}
                   {...chartOptions}
                   onLegendSelectChanged={handleLegendSelectChanged}
-                  series={[...smoothedSeries, ...intervalSeries]}
+                  series={series}
                   seriesOptions={{
                     showSymbol: false,
                   }}
@@ -396,4 +417,4 @@ export function Chart({
   );
 }
 
-export default withRouter(Chart);
+export default Chart;

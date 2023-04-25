@@ -1,5 +1,4 @@
-import {useEffect} from 'react';
-import {ClassNames} from '@emotion/react';
+import {useEffect, useMemo} from 'react';
 import assign from 'lodash/assign';
 import flatten from 'lodash/flatten';
 import memoize from 'lodash/memoize';
@@ -10,6 +9,7 @@ import SmartSearchBar from 'sentry/components/smartSearchBar';
 import {NEGATION_OPERATOR, SEARCH_WILDCARD} from 'sentry/constants';
 import {Organization, SavedSearchType, TagCollection} from 'sentry/types';
 import {defined} from 'sentry/utils';
+import {CustomMeasurementCollection} from 'sentry/utils/customMeasurements/customMeasurements';
 import {
   Field,
   FIELD_TAGS,
@@ -17,20 +17,99 @@ import {
   isEquation,
   isMeasurement,
   SEMVER_TAGS,
+  SPAN_OP_BREAKDOWN_FIELDS,
   TRACING_FIELDS,
 } from 'sentry/utils/discover/fields';
+import {
+  DEVICE_CLASS_TAG_VALUES,
+  FieldKey,
+  FieldKind,
+  isDeviceClass,
+} from 'sentry/utils/fields';
 import Measurements from 'sentry/utils/measurements/measurements';
 import useApi from 'sentry/utils/useApi';
 import withTags from 'sentry/utils/withTags';
+import {isCustomMeasurement} from 'sentry/views/dashboards/utils';
 
 const SEARCH_SPECIAL_CHARS_REGEXP = new RegExp(
   `^${NEGATION_OPERATOR}|\\${SEARCH_WILDCARD}`,
   'g'
 );
 
+const STATIC_FIELD_TAGS_SET = new Set(Object.keys(FIELD_TAGS));
+const getFunctionTags = (fields: Readonly<Field[]> | undefined) => {
+  if (!fields?.length) {
+    return [];
+  }
+  return fields.reduce((acc, item) => {
+    if (
+      !STATIC_FIELD_TAGS_SET.has(item.field) &&
+      !isEquation(item.field) &&
+      !isCustomMeasurement(item.field)
+    ) {
+      acc[item.field] = {key: item.field, name: item.field, kind: FieldKind.FUNCTION};
+    }
+
+    return acc;
+  }, {});
+};
+
+const getMeasurementTags = (
+  measurements: Parameters<
+    React.ComponentProps<typeof Measurements>['children']
+  >[0]['measurements'],
+  customMeasurements:
+    | Parameters<React.ComponentProps<typeof Measurements>['children']>[0]['measurements']
+    | undefined
+) => {
+  const measurementsWithKind = Object.keys(measurements).reduce((tags, key) => {
+    tags[key] = {
+      ...measurements[key],
+      kind: FieldKind.MEASUREMENT,
+    };
+    return tags;
+  }, {});
+
+  if (!customMeasurements) {
+    return measurementsWithKind;
+  }
+
+  return Object.keys(customMeasurements).reduce((tags, key) => {
+    tags[key] = {
+      ...customMeasurements[key],
+      kind: FieldKind.MEASUREMENT,
+    };
+    return tags;
+  }, measurementsWithKind);
+};
+
+const STATIC_FIELD_TAGS = Object.keys(FIELD_TAGS).reduce((tags, key) => {
+  tags[key] = {
+    ...FIELD_TAGS[key],
+    kind: FieldKind.FIELD,
+  };
+  return tags;
+}, {});
+
+const STATIC_FIELD_TAGS_WITHOUT_TRACING = omit(STATIC_FIELD_TAGS, TRACING_FIELDS);
+
+const STATIC_SPAN_TAGS = SPAN_OP_BREAKDOWN_FIELDS.reduce((tags, key) => {
+  tags[key] = {name: key, kind: FieldKind.METRICS};
+  return tags;
+}, {});
+
+const STATIC_SEMVER_TAGS = Object.keys(SEMVER_TAGS).reduce((tags, key) => {
+  tags[key] = {
+    ...SEMVER_TAGS[key],
+    kind: FieldKind.FIELD,
+  };
+  return tags;
+}, {});
+
 export type SearchBarProps = Omit<React.ComponentProps<typeof SmartSearchBar>, 'tags'> & {
   organization: Organization;
   tags: TagCollection;
+  customMeasurements?: CustomMeasurementCollection;
   fields?: Readonly<Field[]>;
   includeSessionTagsValues?: boolean;
   /**
@@ -52,13 +131,26 @@ function SearchBar(props: SearchBarProps) {
     projectIds,
     includeSessionTagsValues,
     maxMenuHeight,
+    customMeasurements,
   } = props;
 
   const api = useApi();
 
+  const functionTags = useMemo(() => getFunctionTags(fields), [fields]);
+  const tagsWithKind = useMemo(() => {
+    return Object.keys(tags).reduce((acc, key) => {
+      acc[key] = {
+        ...tags[key],
+        kind: FieldKind.TAG,
+      };
+      return acc;
+    }, {});
+  }, [tags]);
+
   useEffect(() => {
     // Clear memoized data on mount to make tests more consistent.
     getEventFieldValues.cache.clear?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectIds]);
 
   // Returns array of tag values that substring match `query`; invokes `callback`
@@ -73,20 +165,24 @@ function SearchBar(props: SearchBarProps) {
         return Promise.resolve([]);
       }
 
-      return fetchTagValues(
+      // device.class is stored as "numbers" in snuba, but we want to suggest high, medium,
+      // and low search filter values because discover maps device.class to these values.
+      if (isDeviceClass(tag.key)) {
+        return Promise.resolve(DEVICE_CLASS_TAG_VALUES);
+      }
+
+      return fetchTagValues({
         api,
-        organization.slug,
-        tag.key,
-        query,
-        projectIdStrings,
+        orgSlug: organization.slug,
+        tagKey: tag.key,
+        search: query,
+        projectIds: projectIdStrings,
         endpointParams,
-
         // allows searching for tags on transactions as well
-        true,
-
+        includeTransactions: true,
         // allows searching for tags on sessions as well
-        includeSessionTagsValues
-      ).then(
+        includeSessions: includeSessionTagsValues,
+      }).then(
         results =>
           flatten(results.filter(({name}) => defined(name)).map(({name}) => name)),
         () => {
@@ -102,56 +198,54 @@ function SearchBar(props: SearchBarProps) {
       React.ComponentProps<typeof Measurements>['children']
     >[0]['measurements']
   ) => {
-    const functionTags = fields
-      ? Object.fromEntries(
-          fields
-            .filter(
-              item =>
-                !Object.keys(FIELD_TAGS).includes(item.field) && !isEquation(item.field)
-            )
-            .map(item => [item.field, {key: item.field, name: item.field}])
+    const measurementsWithKind = getMeasurementTags(measurements, customMeasurements);
+    const orgHasPerformanceView = organization.features.includes('performance-view');
+
+    const combinedTags: TagCollection = orgHasPerformanceView
+      ? Object.assign(
+          {},
+          measurementsWithKind,
+          functionTags,
+          STATIC_SPAN_TAGS,
+          STATIC_FIELD_TAGS
         )
-      : {};
+      : Object.assign({}, STATIC_FIELD_TAGS_WITHOUT_TRACING);
 
-    const fieldTags = organization.features.includes('performance-view')
-      ? Object.assign({}, measurements, FIELD_TAGS, functionTags)
-      : omit(FIELD_TAGS, TRACING_FIELDS);
+    assign(combinedTags, tagsWithKind, STATIC_FIELD_TAGS, STATIC_SEMVER_TAGS);
 
-    const combined = assign({}, tags, fieldTags, SEMVER_TAGS);
-    combined.has = {
-      key: 'has',
+    combinedTags.has = {
+      key: FieldKey.HAS,
       name: 'Has property',
-      values: Object.keys(combined),
+      values: Object.keys(combinedTags).sort((a, b) => {
+        return a.toLowerCase().localeCompare(b.toLowerCase());
+      }),
       predefined: true,
+      kind: FieldKind.FIELD,
     };
 
-    return omit(combined, omitTags ?? []);
+    const list =
+      omitTags && omitTags.length > 0 ? omit(combinedTags, omitTags) : combinedTags;
+    return list;
   };
 
   return (
     <Measurements>
       {({measurements}) => (
-        <ClassNames>
-          {({css}) => (
-            <SmartSearchBar
-              hasRecentSearches
-              savedSearchType={SavedSearchType.EVENT}
-              onGetTagValues={getEventFieldValues}
-              supportedTags={getTagList(measurements)}
-              prepareQuery={query => {
-                // Prepare query string (e.g. strip special characters like negation operator)
-                return query.replace(SEARCH_SPECIAL_CHARS_REGEXP, '');
-              }}
-              maxSearchItems={maxSearchItems}
-              excludeEnvironment
-              dropdownClassName={css`
-                max-height: ${maxMenuHeight ?? 300}px;
-                overflow-y: auto;
-              `}
-              {...props}
-            />
-          )}
-        </ClassNames>
+        <SmartSearchBar
+          hasRecentSearches
+          savedSearchType={SavedSearchType.EVENT}
+          onGetTagValues={getEventFieldValues}
+          supportedTags={getTagList(measurements)}
+          prepareQuery={query => {
+            // Prepare query string (e.g. strip special characters like negation operator)
+            return query.replace(SEARCH_SPECIAL_CHARS_REGEXP, '');
+          }}
+          maxSearchItems={maxSearchItems}
+          excludedTags={[FieldKey.ENVIRONMENT, FieldKey.TOTAL_COUNT]}
+          maxMenuHeight={maxMenuHeight ?? 300}
+          customPerformanceMetrics={customMeasurements}
+          {...props}
+        />
       )}
     </Measurements>
   );

@@ -29,27 +29,24 @@ from sentry.ownership.grammar import Rule as GrammarRule
 from sentry.ownership.grammar import dump_schema
 from sentry.plugins.base import Notification
 from sentry.tasks.digests import deliver_digest
-from sentry.testutils.cases import SlackActivityNotificationTest
+from sentry.testutils.cases import PerformanceIssueTestCase, SlackActivityNotificationTest
+from sentry.testutils.helpers.notifications import TEST_ISSUE_OCCURRENCE
 from sentry.testutils.helpers.slack import get_attachment, send_notification
+from sentry.testutils.silo import region_silo_test
 from sentry.types.integrations import ExternalProviders
 from sentry.utils import json
 
 
-class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
-    @responses.activate
-    @mock.patch("sentry.notifications.notify.notify", side_effect=send_notification)
-    def test_issue_alert_user(self, mock_func):
-        """Test that issue alerts are sent to a Slack user."""
-
-        event = self.store_event(
-            data={"message": "Hello world", "level": "error"}, project_id=self.project.id
-        )
+@region_silo_test
+class SlackIssueAlertNotificationTest(SlackActivityNotificationTest, PerformanceIssueTestCase):
+    def setUp(self):
+        super().setUp()
         action_data = {
             "id": "sentry.mail.actions.NotifyEmailAction",
             "targetType": "Member",
             "targetIdentifier": str(self.user.id),
         }
-        rule = Rule.objects.create(
+        self.rule = Rule.objects.create(
             project=self.project,
             label="ja rule",
             data={
@@ -58,8 +55,17 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
             },
         )
 
+    @responses.activate
+    @mock.patch("sentry.notifications.notify.notify", side_effect=send_notification)
+    def test_issue_alert_user(self, mock_func):
+        """Test that issue alerts are sent to a Slack user."""
+
+        event = self.store_event(
+            data={"message": "Hello world", "level": "error"}, project_id=self.project.id
+        )
+
         notification = AlertRuleNotification(
-            Notification(event=event, rule=rule), ActionTargetType.MEMBER, self.user.id
+            Notification(event=event, rule=self.rule), ActionTargetType.MEMBER, self.user.id
         )
 
         with self.tasks():
@@ -70,7 +76,50 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         assert attachment["title"] == "Hello world"
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/alerts/?referrer=alert-rule-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/alerts/?referrer=issue_alert-slack-user|Notification Settings>"
+        )
+
+    @responses.activate
+    @mock.patch("sentry.notifications.notify.notify", side_effect=send_notification)
+    def test_performance_issue_alert_user(self, mock_func):
+        """Test that performance issue alerts are sent to a Slack user."""
+
+        event = self.create_performance_issue()
+
+        notification = AlertRuleNotification(
+            Notification(event=event, rule=self.rule), ActionTargetType.MEMBER, self.user.id
+        )
+        with self.tasks():
+            notification.send()
+
+        attachment, text = get_attachment()
+        self.assert_performance_issue_attachments(
+            attachment, self.project.slug, "issue_alert-slack-user", "alerts"
+        )
+
+    @responses.activate
+    @mock.patch(
+        "sentry.eventstore.models.GroupEvent.occurrence",
+        return_value=TEST_ISSUE_OCCURRENCE,
+        new_callable=mock.PropertyMock,
+    )
+    @mock.patch("sentry.notifications.notify.notify", side_effect=send_notification)
+    def test_generic_issue_alert_user(self, mock_func, occurrence):
+        """Test that generic issue alerts are sent to a Slack user."""
+        event = self.store_event(
+            data={"message": "Hellboy's world", "level": "error"}, project_id=self.project.id
+        )
+        event = event.for_group(event.groups[0])
+
+        notification = AlertRuleNotification(
+            Notification(event=event, rule=self.rule), ActionTargetType.MEMBER, self.user.id
+        )
+        with self.tasks():
+            notification.send()
+
+        attachment, text = get_attachment()
+        self.assert_generic_issue_attachments(
+            attachment, self.project.slug, "issue_alert-slack-user", "alerts"
         )
 
     @responses.activate
@@ -84,22 +133,9 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         event = self.store_event(
             data={"message": "Hello world", "level": "error"}, project_id=self.project.id
         )
-        action_data = {
-            "id": "sentry.mail.actions.NotifyEmailAction",
-            "targetType": "Member",
-            "targetIdentifier": str(self.user.id),
-        }
-        rule = Rule.objects.create(
-            project=self.project,
-            label="ja rule",
-            data={
-                "match": "all",
-                "actions": [action_data],
-            },
-        )
 
         notification = AlertRuleNotification(
-            Notification(event=event, rule=rule), ActionTargetType.MEMBER, self.user.id
+            Notification(event=event, rule=self.rule), ActionTargetType.MEMBER, self.user.id
         )
 
         with self.tasks():
@@ -128,6 +164,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
                 "actions": [action_data],
             },
         )
+        ProjectOwnership.objects.create(project_id=self.project.id, fallthrough=True)
 
         notification = AlertRuleNotification(
             Notification(event=event, rule=rule), ActionTargetType.ISSUE_OWNERS, self.user.id
@@ -141,7 +178,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         assert attachment["title"] == "Hello world"
         assert (
             attachment["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/account/notifications/alerts/?referrer=alert-rule-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/account/notifications/alerts/?referrer=issue_alert-slack-user|Notification Settings>"
         )
 
     @responses.activate
@@ -231,7 +268,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         assert attachments[0]["title"] == "Hello world"
         assert (
             attachments[0]["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/{self.organization.slug}/teams/{self.team.slug}/notifications/?referrer=alert-rule-slack-team|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/{self.organization.slug}/teams/{self.team.slug}/notifications/?referrer=issue_alert-slack-team|Notification Settings>"
         )
 
     @responses.activate
@@ -397,7 +434,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         assert attachments[0]["title"] == "Hello world"
         assert (
             attachments[0]["footer"]
-            == f"{self.project.slug} | <http://testserver/settings/{self.organization.slug}/teams/{self.team.slug}/notifications/?referrer=alert-rule-slack-team|Notification Settings>"
+            == f"{self.project.slug} | <http://testserver/settings/{self.organization.slug}/teams/{self.team.slug}/notifications/?referrer=issue_alert-slack-team|Notification Settings>"
         )
 
     @responses.activate
@@ -406,7 +443,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         """Test that issue alerts are sent to a team in Slack."""
         # add a second organization
         org = self.create_organization(owner=self.user)
-        OrganizationIntegration.objects.create(organization=org, integration=self.integration)
+        OrganizationIntegration.objects.create(organization_id=org.id, integration=self.integration)
 
         # add a second user to the team so we can be sure it's only
         # sent once (to the team, and not to each individual user)
@@ -476,7 +513,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         assert attachments[0]["title"] == "Hello world"
         assert (
             attachments[0]["footer"]
-            == f"{self.project.slug} | <http://example.com/settings/{self.organization.slug}/teams/{self.team.slug}/notifications/?referrer=alert-rule-slack-team|Notification Settings>"
+            == f"{self.project.slug} | <http://example.com/settings/{self.organization.slug}/teams/{self.team.slug}/notifications/?referrer=issue_alert-slack-team|Notification Settings>"
         )
 
     @responses.activate
@@ -556,7 +593,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         assert attachments[0]["title"] == "Hello world"
         assert (
             attachments[0]["footer"]
-            == f"{project2.slug} | <http://example.com/settings/{self.organization.slug}/teams/{self.team.slug}/notifications/?referrer=alert-rule-slack-team|Notification Settings>"
+            == f"{project2.slug} | <http://example.com/settings/{self.organization.slug}/teams/{self.team.slug}/notifications/?referrer=issue_alert-slack-team|Notification Settings>"
         )
 
     @responses.activate
@@ -664,7 +701,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         assert attachments[0]["title"] == "Hello world"
         assert (
             attachments[0]["footer"]
-            == f"{self.project.slug} | <http://example.com/settings/account/notifications/alerts/?referrer=alert-rule-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://example.com/settings/account/notifications/alerts/?referrer=issue_alert-slack-user|Notification Settings>"
         )
 
         # check that user2 got a notification as well
@@ -675,7 +712,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         assert attachments[0]["title"] == "Hello world"
         assert (
             attachments[0]["footer"]
-            == f"{self.project.slug} | <http://example.com/settings/account/notifications/alerts/?referrer=alert-rule-slack-user|Notification Settings>"
+            == f"{self.project.slug} | <http://example.com/settings/account/notifications/alerts/?referrer=issue_alert-slack-user|Notification Settings>"
         )
 
     @responses.activate
@@ -691,6 +728,7 @@ class SlackUnassignedNotificationTest(SlackActivityNotificationTest):
         digests.enabled.return_value = True
 
         rule = Rule.objects.create(project=self.project, label="my rule")
+        ProjectOwnership.objects.create(project_id=self.project.id, fallthrough=True)
         event = self.store_event(
             data={"message": "Hello world", "level": "error"}, project_id=self.project.id
         )

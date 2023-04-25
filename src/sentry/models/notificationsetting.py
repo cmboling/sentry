@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 from sentry.db.models import (
@@ -5,8 +6,10 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
+    control_silo_only_model,
     sane_repr,
 )
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
 from sentry.notifications.manager import NotificationsManager
 from sentry.notifications.types import (
     NotificationScopeType,
@@ -19,6 +22,7 @@ from sentry.notifications.types import (
 from sentry.types.integrations import ExternalProviders, get_provider_name
 
 
+@control_silo_only_model
 class NotificationSetting(Model):
     """
     A setting of when to notify a user or team about activity within the app.
@@ -54,15 +58,19 @@ class NotificationSetting(Model):
         ),
         null=False,
     )
-    # user_id, organization_id, project_id
     scope_identifier = BoundedBigIntegerField(null=False)
     target = FlexibleForeignKey(
         "sentry.Actor", db_index=True, unique=False, null=False, on_delete=models.CASCADE
+    )
+    team_id = HybridCloudForeignKey("sentry.Team", null=True, db_index=True, on_delete="CASCADE")
+    user = FlexibleForeignKey(
+        settings.AUTH_USER_MODEL, null=True, db_index=True, on_delete=models.CASCADE
     )
     provider = BoundedPositiveIntegerField(
         choices=(
             (ExternalProviders.EMAIL, "email"),
             (ExternalProviders.SLACK, "slack"),
+            (ExternalProviders.MSTEAMS, "msteams"),
         ),
         null=False,
     )
@@ -77,7 +85,10 @@ class NotificationSetting(Model):
             (NotificationSettingTypes.QUOTA_ERRORS, "quotaErrors"),
             (NotificationSettingTypes.QUOTA_TRANSACTIONS, "quotaTransactions"),
             (NotificationSettingTypes.QUOTA_ATTACHMENTS, "quotaAttacments"),
+            (NotificationSettingTypes.QUOTA_REPLAYS, "quotaReplays"),
             (NotificationSettingTypes.QUOTA_WARNINGS, "quotaWarnings"),
+            (NotificationSettingTypes.QUOTA_SPEND_ALLOCATIONS, "quotaSpendAllocations"),
+            (NotificationSettingTypes.SPIKE_PROTECTION, "spikeProtection"),
         ),
         null=False,
     )

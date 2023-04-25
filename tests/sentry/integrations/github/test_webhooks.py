@@ -4,16 +4,16 @@ from uuid import uuid4
 
 from django.utils import timezone
 
-from sentry import options
-from sentry.models import Commit, CommitAuthor, GroupLink, Integration, PullRequest, Repository
-from sentry.testutils import APITestCase
-
-from .testutils import (
+from fixtures.github import (
     PULL_REQUEST_CLOSED_EVENT_EXAMPLE,
     PULL_REQUEST_EDITED_EVENT_EXAMPLE,
     PULL_REQUEST_OPENED_EVENT_EXAMPLE,
     PUSH_EVENT_EXAMPLE_INSTALLATION,
 )
+from sentry import options
+from sentry.models import Commit, CommitAuthor, GroupLink, Integration, PullRequest, Repository
+from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
 class WebhookTest(APITestCase):
@@ -64,6 +64,7 @@ class WebhookTest(APITestCase):
         assert response.status_code == 401
 
 
+@region_silo_test
 class PushEventWebhookTest(APITestCase):
     @patch("sentry.integrations.github.client.get_jwt")
     def test_simple(self, mock_get_jwt):
@@ -269,6 +270,7 @@ class PushEventWebhookTest(APITestCase):
         assert len(commit_list) == 0
 
 
+@region_silo_test
 class PullRequestEventWebhook(APITestCase):
     def test_opened(self):
         project = self.project  # force creation

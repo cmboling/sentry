@@ -1,20 +1,41 @@
-import * as React from 'react';
 import styled from '@emotion/styled';
-
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import overflowEllipsisLeft from 'sentry/styles/overflowEllipsisLeft';
 
 type Props = {
   children: React.ReactNode;
   className?: string;
   ['data-test-id']?: string;
+  /**
+   * Change which side of the text is elided.
+   * Default: 'right'
+   *
+   * BROWSER COMPAT:
+   * When set to `left` the intention is for something like: `...xample.com/foo/`
+   * In Chrome & Firefox this is what happens.
+   *
+   * In Safari (July 2022) you will see this instead: `...https://example.co`.
+   *
+   * See: https://stackoverflow.com/a/24800788
+   */
   ellipsisDirection?: 'left' | 'right';
   isParagraph?: boolean;
 };
 
 const TextOverflow = styled(
-  ({isParagraph, className, children, ['data-test-id']: dataTestId}: Props) => {
+  ({
+    children,
+    className,
+    ellipsisDirection,
+    isParagraph,
+    ['data-test-id']: dataTestId,
+  }: Props) => {
     const Component = isParagraph ? 'p' : 'div';
+    if (ellipsisDirection === 'left') {
+      return (
+        <Component className={className} data-test-id={dataTestId}>
+          <bdi>{children}</bdi>
+        </Component>
+      );
+    }
     return (
       <Component className={className} data-test-id={dataTestId}>
         {children}
@@ -22,7 +43,13 @@ const TextOverflow = styled(
     );
   }
 )`
-  ${p => (p.ellipsisDirection === 'right' ? overflowEllipsis : overflowEllipsisLeft)};
+  ${p => p.theme.overflowEllipsis}
+  ${p =>
+    p.ellipsisDirection === 'left' &&
+    `
+      direction: rtl;
+      text-align: left;
+    `};
   width: auto;
   line-height: 1.2;
 `;

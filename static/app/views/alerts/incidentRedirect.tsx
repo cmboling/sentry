@@ -1,49 +1,54 @@
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useState} from 'react';
 import {browserHistory, RouteComponentProps} from 'react-router';
 
-import {Client} from 'sentry/api';
 import LoadingError from 'sentry/components/loadingError';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {Organization} from 'sentry/types';
-import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import useApi from 'sentry/utils/useApi';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 
-import {alertDetailsLink, fetchIncident} from './utils';
+import {fetchIncident} from './utils/apiCalls';
+import {alertDetailsLink} from './utils';
 
 type Props = {
-  api: Client;
   organization: Organization;
-} & RouteComponentProps<{alertId: string; orgId: string}, {}>;
+} & RouteComponentProps<{alertId: string}, {}>;
 
-function IncidentDetails({organization, params}: Props) {
+/**
+ * Reirects from an incident to the incident's metric alert details page
+ */
+function IncidentRedirect({organization, params}: Props) {
   const api = useApi();
   const [hasError, setHasError] = useState(false);
 
-  const track = () => {
-    trackAdvancedAnalyticsEvent('alert_details.viewed', {
+  const track = useCallback(() => {
+    trackAnalytics('alert_details.viewed', {
       organization,
       alert_id: parseInt(params.alertId, 10),
     });
-  };
+  }, [organization, params.alertId]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setHasError(false);
 
     try {
-      const incident = await fetchIncident(api, params.orgId, params.alertId);
-      browserHistory.replace({
-        pathname: alertDetailsLink(organization, incident),
-        query: {alert: incident.identifier},
-      });
+      const incident = await fetchIncident(api, organization.slug, params.alertId);
+      browserHistory.replace(
+        normalizeUrl({
+          pathname: alertDetailsLink(organization, incident),
+          query: {alert: incident.identifier},
+        })
+      );
     } catch (err) {
       setHasError(true);
     }
-  };
+  }, [setHasError, api, params.alertId, organization]);
 
   useEffect(() => {
     fetchData();
     track();
-  }, []);
+  }, [fetchData, track]);
 
   if (hasError) {
     return <LoadingError onRetry={fetchData} />;
@@ -52,4 +57,4 @@ function IncidentDetails({organization, params}: Props) {
   return <LoadingIndicator />;
 }
 
-export default IncidentDetails;
+export default IncidentRedirect;

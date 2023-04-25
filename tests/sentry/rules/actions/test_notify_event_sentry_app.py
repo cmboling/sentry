@@ -1,16 +1,18 @@
 from unittest.mock import patch
 
-from exam import before
+import pytest
 from rest_framework import serializers
 
-from sentry.rules.actions.notify_event_sentry_app import NotifyEventSentryAppAction
+from sentry.rules.actions.sentry_apps import NotifyEventSentryAppAction
 from sentry.tasks.sentry_apps import notify_sentry_app
 from sentry.testutils.cases import RuleTestCase
+from sentry.testutils.silo import exempt_from_silo_limits, region_silo_test
 
 ValidationError = serializers.ValidationError
 SENTRY_APP_ALERT_ACTION = "sentry.rules.actions.notify_event_sentry_app.NotifyEventSentryAppAction"
 
 
+@region_silo_test(stable=True)
 class NotifyEventSentryAppActionTest(RuleTestCase):
     rule_cls = NotifyEventSentryAppAction
     schema_data = [
@@ -18,7 +20,7 @@ class NotifyEventSentryAppActionTest(RuleTestCase):
         {"name": "summary", "value": "circle triangle square"},
     ]
 
-    @before
+    @pytest.fixture(autouse=True)
     def create_schema(self):
         self.schema = {"elements": [self.create_alert_rule_action_schema()]}
 
@@ -51,7 +53,7 @@ class NotifyEventSentryAppActionTest(RuleTestCase):
         assert futures[0].kwargs["sentry_app"].id == self.app.id
         assert futures[0].kwargs["schema_defined_settings"] == self.schema_data
 
-    @patch("sentry.mediators.sentry_app_components.Preparer.run")
+    @patch("sentry.sentry_apps.SentryAppComponentPreparer.run")
     def test_sentry_app_actions(self, mock_sentry_app_component_preparer):
         event = self.get_event()
 
@@ -102,25 +104,26 @@ class NotifyEventSentryAppActionTest(RuleTestCase):
 
         # Test no Sentry App Installation uuid
         rule = self.get_rule(data={"hasSchemaFormConfig": True})
-        with self.assertRaises(ValidationError):
+        with pytest.raises(ValidationError):
             rule.self_validate()
 
         # Test invalid Sentry App Installation uuid
         rule = self.get_rule(
             data={"hasSchemaFormConfig": True, "sentryAppInstallationUuid": "not_a_real_uuid"}
         )
-        with self.assertRaises(ValidationError):
+        with pytest.raises(ValidationError):
             rule.self_validate()
 
         # Test deleted Sentry App Installation uuid
         test_install = self.create_sentry_app_installation(
             organization=self.organization, slug="test-application"
         )
-        test_install.delete()
+        with exempt_from_silo_limits():
+            test_install.delete()
         rule = self.get_rule(
             data={"hasSchemaFormConfig": True, "sentryAppInstallationUuid": test_install.uuid}
         )
-        with self.assertRaises(ValidationError):
+        with pytest.raises(ValidationError):
             rule.self_validate()
 
         # Test Sentry Apps without alert rules configured in their schema
@@ -131,14 +134,14 @@ class NotifyEventSentryAppActionTest(RuleTestCase):
         rule = self.get_rule(
             data={"hasSchemaFormConfig": True, "sentryAppInstallationUuid": test_install.uuid}
         )
-        with self.assertRaises(ValidationError):
+        with pytest.raises(ValidationError):
             rule.self_validate()
 
         # Test without providing settings in rule data
         rule = self.get_rule(
             data={"hasSchemaFormConfig": True, "sentryAppInstallationUuid": self.install.uuid}
         )
-        with self.assertRaises(ValidationError):
+        with pytest.raises(ValidationError):
             rule.self_validate()
 
         # Test without providing required field values
@@ -149,7 +152,7 @@ class NotifyEventSentryAppActionTest(RuleTestCase):
                 "settings": [{"name": "title", "value": "Lamy"}],
             }
         )
-        with self.assertRaises(ValidationError):
+        with pytest.raises(ValidationError):
             rule.self_validate()
 
         # Test with additional fields not on the app's schema
@@ -164,7 +167,7 @@ class NotifyEventSentryAppActionTest(RuleTestCase):
                 ],
             }
         )
-        with self.assertRaises(ValidationError):
+        with pytest.raises(ValidationError):
             rule.self_validate()
 
         # Test with invalid value on Select field
@@ -179,5 +182,28 @@ class NotifyEventSentryAppActionTest(RuleTestCase):
                 ],
             }
         )
-        with self.assertRaises(ValidationError):
+        with pytest.raises(ValidationError):
             rule.self_validate()
+
+    def test_render_label(self):
+        event = self.get_event()
+
+        self.app = self.create_sentry_app(
+            organization=event.organization,
+            name="Test Application",
+            is_alertable=True,
+            schema=self.schema,
+        )
+
+        self.install = self.create_sentry_app_installation(
+            slug="test-application", organization=event.organization
+        )
+
+        rule = self.get_rule(
+            data={
+                "sentryAppInstallationUuid": self.install.uuid,
+                "settings": self.schema_data,
+            }
+        )
+
+        assert rule.render_label() == "Create Task with App"

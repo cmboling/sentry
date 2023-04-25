@@ -2,6 +2,7 @@ from django.urls import reverse
 
 from sentry.models import Team
 from sentry.testutils import SCIMTestCase
+from sentry.testutils.silo import region_silo_test
 
 CREATE_TEAM_POST_DATA = {
     "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
@@ -10,6 +11,7 @@ CREATE_TEAM_POST_DATA = {
 }
 
 
+@region_silo_test
 class SCIMGroupIndexTests(SCIMTestCase):
     def test_group_index_empty(self):
         url = reverse("sentry-api-0-organization-scim-team-index", args=[self.organization.slug])
@@ -43,6 +45,7 @@ class SCIMGroupIndexTests(SCIMTestCase):
         assert Team.objects.filter(id=team_id).exists()
         assert Team.objects.get(id=team_id).slug == "test-scimv2"
         assert Team.objects.get(id=team_id).name == "Test SCIMv2"
+        assert Team.objects.get(id=team_id).idp_provisioned
         assert len(Team.objects.get(id=team_id).member_set) == 0
 
     def test_scim_team_index_populated(self):

@@ -2,17 +2,17 @@ import {Component, Fragment} from 'react';
 import {createPortal} from 'react-dom';
 import {Manager, Popper, Reference} from 'react-popper';
 import styled from '@emotion/styled';
-import * as PopperJS from 'popper.js';
 
 import MenuHeader from 'sentry/components/actions/menuHeader';
-import CheckboxFancy from 'sentry/components/checkboxFancy/checkboxFancy';
-import {GetActorPropsFn} from 'sentry/components/dropdownMenu';
+import Checkbox from 'sentry/components/checkbox';
+import {GetActorPropsFn} from 'sentry/components/deprecatedDropdownMenu';
 import MenuItem from 'sentry/components/menuItem';
 import {TeamSelection} from 'sentry/components/performance/teamKeyTransactionsManager';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {Project, Team} from 'sentry/types';
+import {space} from 'sentry/styles/space';
+import {Organization, Project, Team} from 'sentry/types';
 import {defined} from 'sentry/utils';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import {MAX_TEAM_KEY_TRANSACTIONS} from 'sentry/utils/performance/constants';
 
 export type TitleProps = Partial<ReturnType<GetActorPropsFn>> & {
@@ -28,9 +28,10 @@ type Props = {
   handleToggleKeyTransaction: (selection: TeamSelection) => void;
   isLoading: boolean;
   keyedTeams: Set<string> | null;
+  organization: Organization;
   project: Project;
   teams: Team[];
-  title: React.ComponentClass<TitleProps>;
+  title: React.ComponentType<TitleProps>;
   transactionName: string;
   initialValue?: number;
 };
@@ -40,19 +41,6 @@ type State = {
 };
 
 class TeamKeyTransaction extends Component<Props, State> {
-  constructor(props: Props) {
-    super(props);
-
-    let portal = document.getElementById('team-key-transaction-portal');
-    if (!portal) {
-      portal = document.createElement('div');
-      portal.setAttribute('id', 'team-key-transaction-portal');
-      document.body.appendChild(portal);
-    }
-    this.portalEl = portal;
-    this.menuEl = null;
-  }
-
   state: State = {
     isOpen: false,
   };
@@ -68,11 +56,9 @@ class TeamKeyTransaction extends Component<Props, State> {
 
   componentWillUnmount() {
     document.removeEventListener('click', this.handleClickOutside, true);
-    this.portalEl.remove();
   }
 
-  private portalEl: Element;
-  private menuEl: Element | null;
+  private menuEl: Element | null = null;
 
   handleClickOutside = (event: MouseEvent) => {
     if (!this.menuEl) {
@@ -92,7 +78,13 @@ class TeamKeyTransaction extends Component<Props, State> {
   };
 
   toggleSelection = (enabled: boolean, selection: TeamSelection) => () => {
-    const {handleToggleKeyTransaction} = this.props;
+    const {handleToggleKeyTransaction, organization} = this.props;
+    const {action} = selection;
+    trackAnalytics('performance_views.team_key_transaction.set', {
+      organization,
+      action,
+    });
+
     return enabled ? handleToggleKeyTransaction(selection) : undefined;
   };
 
@@ -149,11 +141,15 @@ class TeamKeyTransaction extends Component<Props, State> {
             <DropdownMenuHeader first>
               {t('My Teams with Access')}
               <ActionItem>
-                <CheckboxFancy
-                  isDisabled={!isMyTeamsEnabled}
-                  isChecked={teams.length === keyedTeams.size}
-                  isIndeterminate={teams.length > keyedTeams.size && keyedTeams.size > 0}
-                  onClick={myTeamsHandler}
+                <Checkbox
+                  aria-label={t('My Teams with Access')}
+                  disabled={!isMyTeamsEnabled}
+                  checked={
+                    teams.length > keyedTeams.size && keyedTeams.size > 0
+                      ? 'indeterminate'
+                      : teams.length === keyedTeams.size
+                  }
+                  onChange={myTeamsHandler}
                 />
               </ActionItem>
             </DropdownMenuHeader>
@@ -208,16 +204,17 @@ class TeamKeyTransaction extends Component<Props, State> {
       return null;
     }
 
-    const modifiers: PopperJS.Modifiers = {
-      hide: {
+    const modifiers = [
+      {
+        name: 'hide',
         enabled: false,
       },
-      preventOverflow: {
-        padding: 10,
+      {
+        name: 'preventOverflow',
         enabled: true,
-        boundariesElement: 'viewport',
+        options: {padding: 10},
       },
-    };
+    ];
 
     return createPortal(
       <Popper placement="top" modifiers={modifiers}>
@@ -234,7 +231,7 @@ class TeamKeyTransaction extends Component<Props, State> {
           </DropdownWrapper>
         )}
       </Popper>,
-      this.portalEl
+      document.body
     );
   }
 
@@ -275,6 +272,8 @@ type ItemProps = {
 };
 
 function TeamKeyTransactionItem({team, isKeyed, disabled, onSelect}: ItemProps) {
+  const id = `team_key_transaction_${team.slug}`;
+
   return (
     <DropdownMenuItem
       key={team.slug}
@@ -282,13 +281,18 @@ function TeamKeyTransactionItem({team, isKeyed, disabled, onSelect}: ItemProps) 
       onSelect={onSelect}
       stopPropagation
     >
-      <MenuItemContent>
+      <MenuItemContent id={id}>
         {team.slug}
         <ActionItem>
           {!defined(isKeyed) ? null : disabled ? (
             t('Max %s', MAX_TEAM_KEY_TRANSACTIONS)
           ) : (
-            <CheckboxFancy isChecked={isKeyed} />
+            <Checkbox
+              onClick={e => e.stopPropagation()}
+              aria-labelledby={id}
+              checked={isKeyed}
+              onChange={onSelect}
+            />
           )}
         </ActionItem>
       </MenuItemContent>
@@ -403,6 +407,8 @@ const MenuItemContent = styled('div')`
 `;
 
 const ActionItem = styled('span')`
+  display: flex;
+  align-items: center;
   min-width: ${space(2)};
   margin-left: ${space(1)};
 `;

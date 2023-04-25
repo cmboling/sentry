@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from symbolic import SymbolicError, normalize_debug_id
 
 from sentry import ratelimits, roles
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint, ProjectReleasePermission
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.paginator import OffsetPaginator
@@ -69,7 +70,7 @@ def has_download_permission(request, project):
 
     try:
         current_role = (
-            OrganizationMember.objects.filter(organization=organization, user=request.user)
+            OrganizationMember.objects.filter(organization=organization, user_id=request.user.id)
             .values_list("role", flat=True)
             .get()
         )
@@ -79,6 +80,7 @@ def has_download_permission(request, project):
     return roles.get(current_role).priority >= roles.get(required_role).priority
 
 
+@region_silo_endpoint
 class DebugFilesEndpoint(ProjectEndpoint):
     permission_classes = (ProjectReleasePermission,)
 
@@ -243,6 +245,7 @@ class DebugFilesEndpoint(ProjectEndpoint):
         return upload_from_request(request, project=project)
 
 
+@region_silo_endpoint
 class UnknownDebugFilesEndpoint(ProjectEndpoint):
     permission_classes = (ProjectReleasePermission,)
 
@@ -252,6 +255,7 @@ class UnknownDebugFilesEndpoint(ProjectEndpoint):
         return Response({"missing": missing})
 
 
+@region_silo_endpoint
 class AssociateDSymFilesEndpoint(ProjectEndpoint):
     permission_classes = (ProjectReleasePermission,)
 
@@ -270,6 +274,7 @@ def find_missing_chunks(organization, chunks):
     return list(set(chunks) - owned)
 
 
+@region_silo_endpoint
 class DifAssembleEndpoint(ProjectEndpoint):
     permission_classes = (ProjectReleasePermission,)
 
@@ -387,6 +392,7 @@ class DifAssembleEndpoint(ProjectEndpoint):
         return Response(file_response, status=200)
 
 
+@region_silo_endpoint
 class SourceMapsEndpoint(ProjectEndpoint):
     permission_classes = (ProjectReleasePermission,)
 
@@ -433,14 +439,22 @@ class SourceMapsEndpoint(ProjectEndpoint):
 
         def serialize_results(results):
             file_count_map = get_artifact_counts([r["id"] for r in results])
+            # In case we didn't find a file count for a specific release, we will return -1, signaling to the
+            # frontend that this release doesn't have one or more ReleaseFile.
             return serialize(
-                [expose_release(r, file_count_map.get(r["id"], 0)) for r in results], request.user
+                [expose_release(r, file_count_map.get(r["id"], -1)) for r in results], request.user
+            )
+
+        sort_by = request.GET.get("sortBy", "-date_added")
+        if sort_by not in {"-date_added", "date_added"}:
+            return Response(
+                {"error": "You can either sort via 'date_added' or '-date_added'"}, status=400
             )
 
         return self.paginate(
             request=request,
             queryset=queryset,
-            order_by="-date_added",
+            order_by=sort_by,
             paginator_cls=OffsetPaginator,
             default_per_page=10,
             on_results=serialize_results,

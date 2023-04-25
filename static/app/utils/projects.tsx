@@ -1,13 +1,13 @@
-import * as React from 'react';
+import {Component} from 'react';
 import memoize from 'lodash/memoize';
 import partition from 'lodash/partition';
 import uniqBy from 'lodash/uniqBy';
 
-import ProjectActions from 'sentry/actions/projectActions';
 import {Client} from 'sentry/api';
 import ProjectsStore from 'sentry/stores/projectsStore';
 import {AvatarProject, Project} from 'sentry/types';
 import {defined} from 'sentry/utils';
+import getDaysSinceDate from 'sentry/utils/getDaysSinceDate';
 import parseLinkHeader from 'sentry/utils/parseLinkHeader';
 import RequestError from 'sentry/utils/requestError/requestError';
 import withApi from 'sentry/utils/withApi';
@@ -61,7 +61,7 @@ type RenderProps = {
    * Calls API and searches for project, accepts a callback function with signature:
    * fn(searchTerm, {append: bool})
    */
-  onSearch: (searchTerm: string, {append: boolean}) => void;
+  onSearch: (searchTerm: string, options: {append: boolean}) => void;
 
   /**
    * We want to make sure that at the minimum, we return a list of objects with only `slug`
@@ -108,13 +108,18 @@ type Props = {
   limit?: number;
 
   /**
+   * List of project ids to look for summaries for, this can be from `props.projects`,
+   * otherwise fetch from API
+   */
+  projectIds?: number[];
+  /**
    * List of slugs to look for summaries for, this can be from `props.projects`,
    * otherwise fetch from API
    */
   slugs?: string[];
 } & DefaultProps;
 
-class BaseProjects extends React.Component<Props, State> {
+class BaseProjects extends Component<Props, State> {
   static defaultProps: DefaultProps = {
     passthroughPlaceholderProject: true,
   };
@@ -132,10 +137,12 @@ class BaseProjects extends React.Component<Props, State> {
   };
 
   componentDidMount() {
-    const {slugs} = this.props;
+    const {slugs, projectIds} = this.props;
 
-    if (!!slugs?.length) {
+    if (slugs?.length) {
       this.loadSpecificProjects();
+    } else if (projectIds?.length) {
+      this.loadSpecificProjectsFromIds();
     } else {
       this.loadAllProjects();
     }
@@ -160,7 +167,7 @@ class BaseProjects extends React.Component<Props, State> {
       return;
     }
 
-    if (!!slugs?.length) {
+    if (slugs?.length) {
       // Extract the requested projects from the store based on props.slugs
       const projectsMap = this.getProjectsMap(projects);
       const projectsFromStore = slugs.map(slug => projectsMap.get(slug)).filter(defined);
@@ -178,6 +185,13 @@ class BaseProjects extends React.Component<Props, State> {
    */
   getProjectsMap: (projects: Project[]) => Map<string, Project> = memoize(
     projects => new Map(projects.map(project => [project.slug, project]))
+  );
+
+  /**
+   * Memoized function that returns a `Map<project.id, project>`
+   */
+  getProjectsIdMap: (projects: Project[]) => Map<number, Project> = memoize(
+    projects => new Map(projects.map(project => [parseInt(project.id, 10), project]))
   );
 
   /**
@@ -212,6 +226,34 @@ class BaseProjects extends React.Component<Props, State> {
     }
 
     this.fetchSpecificProjects();
+  };
+
+  /**
+   * When `props.projectIds` is included, identifies if we already
+   * have summaries them, otherwise fetches all projects from API
+   */
+  loadSpecificProjectsFromIds = () => {
+    const {projectIds, projects} = this.props;
+
+    const projectsMap = this.getProjectsIdMap(projects);
+
+    // Split projectIds into projects that are in store and not in store
+    // (so we can request projects not in store)
+    const [inStore, notInStore] = partition(projectIds, id => projectsMap.has(id));
+
+    if (notInStore.length) {
+      this.loadAllProjects();
+      return;
+    }
+
+    // Get the actual summaries of projects that are in store
+    const projectsFromStore = inStore.map(id => projectsMap.get(id)).filter(defined);
+
+    this.setState({
+      // set initiallyLoaded if any projects were fetched from store
+      initiallyLoaded: !!inStore.length,
+      projectsFromStore,
+    });
   };
 
   /**
@@ -252,7 +294,7 @@ class BaseProjects extends React.Component<Props, State> {
       .map(slug =>
         projectsMap.has(slug)
           ? projectsMap.get(slug)
-          : !!passthroughPlaceholderProject
+          : passthroughPlaceholderProject
           ? {slug}
           : null
       )
@@ -485,12 +527,22 @@ async function fetchProjects(
 
   // populate the projects store if all projects were fetched
   if (allProjects) {
-    ProjectActions.loadProjects(data);
+    ProjectsStore.loadInitialData(data);
   }
 
   return {
     results: data,
     hasMore,
     nextCursor,
+  };
+}
+
+export function getAnalyicsDataForProject(project: Project) {
+  return {
+    project_has_replay: project.hasReplays,
+    project_has_minified_stack_trace: project.hasMinifiedStackTrace,
+    project_age: getDaysSinceDate(project.dateCreated),
+    project_id: parseInt(project.id, 10),
+    project_platform: project.platform,
   };
 }

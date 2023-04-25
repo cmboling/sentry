@@ -5,16 +5,16 @@ from rest_framework.exceptions import ParseError
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry import features, search
-from sentry.api.base import EnvironmentMixin
+from sentry import search
+from sentry.api.base import EnvironmentMixin, region_silo_endpoint
 from sentry.api.bases import NoProjects, OrganizationEventsEndpointBase
 from sentry.api.event_search import parse_search_query
 from sentry.api.helpers.group_index import build_query_params_from_request
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models.group import GroupSerializer
-from sentry.snuba import discover
 
 
+@region_silo_endpoint
 class OrganizationEventsMetaEndpoint(OrganizationEventsEndpointBase):
     def get(self, request: Request, organization) -> Response:
         try:
@@ -22,15 +22,14 @@ class OrganizationEventsMetaEndpoint(OrganizationEventsEndpointBase):
         except NoProjects:
             return Response({"count": 0})
 
+        dataset = self.get_dataset(request)
+
         with self.handle_query_errors():
-            result = discover.query(
+            result = dataset.query(
                 selected_columns=["count()"],
                 params=params,
                 query=request.query_params.get("query"),
                 referrer="api.organization-events-meta",
-                use_snql=features.has(
-                    "organizations:discover-use-snql", organization, actor=request.user
-                ),
             )
 
         return Response({"count": result["data"][0]["count"]})
@@ -39,6 +38,7 @@ class OrganizationEventsMetaEndpoint(OrganizationEventsEndpointBase):
 UNESCAPED_QUOTE_RE = re.compile('(?<!\\\\)"')
 
 
+@region_silo_endpoint
 class OrganizationEventsRelatedIssuesEndpoint(OrganizationEventsEndpointBase, EnvironmentMixin):
     def get(self, request: Request, organization) -> Response:
         try:
@@ -77,6 +77,8 @@ class OrganizationEventsRelatedIssuesEndpoint(OrganizationEventsEndpointBase, En
                     query_kwargs["search_filters"].extend(parsed_terms)
                 else:
                     query_kwargs["search_filters"] = parsed_terms
+
+                query_kwargs["actor"] = request.user
 
             with sentry_sdk.start_span(op="discover.endpoint", description="issue_search"):
                 results = search.query(**query_kwargs)

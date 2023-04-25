@@ -1,6 +1,8 @@
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class ProjectFiltersTest(APITestCase):
     endpoint = "sentry-api-0-project-filters"
 
@@ -14,6 +16,6 @@ class ProjectFiltersTest(APITestCase):
         project = self.create_project(name="Bar", slug="bar", teams=[team])
 
         project.update_option("filters:browser-extension", "0")
-        response = self.get_valid_response(org.slug, project.slug)
+        response = self.get_success_response(org.slug, project.slug)
 
         self.insta_snapshot(response.data)

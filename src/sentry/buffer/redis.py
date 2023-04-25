@@ -60,8 +60,11 @@ class RedisBuffer(Buffer):
 
     def validate(self):
         try:
-            with self.cluster.all() as client:
+            # wait 10 seconds at most
+            with self.cluster.all(timeout=10) as client:
                 client.ping()
+            # disconnect after successfull service validation
+            self.cluster.disconnect_pools()
         except Exception as e:
             raise InvalidConfiguration(str(e))
 
@@ -262,6 +265,9 @@ class RedisBuffer(Buffer):
         for key in batch_keys:
             self._process_single_incr(key)
 
+    def _process(self, model, columns, filters, extra=None, signal_only=None):
+        return super().process(model, columns, filters, extra, signal_only)
+
     def _process_single_incr(self, key):
         client = self.cluster.get_routing_client()
         lock_key = self._make_lock_key(key)
@@ -295,7 +301,7 @@ class RedisBuffer(Buffer):
             # XXX(py3): Note that ``import_string`` explicitly wants a str in
             # python2, so we'll decode (for python3) and then translate back to
             # a byte string (in python2) for import_string.
-            model = import_string(str(values.pop("m").decode("utf-8")))  # NOQA
+            model = import_string(str(values.pop("m").decode("utf-8")))
 
             if values["f"].startswith(b"{"):
                 filters = self._load_values(json.loads(values.pop("f").decode("utf-8")))
@@ -318,6 +324,6 @@ class RedisBuffer(Buffer):
                 elif k == "s":
                     signal_only = bool(int(v))  # Should be 1 if set
 
-            super().process(model, incr_values, filters, extra_values, signal_only)
+            self._process(model, incr_values, filters, extra_values, signal_only)
         finally:
             client.delete(lock_key)

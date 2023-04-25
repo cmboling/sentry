@@ -1,213 +1,152 @@
-import {PureComponent} from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
+import {Fragment, useMemo} from 'react';
+// eslint-disable-next-line no-restricted-imports
 import styled from '@emotion/styled';
 import {Observer} from 'mobx-react';
 
-import Alert from 'sentry/components/alert';
+import {Alert} from 'sentry/components/alert';
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
-import List from 'sentry/components/list';
-import ListItem from 'sentry/components/list/listItem';
 import {Panel} from 'sentry/components/panels';
 import SearchBar from 'sentry/components/searchBar';
-import {t, tct, tn} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {t, tn} from 'sentry/locale';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import {EventTransaction} from 'sentry/types/event';
 import {objectIsEmpty} from 'sentry/utils';
-import * as QuickTraceContext from 'sentry/utils/performance/quickTrace/quickTraceContext';
-import {TraceError} from 'sentry/utils/performance/quickTrace/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import {QuickTraceContext} from 'sentry/utils/performance/quickTrace/quickTraceContext';
+import {
+  TraceError,
+  TracePerformanceIssue,
+} from 'sentry/utils/performance/quickTrace/types';
 import withOrganization from 'sentry/utils/withOrganization';
 
-import * as AnchorLinkManager from './anchorLinkManager';
 import Filter from './filter';
+import TraceErrorList from './traceErrorList';
 import TraceView from './traceView';
 import {ParsedTraceType} from './types';
-import {parseTrace, scrollToSpan} from './utils';
+import {getCumulativeAlertLevelFromErrors, parseTrace} from './utils';
 import WaterfallModel from './waterfallModel';
 
 type Props = {
   event: EventTransaction;
   organization: Organization;
-} & WithRouterProps;
-
-type State = {
-  parsedTrace: ParsedTraceType;
-  waterfallModel: WaterfallModel;
+  affectedSpanIds?: string[];
 };
 
-class SpansInterface extends PureComponent<Props, State> {
-  state: State = {
-    parsedTrace: parseTrace(this.props.event),
-    waterfallModel: new WaterfallModel(this.props.event),
-  };
-
-  static getDerivedStateFromProps(props: Readonly<Props>, state: State): State {
-    if (state.waterfallModel.isEvent(props.event)) {
-      return state;
-    }
-
-    return {
-      ...state,
-      parsedTrace: parseTrace(props.event),
-      waterfallModel: new WaterfallModel(props.event),
-    };
+function TraceErrorAlerts({
+  isLoading,
+  errors,
+  parsedTrace,
+  performanceIssues,
+}: {
+  errors: TraceError[] | undefined;
+  isLoading: boolean;
+  parsedTrace: ParsedTraceType;
+  performanceIssues: TracePerformanceIssue[] | undefined;
+}) {
+  if (isLoading) {
+    return null;
   }
 
-  handleSpanFilter = (searchQuery: string) => {
-    const {waterfallModel} = this.state;
+  const traceErrors: (TraceError | TracePerformanceIssue)[] = [];
+  if (errors && errors.length > 0) {
+    traceErrors.push(...errors);
+  }
+  if (performanceIssues && performanceIssues.length > 0) {
+    traceErrors.push(...performanceIssues);
+  }
+  if (traceErrors.length === 0) {
+    return null;
+  }
+
+  // This is intentional as unbalanced string formatters in `tn()` are problematic
+  const label =
+    traceErrors.length === 1
+      ? t('There is an issue associated with this transaction event.')
+      : tn(
+          `There are %s issues associated with this transaction event.`,
+          `There are %s issues associated with this transaction event.`,
+          traceErrors.length
+        );
+
+  return (
+    <AlertContainer>
+      <Alert type={getCumulativeAlertLevelFromErrors(errors)}>
+        <ErrorLabel>{label}</ErrorLabel>
+
+        <TraceErrorList trace={parsedTrace} errors={traceErrors} onClickSpan={() => {}} />
+      </Alert>
+    </AlertContainer>
+  );
+}
+
+function SpansInterface({event, affectedSpanIds, organization}: Props) {
+  const parsedTrace = useMemo(() => parseTrace(event), [event]);
+
+  const waterfallModel = useMemo(
+    () => new WaterfallModel(event, affectedSpanIds),
+    [event, affectedSpanIds]
+  );
+
+  const handleSpanFilter = (searchQuery: string) => {
     waterfallModel.querySpanSearch(searchQuery);
+
+    trackAnalytics('performance_views.event_details.search_query', {
+      organization,
+    });
   };
 
-  renderTraceErrorsAlert({
-    isLoading,
-    errors,
-    parsedTrace,
-  }: {
-    errors: TraceError[] | undefined;
-    isLoading: boolean;
-    parsedTrace: ParsedTraceType;
-  }) {
-    if (isLoading) {
-      return null;
-    }
-
-    if (!errors || errors.length <= 0) {
-      return null;
-    }
-
-    // This is intentional as unbalanced string formatters in `tn()` are problematic
-    const label =
-      errors.length === 1
-        ? t('There is an error event associated with this transaction event.')
-        : tn(
-            `There are %s error events associated with this transaction event.`,
-            `There are %s error events associated with this transaction event.`,
-            errors.length
-          );
-
-    // mapping from span ids to the span op and the number of errors in that span
-    const errorsMap: {
-      [spanId: string]: {errorsCount: number; operation: string};
-    } = {};
-
-    errors.forEach(error => {
-      if (!errorsMap[error.span]) {
-        // first check of the error belongs to the root span
-        if (parsedTrace.rootSpanID === error.span) {
-          errorsMap[error.span] = {
-            operation: parsedTrace.op,
-            errorsCount: 0,
-          };
-        } else {
-          // since it does not belong to the root span, check if it belongs
-          // to one of the other spans in the transaction
-          const span = parsedTrace.spans.find(s => s.span_id === error.span);
-          if (!span?.op) {
-            return;
-          }
-
-          errorsMap[error.span] = {
-            operation: span.op,
-            errorsCount: 0,
-          };
-        }
-      }
-
-      errorsMap[error.span].errorsCount++;
-    });
-
-    return (
-      <AlertContainer>
-        <Alert type="error" showIcon>
-          <ErrorLabel>{label}</ErrorLabel>
-          <AnchorLinkManager.Consumer>
-            {({scrollToHash}) => (
-              <List symbol="bullet">
-                {Object.entries(errorsMap).map(([spanId, {operation, errorsCount}]) => (
-                  <ListItem key={spanId}>
-                    {tct('[errors] [link]', {
-                      errors: tn('%s error in ', '%s errors in ', errorsCount),
-                      link: (
-                        <ErrorLink
-                          onClick={scrollToSpan(
-                            spanId,
-                            scrollToHash,
-                            this.props.location
-                          )}
-                        >
-                          {operation}
-                        </ErrorLink>
-                      ),
-                    })}
-                  </ListItem>
-                ))}
-              </List>
-            )}
-          </AnchorLinkManager.Consumer>
-        </Alert>
-      </AlertContainer>
-    );
-  }
-
-  render() {
-    const {event, organization} = this.props;
-    const {parsedTrace, waterfallModel} = this.state;
-
-    return (
-      <Container hasErrors={!objectIsEmpty(event.errors)}>
-        <QuickTraceContext.Consumer>
-          {quickTrace => (
-            <AnchorLinkManager.Provider>
-              {this.renderTraceErrorsAlert({
-                isLoading: quickTrace?.isLoading || false,
-                errors: quickTrace?.currentEvent?.errors,
-                parsedTrace,
-              })}
+  return (
+    <Container hasErrors={!objectIsEmpty(event.errors)}>
+      <QuickTraceContext.Consumer>
+        {quickTrace => (
+          <Fragment>
+            <TraceErrorAlerts
+              isLoading={quickTrace?.isLoading ?? false}
+              errors={quickTrace?.currentEvent?.errors}
+              performanceIssues={quickTrace?.currentEvent?.performance_issues}
+              parsedTrace={parsedTrace}
+            />
+            <Observer>
+              {() => {
+                return (
+                  <Search>
+                    <Filter
+                      operationNameCounts={waterfallModel.operationNameCounts}
+                      operationNameFilter={waterfallModel.operationNameFilters}
+                      toggleOperationNameFilter={waterfallModel.toggleOperationNameFilter}
+                    />
+                    <StyledSearchBar
+                      defaultQuery=""
+                      query={waterfallModel.searchQuery || ''}
+                      placeholder={t('Search for spans')}
+                      onSearch={handleSpanFilter}
+                    />
+                  </Search>
+                );
+              }}
+            </Observer>
+            <Panel>
               <Observer>
                 {() => {
                   return (
-                    <Search>
-                      <Filter
-                        operationNameCounts={waterfallModel.operationNameCounts}
-                        operationNameFilter={waterfallModel.operationNameFilters}
-                        toggleOperationNameFilter={
-                          waterfallModel.toggleOperationNameFilter
-                        }
-                        toggleAllOperationNameFilters={
-                          waterfallModel.toggleAllOperationNameFilters
-                        }
-                      />
-                      <StyledSearchBar
-                        defaultQuery=""
-                        query={waterfallModel.searchQuery || ''}
-                        placeholder={t('Search for spans')}
-                        onSearch={this.handleSpanFilter}
-                      />
-                    </Search>
+                    <TraceView
+                      performanceIssues={quickTrace?.currentEvent?.performance_issues}
+                      waterfallModel={waterfallModel}
+                      organization={organization}
+                    />
                   );
                 }}
               </Observer>
-              <Panel>
-                <Observer>
-                  {() => {
-                    return (
-                      <TraceView
-                        waterfallModel={waterfallModel}
-                        organization={organization}
-                      />
-                    );
-                  }}
-                </Observer>
-                <GuideAnchorWrapper>
-                  <GuideAnchor target="span_tree" position="bottom" />
-                </GuideAnchorWrapper>
-              </Panel>
-            </AnchorLinkManager.Provider>
-          )}
-        </QuickTraceContext.Consumer>
-      </Container>
-    );
-  }
+              <GuideAnchorWrapper>
+                <GuideAnchor target="span_tree" position="bottom" />
+              </GuideAnchorWrapper>
+            </Panel>
+          </Fragment>
+        )}
+      </QuickTraceContext.Consumer>
+    </Container>
+  );
 }
 
 const GuideAnchorWrapper = styled('div')`
@@ -222,23 +161,18 @@ const Container = styled('div')<{hasErrors: boolean}>`
     `
   padding: ${space(2)} 0;
 
-  @media (min-width: ${p.theme.breakpoints[0]}) {
+  @media (min-width: ${p.theme.breakpoints.small}) {
     padding: ${space(3)} 0 0 0;
   }
   `}
 `;
 
-const ErrorLink = styled('a')`
-  color: ${p => p.theme.textColor};
-  :hover {
-    color: ${p => p.theme.textColor};
-  }
-`;
-
 const Search = styled('div')`
-  display: flex;
+  display: grid;
+  gap: ${space(2)};
+  grid-template-columns: max-content 1fr;
   width: 100%;
-  margin-bottom: ${space(1)};
+  margin-bottom: ${space(2)};
 `;
 
 const StyledSearchBar = styled(SearchBar)`
@@ -253,4 +187,4 @@ const ErrorLabel = styled('div')`
   margin-bottom: ${space(1)};
 `;
 
-export default withRouter(withOrganization(SpansInterface));
+export const Spans = withOrganization(SpansInterface);

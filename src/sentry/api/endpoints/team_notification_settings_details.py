@@ -2,13 +2,16 @@ from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.team import TeamEndpoint
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models.notification_setting import NotificationSettingsSerializer
 from sentry.api.validators.notifications import validate, validate_type_option
 from sentry.models import NotificationSetting, Team
+from sentry.services.hybrid_cloud.actor import RpcActor
 
 
+@region_silo_endpoint
 class TeamNotificationSettingsDetailsEndpoint(TeamEndpoint):
     """
     This Notification Settings endpoint is the generic way to interact with the
@@ -66,6 +69,8 @@ class TeamNotificationSettingsDetailsEndpoint(TeamEndpoint):
         """
 
         notification_settings = validate(request.data, team=team)
-        NotificationSetting.objects.update_settings_bulk(notification_settings, team=team)
+        NotificationSetting.objects.update_settings_bulk(
+            notification_settings, actor=RpcActor.from_orm_team(team)
+        )
 
         return Response(status=status.HTTP_204_NO_CONTENT)

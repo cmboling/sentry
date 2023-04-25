@@ -2,26 +2,40 @@ import {Fragment, useMemo, useState} from 'react';
 import styled from '@emotion/styled';
 import pick from 'lodash/pick';
 
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import _EventsRequest from 'sentry/components/charts/eventsRequest';
 import {getInterval} from 'sentry/components/charts/utils';
 import Truncate from 'sentry/components/truncate';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {defined} from 'sentry/utils';
 import DiscoverQuery, {TableDataRow} from 'sentry/utils/discover/discoverQuery';
-import {getAggregateAlias, WebVital} from 'sentry/utils/discover/fields';
-import {useMEPSettingContext} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
+import {getAggregateAlias} from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
+import {
+  canUseMetricsData,
+  useMEPSettingContext,
+} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {usePageError} from 'sentry/utils/performance/contexts/pageError';
 import {VitalData} from 'sentry/utils/performance/vitals/vitalsCardsDiscoverQuery';
 import {decodeList} from 'sentry/utils/queryString';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
+import {useLocation} from 'sentry/utils/useLocation';
 import withApi from 'sentry/utils/withApi';
+import {
+  DisplayModes,
+  transactionSummaryRouteWithQuery,
+} from 'sentry/views/performance/transactionSummary/utils';
+import {
+  createUnnamedTransactionsDiscoverTarget,
+  UNPARAMETERIZED_TRANSACTION,
+} from 'sentry/views/performance/utils';
 import {vitalDetailRouteWithQuery} from 'sentry/views/performance/vitalDetail/utils';
 import {_VitalChart} from 'sentry/views/performance/vitalDetail/vitalChart';
 
 import {excludeTransaction} from '../../utils';
 import {VitalBar} from '../../vitalsCards';
+import Accordion from '../components/accordion';
 import {GenericPerformanceWidget} from '../components/performanceWidget';
 import SelectableList, {
   GrowLink,
@@ -86,8 +100,9 @@ export function transformFieldsWithStops(props: {
 }
 
 export function VitalWidget(props: PerformanceWidgetProps) {
+  const location = useLocation();
   const mepSetting = useMEPSettingContext();
-  const {ContainerActions, eventView, organization, location} = props;
+  const {ContainerActions, eventView, organization, InteractiveTitle} = props;
   const [selectedListIndex, setSelectListIndex] = useState<number>(0);
   const field = props.fields[0];
   const pageError = usePageError();
@@ -110,6 +125,11 @@ export function VitalWidget(props: PerformanceWidgetProps) {
           }));
 
           _eventView.sorts = [{kind: 'desc', field: sortField}];
+          if (canUseMetricsData(organization)) {
+            _eventView.additionalConditions.setFilterValues('!transaction', [
+              UNPARAMETERIZED_TRANSACTION,
+            ]);
+          }
 
           _eventView.fields = [
             {field: 'transaction'},
@@ -123,8 +143,8 @@ export function VitalWidget(props: PerformanceWidgetProps) {
             <DiscoverQuery
               {...provided}
               eventView={_eventView}
-              location={props.location}
-              limit={3}
+              location={location}
+              limit={4}
               cursor="0:0:1"
               noPagination
               queryExtras={getMEPQueryParams(mepSetting)}
@@ -133,6 +153,7 @@ export function VitalWidget(props: PerformanceWidgetProps) {
         },
         transform: transformDiscoverToList,
       }),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       [props.eventView, fieldsList, props.organization.slug, mepSetting.memoizationKey]
     ),
     chart: useMemo<QueryDefinition<DataType, WidgetDataResult>>(
@@ -148,9 +169,23 @@ export function VitalWidget(props: PerformanceWidgetProps) {
             provided.widgetData.list.data[selectedListIndex]?.transaction as string,
           ]);
 
+          let requestProps = pick(provided, eventsRequestQueryProps);
+          const showOnlyPoorVitals = organization.features.includes(
+            'performance-new-widget-designs'
+          );
+          if (showOnlyPoorVitals) {
+            const yAxis = Array.isArray(requestProps.yAxis)
+              ? requestProps.yAxis
+              : [requestProps.yAxis];
+            const poorVitalsAxis = yAxis.find(vitalField => vitalField?.includes('poor'));
+            requestProps = {
+              ...requestProps,
+              yAxis: poorVitalsAxis ? [poorVitalsAxis] : requestProps.yAxis,
+            };
+          }
           return (
             <EventsRequest
-              {...pick(provided, eventsRequestQueryProps)}
+              {...requestProps}
               limit={1}
               currentSeriesNames={[sortField]}
               includePrevious={false}
@@ -173,6 +208,7 @@ export function VitalWidget(props: PerformanceWidgetProps) {
         },
         transform: transformEventsRequestToVitals,
       }),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       [props.chartSetting, selectedListIndex, mepSetting.memoizationKey]
     ),
   };
@@ -188,9 +224,143 @@ export function VitalWidget(props: PerformanceWidgetProps) {
     // TODO(k-fish): Add analytics.
   };
 
+  const assembleAccordionItems = provided =>
+    getItems(provided).map(item => ({header: item, content: getChart(provided)}));
+
+  const getChart = provided =>
+    function () {
+      return (
+        <_VitalChart
+          {...provided.widgetData.chart}
+          {...provided}
+          field={field}
+          vitalFields={vitalFields}
+          grid={provided.grid}
+        />
+      );
+    };
+
+  const getItems = provided =>
+    provided.widgetData.list.data.slice(0, 3).map(
+      listItem =>
+        function () {
+          const transaction = (listItem?.transaction as string | undefined) ?? '';
+          const _eventView = eventView.clone();
+
+          const initialConditions = new MutableSearch(_eventView.query);
+          initialConditions.addFilterValues('transaction', [transaction]);
+
+          const vital = settingToVital[props.chartSetting];
+
+          _eventView.query = initialConditions.formatString();
+
+          const isUnparameterizedRow = transaction === UNPARAMETERIZED_TRANSACTION;
+          const transactionTarget = transactionSummaryRouteWithQuery({
+            orgSlug: props.organization.slug,
+            projectID: listItem['project.id'],
+            transaction: listItem.transaction,
+            query: _eventView.generateQueryStringObject(),
+            display: DisplayModes.VITALS,
+          });
+
+          const target = isUnparameterizedRow
+            ? createUnnamedTransactionsDiscoverTarget({
+                organization,
+                location,
+              })
+            : transactionTarget;
+
+          const data = {
+            [settingToVital[props.chartSetting]]: getVitalDataForListItem(
+              listItem,
+              vital,
+              false
+            ),
+          };
+
+          return (
+            <Fragment>
+              <GrowLink to={target}>
+                <Truncate value={transaction} maxLength={40} />
+              </GrowLink>
+              <VitalBarCell>
+                <VitalBar
+                  isLoading={provided.widgetData.list?.isLoading}
+                  vital={settingToVital[props.chartSetting]}
+                  data={data}
+                  showBar
+                  showDurationDetail={false}
+                  showDetail={false}
+                  showTooltip
+                  barHeight={20}
+                />
+              </VitalBarCell>
+              {!props.withStaticFilters && (
+                <ListClose
+                  setSelectListIndex={setSelectListIndex}
+                  onClick={() =>
+                    excludeTransaction(listItem.transaction, {
+                      eventView: props.eventView,
+                      location,
+                    })
+                  }
+                />
+              )}
+            </Fragment>
+          );
+        }
+    );
+
+  const visualizations = organization.features.includes('performance-new-widget-designs')
+    ? [
+        {
+          component: provided => (
+            <Accordion
+              expandedIndex={selectedListIndex}
+              setExpandedIndex={setSelectListIndex}
+              items={assembleAccordionItems(provided)}
+            />
+          ),
+          // accordion items height + chart height
+          height: 120 + props.chartHeight,
+          noPadding: true,
+        },
+      ]
+    : [
+        {
+          component: provided => (
+            <_VitalChart
+              {...provided.widgetData.chart}
+              {...provided}
+              field={field}
+              vitalFields={vitalFields}
+              grid={provided.grid}
+            />
+          ),
+          height: props.chartHeight,
+        },
+        {
+          component: provided => (
+            <SelectableList
+              selectedIndex={selectedListIndex}
+              setSelectedIndex={setSelectListIndex}
+              items={getItems(provided)}
+            />
+          ),
+          height: 30,
+          noPadding: true,
+        },
+      ];
+
   return (
     <GenericPerformanceWidget<DataType>
       {...props}
+      InteractiveTitle={
+        InteractiveTitle
+          ? provided => <InteractiveTitle {...provided.widgetData.chart} />
+          : null
+      }
+      location={location}
       Subtitle={provided => {
         const listItem = provided.widgetData.list?.data[selectedListIndex];
 
@@ -201,7 +371,11 @@ export function VitalWidget(props: PerformanceWidgetProps) {
         const vital = settingToVital[props.chartSetting];
 
         const data = {
-          [settingToVital[props.chartSetting]]: getVitalDataForListItem(listItem, vital),
+          [settingToVital[props.chartSetting]]: getVitalDataForListItem(
+            listItem,
+            vital,
+            false
+          ),
         };
 
         return (
@@ -233,103 +407,36 @@ export function VitalWidget(props: PerformanceWidgetProps) {
               <Button
                 onClick={handleViewAllClick}
                 to={target}
-                size="small"
+                size="sm"
                 data-test-id="view-all-button"
               >
                 {t('View All')}
               </Button>
             </div>
-            <ContainerActions {...provided.widgetData.chart} />
+            {ContainerActions && <ContainerActions {...provided.widgetData.chart} />}
           </Fragment>
         );
       }}
       Queries={Queries}
-      Visualizations={[
-        {
-          component: provided => (
-            <_VitalChart
-              {...provided.widgetData.chart}
-              {...provided}
-              field={field}
-              vitalFields={vitalFields}
-              grid={provided.grid}
-            />
-          ),
-          height: props.chartHeight,
-        },
-        {
-          component: provided => (
-            <SelectableList
-              selectedIndex={selectedListIndex}
-              setSelectedIndex={setSelectListIndex}
-              items={provided.widgetData.list.data.map(listItem => () => {
-                const transaction = listItem?.transaction as string;
-                const _eventView = eventView.clone();
-
-                const initialConditions = new MutableSearch(_eventView.query);
-                initialConditions.addFilterValues('transaction', [transaction]);
-
-                const vital = settingToVital[props.chartSetting];
-
-                _eventView.query = initialConditions.formatString();
-
-                const target = vitalDetailRouteWithQuery({
-                  orgSlug: organization.slug,
-                  query: _eventView.generateQueryStringObject(),
-                  vitalName: vital,
-                  projectID: decodeList(location.query.project),
-                });
-
-                const data = {
-                  [settingToVital[props.chartSetting]]: getVitalDataForListItem(
-                    listItem,
-                    vital
-                  ),
-                };
-
-                return (
-                  <Fragment>
-                    <GrowLink to={target}>
-                      <Truncate value={transaction} maxLength={40} />
-                    </GrowLink>
-                    <VitalBarCell>
-                      <VitalBar
-                        isLoading={provided.widgetData.list?.isLoading}
-                        vital={settingToVital[props.chartSetting]}
-                        data={data}
-                        showBar
-                        showDurationDetail={false}
-                        showDetail={false}
-                        showTooltip
-                        barHeight={20}
-                      />
-                    </VitalBarCell>
-                    <ListClose
-                      setSelectListIndex={setSelectListIndex}
-                      onClick={() => excludeTransaction(listItem.transaction, props)}
-                    />
-                  </Fragment>
-                );
-              })}
-            />
-          ),
-          height: 124,
-          noPadding: true,
-        },
-      ]}
+      Visualizations={visualizations}
     />
   );
 }
 
-function getVitalDataForListItem(listItem: TableDataRow, vital: WebVital) {
+function getVitalDataForListItem(
+  listItem: TableDataRow,
+  vital: WebVital,
+  useAggregateAlias: boolean = true
+) {
   const vitalFields = getVitalFields(vital);
-
+  const transformFieldName = (fieldName: string) =>
+    useAggregateAlias ? getAggregateAlias(fieldName) : fieldName;
   const poorData: number =
-    (listItem[getAggregateAlias(vitalFields.poorCountField)] as number) || 0;
+    (listItem[transformFieldName(vitalFields.poorCountField)] as number) || 0;
   const mehData: number =
-    (listItem[getAggregateAlias(vitalFields.mehCountField)] as number) || 0;
+    (listItem[transformFieldName(vitalFields.mehCountField)] as number) || 0;
   const goodData: number =
-    (listItem[getAggregateAlias(vitalFields.goodCountField)] as number) || 0;
+    (listItem[transformFieldName(vitalFields.goodCountField)] as number) || 0;
   const _vitalData = {
     poor: poorData,
     meh: mehData,

@@ -1,10 +1,12 @@
 from datetime import timedelta
+from functools import cached_property
+from unittest import mock
 from unittest.mock import Mock, call, patch
 
+import pytest
 import pytz
 from django.urls import reverse
 from django.utils import timezone
-from exam import fixture, patcher
 from freezegun import freeze_time
 
 from sentry.incidents.logic import (
@@ -29,11 +31,17 @@ from sentry.incidents.tasks import (
     handle_trigger_action,
     send_subscriber_notifications,
 )
-from sentry.sentry_metrics.utils import resolve, resolve_tag_key
-from sentry.snuba.models import QueryDatasets
+from sentry.sentry_metrics.configuration import UseCaseKey
+from sentry.sentry_metrics.utils import resolve_tag_key, resolve_tag_value
+from sentry.services.hybrid_cloud.user import user_service
+from sentry.snuba.dataset import Dataset
+from sentry.snuba.models import SnubaQuery
 from sentry.snuba.subscriptions import create_snuba_query, create_snuba_subscription
 from sentry.testutils import TestCase
+from sentry.testutils.silo import region_silo_test
 from sentry.utils.http import absolute_uri
+
+pytestmark = pytest.mark.sentry_metrics
 
 
 class BaseIncidentActivityTest:
@@ -42,8 +50,12 @@ class BaseIncidentActivityTest:
         return self.create_incident(title="hello")
 
 
+@region_silo_test(stable=True)
 class TestSendSubscriberNotifications(BaseIncidentActivityTest, TestCase):
-    send_async = patcher("sentry.utils.email.MessageBuilder.send_async")
+    @pytest.fixture(autouse=True)
+    def _setup_send_async_patch(self):
+        with mock.patch("sentry.utils.email.MessageBuilder.send_async") as self.send_async:
+            yield
 
     def test_simple(self):
         activity = create_incident_activity(
@@ -51,32 +63,33 @@ class TestSendSubscriberNotifications(BaseIncidentActivityTest, TestCase):
         )
         send_subscriber_notifications(activity.id)
         # User shouldn't receive an email for their own activity
-        self.send_async.assert_not_called()  # NOQA
+        assert self.send_async.call_count == 0
 
         self.send_async.reset_mock()
         non_member_user = self.create_user(email="non_member@test.com")
-        subscribe_to_incident(activity.incident, non_member_user)
+        subscribe_to_incident(activity.incident, non_member_user.id)
 
         member_user = self.create_user(email="member@test.com")
         self.create_member([self.team], user=member_user, organization=self.organization)
-        subscribe_to_incident(activity.incident, member_user)
+        subscribe_to_incident(activity.incident, member_user.id)
         send_subscriber_notifications(activity.id)
         self.send_async.assert_called_once_with([member_user.email])
         assert not IncidentSubscription.objects.filter(
-            incident=activity.incident, user=non_member_user
+            incident=activity.incident, user_id=non_member_user.id
         ).exists()
         assert IncidentSubscription.objects.filter(
-            incident=activity.incident, user=member_user
+            incident=activity.incident, user_id=member_user.id
         ).exists()
 
     def test_invalid_types(self):
         activity_type = IncidentActivityType.CREATED
         activity = create_incident_activity(self.incident, activity_type)
         send_subscriber_notifications(activity.id)
-        self.send_async.assert_not_called()  # NOQA
+        assert self.send_async.call_count == 0
         self.send_async.reset_mock()
 
 
+@region_silo_test(stable=True)
 class TestGenerateIncidentActivityEmail(BaseIncidentActivityTest, TestCase):
     @freeze_time()
     def test_simple(self):
@@ -91,6 +104,7 @@ class TestGenerateIncidentActivityEmail(BaseIncidentActivityTest, TestCase):
         assert message.context == build_activity_context(activity, recipient)
 
 
+@region_silo_test(stable=True)
 class TestBuildActivityContext(BaseIncidentActivityTest, TestCase):
     def run_test(
         self, activity, expected_username, expected_action, expected_comment, expected_recipient
@@ -125,7 +139,7 @@ class TestBuildActivityContext(BaseIncidentActivityTest, TestCase):
         recipient = self.create_user()
         self.run_test(
             activity,
-            expected_username=activity.user.name,
+            expected_username=user_service.get_user(user_id=activity.user_id).name,
             expected_action="left a comment",
             expected_comment=activity.comment,
             expected_recipient=recipient,
@@ -135,7 +149,7 @@ class TestBuildActivityContext(BaseIncidentActivityTest, TestCase):
         activity.previous_value = str(IncidentStatus.WARNING.value)
         self.run_test(
             activity,
-            expected_username=activity.user.name,
+            expected_username=user_service.get_user(user_id=activity.user_id).name,
             expected_action="changed status from %s to %s"
             % (INCIDENT_STATUS[IncidentStatus.WARNING], INCIDENT_STATUS[IncidentStatus.CLOSED]),
             expected_comment=activity.comment,
@@ -143,18 +157,22 @@ class TestBuildActivityContext(BaseIncidentActivityTest, TestCase):
         )
 
 
+@region_silo_test(stable=True)
 class HandleTriggerActionTest(TestCase):
-    metrics = patcher("sentry.incidents.tasks.metrics")
+    @pytest.fixture(autouse=True)
+    def _setup_metric_patch(self):
+        with mock.patch("sentry.incidents.tasks.metrics") as self.metrics:
+            yield
 
-    @fixture
+    @cached_property
     def alert_rule(self):
         return self.create_alert_rule()
 
-    @fixture
+    @cached_property
     def trigger(self):
         return create_alert_rule_trigger(self.alert_rule, CRITICAL_TRIGGER_LABEL, 100)
 
-    @fixture
+    @cached_property
     def action(self):
         return create_alert_rule_trigger_action(
             self.trigger, AlertRuleTriggerAction.Type.EMAIL, AlertRuleTriggerAction.TargetType.USER
@@ -200,11 +218,13 @@ class HandleTriggerActionTest(TestCase):
             )
 
 
+@region_silo_test(stable=True)
 class TestHandleSubscriptionMetricsLogger(TestCase):
-    @fixture
+    @cached_property
     def subscription(self):
         snuba_query = create_snuba_query(
-            QueryDatasets.METRICS,
+            SnubaQuery.Type.CRASH_RATE,
+            Dataset.Metrics,
             "hello",
             "count()",
             timedelta(minutes=1),
@@ -217,10 +237,7 @@ class TestHandleSubscriptionMetricsLogger(TestCase):
         timestamp = timezone.now().replace(tzinfo=pytz.utc, microsecond=0)
         data = {
             "count": 100,
-            resolve_tag_key(self.organization.id, "session.status"): resolve(
-                self.organization.id, "healthy"
-            ),
-            "value": 2.0,
+            "crashed": 2.0,
         }
         values = {"data": [data]}
         return {
@@ -244,7 +261,44 @@ class TestHandleSubscriptionMetricsLogger(TestCase):
                         "dataset": self.subscription.snuba_query.dataset,
                         "snuba_subscription_id": self.subscription.subscription_id,
                         "result": subscription_update,
-                        "aggregation_value": None,
+                        "aggregation_value": 98.0,
                     },
                 )
             ]
+
+
+@region_silo_test(stable=True)
+class TestHandleSubscriptionMetricsLoggerV1(TestHandleSubscriptionMetricsLogger):
+    """Repeat TestHandleSubscriptionMetricsLogger with old (v1) subscription updates.
+
+    This entire test class can be removed once all subscriptions have been migrated to v2
+    """
+
+    def build_subscription_update(self):
+        timestamp = timezone.now().replace(tzinfo=pytz.utc, microsecond=0)
+        values = {
+            "data": [
+                {
+                    resolve_tag_key(
+                        UseCaseKey.RELEASE_HEALTH, self.organization.id, "session.status"
+                    ): resolve_tag_value(UseCaseKey.RELEASE_HEALTH, self.organization.id, "init"),
+                    "value": 100.0,
+                },
+                {
+                    resolve_tag_key(
+                        UseCaseKey.RELEASE_HEALTH, self.organization.id, "session.status"
+                    ): resolve_tag_value(
+                        UseCaseKey.RELEASE_HEALTH, self.organization.id, "crashed"
+                    ),
+                    "value": 2.0,
+                },
+            ]
+        }
+        return {
+            "subscription_id": self.subscription.subscription_id,
+            "values": values,
+            "timestamp": timestamp,
+            "interval": 1,
+            "partition": 1,
+            "offset": 1,
+        }

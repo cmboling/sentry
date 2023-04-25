@@ -2,43 +2,79 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 import styled from '@emotion/styled';
 import {useResizeObserver} from '@react-aria/utils';
 
+import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {Panel as _Panel} from 'sentry/components/panels';
-import {Consumer as ReplayContextConsumer} from 'sentry/components/replays/replayContext';
-import useFullscreen from 'sentry/components/replays/useFullscreen';
-import Tooltip from 'sentry/components/tooltip';
-import {IconArrow} from 'sentry/icons';
-import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import BufferingOverlay from 'sentry/components/replays/player/bufferingOverlay';
+import FastForwardBadge from 'sentry/components/replays/player/fastForwardBadge';
+import {useReplayContext} from 'sentry/components/replays/replayContext';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import useOrganization from 'sentry/utils/useOrganization';
+
+import PlayerDOMAlert from './playerDOMAlert';
+
+type Dimensions = ReturnType<typeof useReplayContext>['dimensions'];
 
 interface Props {
   className?: string;
+  isPreview?: boolean;
 }
 
-type Dimensions = {height: number; width: number};
-type RootElem = null | HTMLDivElement;
-
-type RootProps = {
-  fastForwardSpeed: number;
-  flexibleHeight: boolean;
-  initRoot: (root: RootElem) => void;
-  videoDimensions: Dimensions;
-  className?: string;
-};
-
-function BasePlayerRoot({
-  className,
-  fastForwardSpeed,
-  flexibleHeight,
-  initRoot,
+function useVideoSizeLogger({
   videoDimensions,
-}: RootProps) {
+  windowDimensions,
+}: {
+  videoDimensions: Dimensions;
+  windowDimensions: Dimensions;
+}) {
+  const organization = useOrganization();
+  const [didLog, setDidLog] = useState<boolean>(false);
+  useEffect(() => {
+    if (didLog || (videoDimensions.width === 0 && videoDimensions.height === 0)) {
+      return;
+    }
+
+    const aspect_ratio =
+      videoDimensions.width > videoDimensions.height ? 'landscape' : 'portrait';
+
+    const scale = Math.min(
+      windowDimensions.width / videoDimensions.width,
+      windowDimensions.height / videoDimensions.height,
+      1
+    );
+    const scale_bucket = (Math.floor(scale * 10) * 10) as Parameters<
+      typeof trackAnalytics<'replay.render-player'>
+    >[1]['scale_bucket'];
+
+    trackAnalytics('replay.render-player', {
+      organization,
+      aspect_ratio,
+      scale_bucket,
+    });
+    setDidLog(true);
+  }, [organization, windowDimensions, videoDimensions, didLog]);
+}
+
+function BasePlayerRoot({className, isPreview = false}: Props) {
+  const {
+    dimensions: videoDimensions,
+    fastForwardSpeed,
+    initRoot,
+    isBuffering,
+    isFetching,
+  } = useReplayContext();
+
   const windowEl = useRef<HTMLDivElement>(null);
   const viewEl = useRef<HTMLDivElement>(null);
 
-  const [windowDimensions, setWindowDimensions] = useState<Dimensions>();
+  const [windowDimensions, setWindowDimensions] = useState<Dimensions>({
+    width: 0,
+    height: 0,
+  });
+
+  useVideoSizeLogger({videoDimensions, windowDimensions});
 
   // Create the `rrweb` instance which creates an iframe inside `viewEl`
-  useEffect(() => initRoot(viewEl.current), [viewEl.current]);
+  useEffect(() => initRoot(viewEl.current), [initRoot]);
 
   // Read the initial width & height where the player will be inserted, this is
   // so we can shrink the video into the available space.
@@ -46,10 +82,10 @@ function BasePlayerRoot({
   const updateWindowDimensions = useCallback(
     () =>
       setWindowDimensions({
-        width: windowEl.current?.clientWidth,
-        height: windowEl.current?.clientHeight,
-      } as Dimensions),
-    [windowEl.current]
+        width: windowEl.current?.clientWidth || 0,
+        height: windowEl.current?.clientHeight || 0,
+      }),
+    [setWindowDimensions]
   );
   useResizeObserver({ref: windowEl, onResize: updateWindowDimensions});
   // If your browser doesn't have ResizeObserver then set the size once.
@@ -63,13 +99,11 @@ function BasePlayerRoot({
   // Update the scale of the view whenever dimensions have changed.
   useEffect(() => {
     if (viewEl.current) {
-      const scale = flexibleHeight
-        ? Math.min((windowDimensions?.width || 0) / videoDimensions.width, 1)
-        : Math.min(
-            (windowDimensions?.width || 0) / videoDimensions.width,
-            (windowDimensions?.height || 0) / videoDimensions.height,
-            1
-          );
+      const scale = Math.min(
+        windowDimensions.width / videoDimensions.width,
+        windowDimensions.height / videoDimensions.height,
+        1
+      );
       if (scale) {
         viewEl.current.style['transform-origin'] = 'top left';
         viewEl.current.style.transform = `scale(${scale})`;
@@ -80,66 +114,75 @@ function BasePlayerRoot({
   }, [windowDimensions, videoDimensions]);
 
   return (
-    <Centered ref={windowEl} data-test-id="replay-window">
-      <div ref={viewEl} data-test-id="replay-view" className={className} />
-      {fastForwardSpeed ? (
-        <FastForwardBadge>
-          <FastForwardTooltip title={t('Fast forwarding')}>
-            <IconArrow size="sm" direction="right" />
-            {fastForwardSpeed}x
-          </FastForwardTooltip>
-        </FastForwardBadge>
-      ) : null}
-    </Centered>
+    <SizingWindow ref={windowEl} className="sentry-block">
+      <div ref={viewEl} className={className} />
+      {fastForwardSpeed ? <PositionedFastForward speed={fastForwardSpeed} /> : null}
+      {isBuffering ? <PositionedBuffering /> : null}
+      {isPreview ? null : <PlayerDOMAlert />}
+      {isFetching ? <PositionedLoadingIndicator /> : null}
+    </SizingWindow>
   );
 }
-
-const FastForwardBadge = styled('div')`
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  background: ${p => p.theme.purple100};
-  opacity: 0.75;
-  color: ${p => p.theme.textColor};
-  padding: ${space(0.5)} ${space(1)};
-  border-bottom-left-radius: ${p => p.theme.borderRadius};
-  border-top-right-radius: ${p => p.theme.borderRadius};
-`;
-
-const FastForwardTooltip = styled(Tooltip)`
-  display: grid;
-  grid-template-columns: max-content max-content;
-  gap: ${space(0.5)};
-  align-items: center;
-`;
-
-const Panel = styled(_Panel)<{isFullscreen: boolean}>`
-  /*
-  Disable the <Panel> styles when in fullscreen mode.
-  If we add/remove DOM nodes then the Replayer instance will have a stale iframe ref
-  */
-  ${p => (p.isFullscreen ? 'border: none; background: transparent;' : '')}
-
-  iframe {
-    /* Match the iframe corners to the <Panel> */
-    border-radius: ${p => p.theme.borderRadius};
-  }
-`;
 
 // Center the viewEl inside the windowEl.
 // This is useful when the window is inside a container that has large fixed
 // dimensions, like when in fullscreen mode.
-const Centered = styled('div')`
+// If the container has a dimensions that can grow/shrink then it is
+// important to also set `overflow: hidden` on the container, so that the
+// SizingWindow can calculate size as things shrink.
+const SizingWindow = styled('div')`
   width: 100%;
-  height: 100%;
-  background: transparent;
   display: flex;
-  align-items: center;
+  flex-grow: 1;
   justify-content: center;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+
+  background-color: ${p => p.theme.backgroundSecondary};
+  background-image: repeating-linear-gradient(
+      -145deg,
+      transparent,
+      transparent 8px,
+      ${p => p.theme.backgroundSecondary} 8px,
+      ${p => p.theme.backgroundSecondary} 11px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 15px,
+      ${p => p.theme.gray100} 15px,
+      ${p => p.theme.gray100} 16px
+    );
+`;
+
+const PositionedFastForward = styled(FastForwardBadge)`
+  position: absolute;
+  left: 0;
+  bottom: 0;
+`;
+
+const PositionedBuffering = styled(BufferingOverlay)`
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+`;
+
+const PositionedLoadingIndicator = styled(LoadingIndicator)`
+  position: absolute;
 `;
 
 // Base styles, to make the Replayer instance work
 const PlayerRoot = styled(BasePlayerRoot)`
+  .replayer-wrapper {
+    user-select: none;
+  }
+
+  .replayer-wrapper > .replayer-mouse {
+    pointer-events: none;
+  }
   .replayer-wrapper > .replayer-mouse-tail {
     position: absolute;
     pointer-events: none;
@@ -148,6 +191,10 @@ const PlayerRoot = styled(BasePlayerRoot)`
   /* Override default user-agent styles */
   .replayer-wrapper > iframe {
     border: none;
+    background: white;
+
+    /* Set pointer-events to make it easier to right-click & inspect */
+    pointer-events: initial !important;
   }
 `;
 
@@ -230,22 +277,4 @@ const SentryPlayerRoot = styled(PlayerRoot)`
   }
 `;
 
-export default function ReplayPlayer({className}: Props) {
-  const {isFullscreen} = useFullscreen();
-
-  return (
-    <ReplayContextConsumer>
-      {({initRoot, dimensions, fastForwardSpeed}) => (
-        <Panel isFullscreen={isFullscreen}>
-          <SentryPlayerRoot
-            className={className}
-            fastForwardSpeed={fastForwardSpeed}
-            flexibleHeight={!isFullscreen}
-            initRoot={initRoot}
-            videoDimensions={dimensions}
-          />
-        </Panel>
-      )}
-    </ReplayContextConsumer>
-  );
-}
+export default SentryPlayerRoot;

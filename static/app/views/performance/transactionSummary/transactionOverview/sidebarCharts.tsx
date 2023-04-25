@@ -1,9 +1,7 @@
-import * as React from 'react';
-import {browserHistory, InjectedRouter, withRouter, WithRouterProps} from 'react-router';
+import {browserHistory} from 'react-router';
 import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 import color from 'color';
-import {Location} from 'history';
 
 import ChartZoom from 'sentry/components/charts/chartZoom';
 import MarkPoint from 'sentry/components/charts/components/markPoint';
@@ -18,36 +16,35 @@ import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilte
 import Placeholder from 'sentry/components/placeholder';
 import QuestionTooltip from 'sentry/components/questionTooltip';
 import {IconWarning} from 'sentry/icons';
-import {t, tct} from 'sentry/locale';
+import {t} from 'sentry/locale';
 import {Organization} from 'sentry/types';
 import {getUtcToLocalDateObject} from 'sentry/utils/dates';
 import {tooltipFormatter} from 'sentry/utils/discover/charts';
 import EventView from 'sentry/utils/discover/eventView';
+import {aggregateOutputType} from 'sentry/utils/discover/fields';
 import {QueryError} from 'sentry/utils/discover/genericDiscoverQuery';
-import {
-  formatAbbreviatedNumber,
-  formatFloat,
-  formatPercentage,
-} from 'sentry/utils/formatters';
+import {formatFloat, formatPercentage} from 'sentry/utils/formatters';
 import getDynamicText from 'sentry/utils/getDynamicText';
 import AnomaliesQuery from 'sentry/utils/performance/anomalies/anomaliesQuery';
 import {useMEPSettingContext} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {decodeScalar} from 'sentry/utils/queryString';
 import useApi from 'sentry/utils/useApi';
+import {useLocation} from 'sentry/utils/useLocation';
+import useRouter from 'sentry/utils/useRouter';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 import {getTermHelp, PERFORMANCE_TERM} from 'sentry/views/performance/data';
+import {getTransactionMEPParamsIfApplicable} from 'sentry/views/performance/transactionSummary/transactionOverview/utils';
 
-import {getMEPQueryParams} from '../../landing/widgets/utils';
 import {
   anomaliesRouteWithQuery,
   ANOMALY_FLAG,
   anomalyToColor,
 } from '../transactionAnomalies/utils';
 
-type ContainerProps = WithRouterProps & {
+type ContainerProps = {
   error: QueryError | null;
   eventView: EventView;
   isLoading: boolean;
-  location: Location;
   organization: Organization;
   totals: Record<string, number> | null;
   transactionName: string;
@@ -62,8 +59,6 @@ type Props = Pick<ContainerProps, 'organization' | 'isLoading' | 'error' | 'tota
     series: LineChartProps['series'];
   };
   eventView: EventView;
-  location: Location;
-  router: InjectedRouter;
   transactionName: string;
   utc: boolean;
   end?: Date;
@@ -79,14 +74,15 @@ function SidebarCharts({
   start,
   end,
   utc,
-  router,
   statsPeriod,
   chartData,
   eventView,
-  location,
   transactionName,
 }: Props) {
+  const location = useLocation();
+  const router = useRouter();
   const theme = useTheme();
+
   return (
     <RelativeBox>
       <ChartLabel top="0px">
@@ -102,7 +98,7 @@ function SidebarCharts({
           data-test-id="apdex-summary-value"
           isLoading={isLoading}
           error={error}
-          value={totals ? formatFloat(totals.apdex, 4) : null}
+          value={totals ? formatFloat(totals['apdex()'], 4) : null}
         />
       </ChartLabel>
 
@@ -119,24 +115,7 @@ function SidebarCharts({
           data-test-id="failure-rate-summary-value"
           isLoading={isLoading}
           error={error}
-          value={totals ? formatPercentage(totals.failure_rate) : null}
-        />
-      </ChartLabel>
-
-      <ChartLabel top="320px">
-        <ChartTitle>
-          {t('TPM')}
-          <QuestionTooltip
-            position="top"
-            title={getTermHelp(organization, PERFORMANCE_TERM.TPM)}
-            size="sm"
-          />
-        </ChartTitle>
-        <ChartSummaryValue
-          data-test-id="tpm-summary-value"
-          isLoading={isLoading}
-          error={error}
-          value={totals ? tct('[tpm] tpm', {tpm: formatFloat(totals.tpm, 4)}) : null}
+          value={totals ? formatPercentage(totals['failure_rate()']) : null}
         />
       </ChartLabel>
 
@@ -159,7 +138,7 @@ function SidebarCharts({
 
               if (errored) {
                 return (
-                  <ErrorPanel height="580px">
+                  <ErrorPanel height="300px">
                     <IconWarning color="gray300" size="lg" />
                   </ErrorPanel>
                 );
@@ -173,8 +152,9 @@ function SidebarCharts({
                   epmSeries.markPoint = MarkPoint({
                     data: results.data.anomalies.map(a => ({
                       name: a.id,
-                      yAxis: epmSeries.data.find(({name}) => name > (a.end + a.start) / 2)
-                        ?.value,
+                      yAxis: epmSeries.data.find(
+                        ({name}) => (name as number) > (a.end + a.start) / 2
+                      )?.value,
                       // TODO: the above is O(n*m), remove after we change the api to include the midpoint of y.
                       xAxis: a.start,
                       itemStyle: {
@@ -191,7 +171,7 @@ function SidebarCharts({
                           projectID: decodeScalar(location.query.project),
                           transaction: transactionName,
                         });
-                        browserHistory.push(target);
+                        browserHistory.push(normalizeUrl(target));
                       },
                     })),
                     symbol: 'circle',
@@ -207,7 +187,7 @@ function SidebarCharts({
                     value: (
                       <LineChart {...zoomRenderProps} {...chartOptions} series={series} />
                     ),
-                    fixed: <Placeholder height="480px" testId="skeleton-ui" />,
+                    fixed: <Placeholder height="300px" testId="skeleton-ui" />,
                   })}
                 </TransitionChart>
               );
@@ -220,20 +200,19 @@ function SidebarCharts({
 }
 
 function SidebarChartsContainer({
-  location,
   eventView,
   organization,
-  router,
   isLoading,
   error,
   totals,
   transactionName,
 }: ContainerProps) {
+  const location = useLocation();
+  const router = useRouter();
   const api = useApi();
   const theme = useTheme();
-  const mepSetting = useMEPSettingContext();
 
-  const colors = theme.charts.getColorPalette(3);
+  const colors = theme.charts.getColorPalette(2);
   const statsPeriod = eventView.statsPeriod;
   const start = eventView.start ? getUtcToLocalDateObject(eventView.start) : undefined;
   const end = eventView.end ? getUtcToLocalDateObject(eventView.end) : undefined;
@@ -241,6 +220,13 @@ function SidebarChartsContainer({
   const environment = eventView.environment;
   const query = eventView.query;
   const utc = normalizeDateTimeParams(location.query).utc === 'true';
+
+  const mepSetting = useMEPSettingContext();
+  const queryExtras = getTransactionMEPParamsIfApplicable(
+    mepSetting,
+    organization,
+    location
+  );
 
   const axisLineConfig = {
     scale: true,
@@ -256,7 +242,7 @@ function SidebarChartsContainer({
   };
 
   const chartOptions: Omit<LineChartProps, 'series'> = {
-    height: 480,
+    height: 300,
     grid: [
       {
         top: '60px',
@@ -270,18 +256,12 @@ function SidebarChartsContainer({
         right: '10px',
         height: '100px',
       },
-      {
-        top: '380px',
-        left: '10px',
-        right: '10px',
-        height: '120px',
-      },
     ],
     axisPointer: {
       // Link each x-axis together.
-      link: [{xAxisIndex: [0, 1, 2]}],
+      link: [{xAxisIndex: [0, 1]}],
     },
-    xAxes: Array.from(new Array(3)).map((_i, index) => ({
+    xAxes: Array.from(new Array(2)).map((_i, index) => ({
       gridIndex: index,
       type: 'time',
       show: false,
@@ -309,25 +289,16 @@ function SidebarChartsContainer({
         },
         ...axisLineConfig,
       },
-      {
-        // throughput
-        gridIndex: 2,
-        splitNumber: 4,
-        axisLabel: {
-          formatter: formatAbbreviatedNumber,
-          color: theme.chartLabel,
-        },
-        ...axisLineConfig,
-      },
     ],
     utc,
     isGroupedByDate: true,
     showTimeInTooltip: true,
-    colors: [colors[0], colors[1], colors[2]],
+    colors: [colors[0], colors[1]],
     tooltip: {
       trigger: 'axis',
       truncate: 80,
-      valueFormatter: tooltipFormatter,
+      valueFormatter: (value, label) =>
+        tooltipFormatter(value, aggregateOutputType(label)),
       nameFormatter(value: string) {
         return value === 'epm()' ? 'tpm()' : value;
       },
@@ -338,7 +309,7 @@ function SidebarChartsContainer({
     api,
     start,
     end,
-    statsPeriod,
+    period: statsPeriod,
     project,
     environment,
     query,
@@ -368,15 +339,15 @@ function SidebarChartsContainer({
       interval={getInterval(datetimeSelection)}
       showLoading={false}
       includePrevious={false}
-      yAxis={['apdex()', 'failure_rate()', 'epm()']}
+      yAxis={['apdex()', 'failure_rate()']}
       partial
       referrer="api.performance.transaction-summary.sidebar-chart"
-      queryExtras={getMEPQueryParams(mepSetting)}
+      queryExtras={queryExtras}
     >
       {({results, errored, loading, reloading}) => {
         const series = results
-          ? results.map((values, i: number) => ({
-              ...values,
+          ? results.map((v, i: number) => ({
+              ...v,
               yAxisIndex: i,
               xAxisIndex: i,
             }))
@@ -386,7 +357,6 @@ function SidebarChartsContainer({
           <SidebarCharts
             {...contentCommonProps}
             transactionName={transactionName}
-            location={location}
             eventView={eventView}
             chartData={{series, errored, loading, reloading, chartOptions}}
           />
@@ -433,4 +403,4 @@ const ChartValue = styled('div')`
   font-size: ${p => p.theme.fontSizeExtraLarge};
 `;
 
-export default withRouter(SidebarChartsContainer);
+export default SidebarChartsContainer;

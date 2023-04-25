@@ -1,3 +1,4 @@
+import {Theme} from '@emotion/react';
 import {Location} from 'history';
 import isEqual from 'lodash/isEqual';
 import pick from 'lodash/pick';
@@ -9,7 +10,6 @@ import {IconWarning} from 'sentry/icons';
 import {OrganizationSummary} from 'sentry/types';
 import {defined} from 'sentry/utils';
 import EventView from 'sentry/utils/discover/eventView';
-import {Theme} from 'sentry/utils/theme';
 
 import {ViewProps} from '../../../types';
 import {QUERY_KEYS} from '../../../utils';
@@ -26,6 +26,7 @@ type Props = AsyncComponent['props'] &
     fields: string[];
     location: Location;
     organization: OrganizationSummary;
+    queryExtras?: Record<string, string>;
   };
 
 type State = AsyncComponent['state'] & {
@@ -52,6 +53,7 @@ class Content extends AsyncComponent<Props, State> {
       project,
       fields,
       location,
+      queryExtras,
     } = this.props;
 
     const eventView = EventView.fromSavedQuery({
@@ -67,12 +69,15 @@ class Content extends AsyncComponent<Props, State> {
       start,
       end,
     });
-    const apiPayload = eventView.getEventsAPIPayload(location);
-    apiPayload.referrer = 'api.performance.durationpercentilechart';
+    let apiPayload = eventView.getEventsAPIPayload(location);
+    apiPayload = {
+      ...apiPayload,
+      ...queryExtras,
+      referrer: 'api.performance.durationpercentilechart',
+    };
+    const endpoint = `/organizations/${organization.slug}/events/`;
 
-    return [
-      ['chartData', `/organizations/${organization.slug}/eventsv2/`, {query: apiPayload}],
-    ];
+    return [['chartData', endpoint, {query: apiPayload}]];
   }
 
   componentDidUpdate(prevProps: Props) {
@@ -114,7 +119,7 @@ class Content extends AsyncComponent<Props, State> {
         ? theme.charts.getColorPalette(1)
         : [filterToColor(currentFilter)];
 
-    return <Chart series={transformData(chartData.data)} colors={colors} />;
+    return <Chart series={transformData(chartData.data, false)} colors={colors} />;
   }
 }
 

@@ -1,10 +1,14 @@
+import pytz
 import responses
 
-from sentry.integrations.pagerduty.notify_action import PagerDutyNotifyServiceAction
+from sentry.integrations.pagerduty import PagerDutyNotifyServiceAction
 from sentry.models import Integration, OrganizationIntegration, PagerDutyService
-from sentry.testutils.cases import RuleTestCase
+from sentry.testutils.cases import PerformanceIssueTestCase, RuleTestCase
+from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.helpers.notifications import TEST_ISSUE_OCCURRENCE
 from sentry.utils import json
 
+event_time = before_now(days=3).replace(tzinfo=pytz.utc)
 # external_id is the account name in pagerduty
 EXTERNAL_ID = "example-pagerduty"
 SERVICES = [
@@ -17,7 +21,7 @@ SERVICES = [
 ]
 
 
-class PagerDutyNotifyActionTest(RuleTestCase):
+class PagerDutyNotifyActionTest(RuleTestCase, PerformanceIssueTestCase):
     rule_cls = PagerDutyNotifyServiceAction
 
     def setUp(self):
@@ -37,7 +41,15 @@ class PagerDutyNotifyActionTest(RuleTestCase):
 
     @responses.activate
     def test_applies_correctly(self):
-        event = self.get_event()
+        event = self.store_event(
+            data={
+                "event_id": "a" * 32,
+                "message": "ohhhhhh noooooo",
+                "timestamp": iso_format(event_time),
+                "fingerprint": ["group-1"],
+            },
+            project_id=self.project.id,
+        )
 
         rule = self.get_rule(data={"account": self.integration.id, "service": self.service.id})
 
@@ -57,6 +69,66 @@ class PagerDutyNotifyActionTest(RuleTestCase):
         data = json.loads(responses.calls[0].request.body)
 
         assert data["event_action"] == "trigger"
+        assert data["payload"]["summary"] == event.message
+        assert data["payload"]["custom_details"]["message"] == event.message
+
+    @responses.activate
+    def test_applies_correctly_performance_issue(self):
+        event = self.create_performance_issue()
+        rule = self.get_rule(data={"account": self.integration.id, "service": self.service.id})
+        results = list(rule.after(event=event, state=self.get_state()))
+        assert len(results) == 1
+
+        responses.add(
+            method=responses.POST,
+            url="https://events.pagerduty.com/v2/enqueue/",
+            json={},
+            status=202,
+            content_type="application/json",
+        )
+
+        # Trigger rule callback
+        results[0].callback(event, futures=[])
+        data = json.loads(responses.calls[0].request.body)
+
+        perf_issue_title = 'N+1 Query: SELECT "books_author"."id", "books_author"."name" FROM "books_author" WHERE "books_author"."id" = %s LIMIT 21'
+
+        assert data["event_action"] == "trigger"
+        assert data["payload"]["summary"] == perf_issue_title
+        assert data["payload"]["custom_details"]["title"] == perf_issue_title
+
+    @responses.activate
+    def test_applies_correctly_generic_issue(self):
+        occurrence = TEST_ISSUE_OCCURRENCE
+        event = self.store_event(
+            data={
+                "event_id": "a" * 32,
+                "timestamp": iso_format(before_now(minutes=1)),
+            },
+            project_id=self.project.id,
+        )
+        event = event.for_group(event.groups[0])
+        event.occurrence = occurrence
+
+        rule = self.get_rule(data={"account": self.integration.id, "service": self.service.id})
+        results = list(rule.after(event=event, state=self.get_state()))
+        assert len(results) == 1
+
+        responses.add(
+            method=responses.POST,
+            url="https://events.pagerduty.com/v2/enqueue/",
+            json={},
+            status=202,
+            content_type="application/json",
+        )
+
+        # Trigger rule callback
+        results[0].callback(event, futures=[])
+        data = json.loads(responses.calls[0].request.body)
+
+        assert data["event_action"] == "trigger"
+        assert data["payload"]["summary"] == event.occurrence.issue_title
+        assert data["payload"]["custom_details"]["title"] == event.occurrence.issue_title
 
     def test_render_label(self):
         rule = self.get_rule(data={"account": self.integration.id, "service": self.service.id})
@@ -85,7 +157,7 @@ class PagerDutyNotifyActionTest(RuleTestCase):
         self.project = new_project
 
         self.integration.add_organization(new_org, self.user)
-        oi = OrganizationIntegration.objects.get(organization=new_org)
+        oi = OrganizationIntegration.objects.get(organization_id=new_org.id)
         new_service = PagerDutyService.objects.create(
             service_name="New Service",
             integration_key="new_service_key",

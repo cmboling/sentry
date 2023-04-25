@@ -3,14 +3,17 @@ from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry import audit_log
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.serializers import serialize
 from sentry.api.validators import ServiceHookValidator
 from sentry.constants import ObjectStatus
-from sentry.models import AuditLogEntryEvent, ServiceHook
+from sentry.models import ServiceHook
 
 
+@region_silo_endpoint
 class ProjectServiceHookDetailsEndpoint(ProjectEndpoint):
     def get(self, request: Request, project, hook_id) -> Response:
         """
@@ -79,7 +82,7 @@ class ProjectServiceHookDetailsEndpoint(ProjectEndpoint):
                 request=request,
                 organization=project.organization,
                 target_object=hook.id,
-                event=AuditLogEntryEvent.SERVICEHOOK_EDIT,
+                event=audit_log.get_event_id("SERVICEHOOK_EDIT"),
                 data=hook.get_audit_log_data(),
             )
 
@@ -112,7 +115,7 @@ class ProjectServiceHookDetailsEndpoint(ProjectEndpoint):
                 request=request,
                 organization=project.organization,
                 target_object=hook.id,
-                event=AuditLogEntryEvent.SERVICEHOOK_REMOVE,
+                event=audit_log.get_event_id("SERVICEHOOK_REMOVE"),
                 data=hook.get_audit_log_data(),
             )
 

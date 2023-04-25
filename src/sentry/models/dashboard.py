@@ -1,10 +1,26 @@
 from django.db import models
 from django.utils import timezone
 
-from sentry.db.models import FlexibleForeignKey, Model, sane_repr
+from sentry.db.models import FlexibleForeignKey, Model, region_silo_only_model, sane_repr
 from sentry.db.models.fields.bounded import BoundedBigIntegerField
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
+from sentry.db.models.fields.jsonfield import JSONField
 
 
+@region_silo_only_model
+class DashboardProject(Model):
+    __include_in_export__ = False
+
+    project = FlexibleForeignKey("sentry.Project")
+    dashboard = FlexibleForeignKey("sentry.Dashboard")
+
+    class Meta:
+        app_label = "sentry"
+        db_table = "sentry_dashboardproject"
+        unique_together = (("project", "dashboard"),)
+
+
+@region_silo_only_model
 class Dashboard(Model):
     """
     A dashboard.
@@ -13,11 +29,15 @@ class Dashboard(Model):
     __include_in_export__ = True
 
     title = models.CharField(max_length=255)
-    created_by = FlexibleForeignKey("sentry.User")
+    created_by_id = HybridCloudForeignKey("sentry.User", on_delete="CASCADE")
     organization = FlexibleForeignKey("sentry.Organization")
     date_added = models.DateTimeField(default=timezone.now)
     visits = BoundedBigIntegerField(null=True, default=1)
     last_visited = models.DateTimeField(null=True, default=timezone.now)
+    projects = models.ManyToManyField("sentry.Project", through=DashboardProject)
+    filters = JSONField(null=True)
+
+    MAX_WIDGETS = 30
 
     class Meta:
         app_label = "sentry"
@@ -47,6 +67,7 @@ class Dashboard(Model):
         return None
 
 
+@region_silo_only_model
 class DashboardTombstone(Model):
     """
     A tombstone to indicate that a pre-built dashboard
@@ -87,6 +108,7 @@ PREBUILT_DASHBOARDS = {
                     "title": "Number of Errors",
                     "displayType": "big_number",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "",
@@ -94,6 +116,7 @@ PREBUILT_DASHBOARDS = {
                             "fields": ["count()"],
                             "aggregates": ["count()"],
                             "columns": [],
+                            "orderby": "",
                         }
                     ],
                 },
@@ -101,6 +124,7 @@ PREBUILT_DASHBOARDS = {
                     "title": "Number of Issues",
                     "displayType": "big_number",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "",
@@ -108,6 +132,7 @@ PREBUILT_DASHBOARDS = {
                             "fields": ["count_unique(issue)"],
                             "aggregates": ["count_unique(issue)"],
                             "columns": [],
+                            "orderby": "",
                         }
                     ],
                 },
@@ -115,6 +140,7 @@ PREBUILT_DASHBOARDS = {
                     "title": "Events",
                     "displayType": "line",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "Events",
@@ -122,6 +148,7 @@ PREBUILT_DASHBOARDS = {
                             "fields": ["count()"],
                             "aggregates": ["count()"],
                             "columns": [],
+                            "orderby": "",
                         }
                     ],
                 },
@@ -129,6 +156,7 @@ PREBUILT_DASHBOARDS = {
                     "title": "Affected Users",
                     "displayType": "line",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "Known Users",
@@ -136,6 +164,7 @@ PREBUILT_DASHBOARDS = {
                             "fields": ["count_unique(user)"],
                             "aggregates": ["count_unique(user)"],
                             "columns": [],
+                            "orderby": "",
                         },
                         {
                             "name": "Anonymous Users",
@@ -143,6 +172,7 @@ PREBUILT_DASHBOARDS = {
                             "fields": ["count_unique(user)"],
                             "aggregates": ["count_unique(user)"],
                             "columns": [],
+                            "orderby": "",
                         },
                     ],
                 },
@@ -150,6 +180,7 @@ PREBUILT_DASHBOARDS = {
                     "title": "Handled vs. Unhandled",
                     "displayType": "line",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "Handled",
@@ -157,6 +188,7 @@ PREBUILT_DASHBOARDS = {
                             "fields": ["count()"],
                             "aggregates": ["count()"],
                             "columns": [],
+                            "orderby": "",
                         },
                         {
                             "name": "Unhandled",
@@ -164,6 +196,7 @@ PREBUILT_DASHBOARDS = {
                             "fields": ["count()"],
                             "aggregates": ["count()"],
                             "columns": [],
+                            "orderby": "",
                         },
                     ],
                 },
@@ -171,6 +204,7 @@ PREBUILT_DASHBOARDS = {
                     "title": "Errors by Country",
                     "displayType": "world_map",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "Error counts",
@@ -178,6 +212,7 @@ PREBUILT_DASHBOARDS = {
                             "fields": ["count()"],
                             "aggregates": ["count()"],
                             "columns": [],
+                            "orderby": "",
                         }
                     ],
                 },
@@ -185,6 +220,7 @@ PREBUILT_DASHBOARDS = {
                     "title": "Errors by Browser",
                     "displayType": "table",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "",
@@ -200,14 +236,15 @@ PREBUILT_DASHBOARDS = {
                     "title": "High Throughput Transactions",
                     "displayType": "table",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "",
                             "fields": ["count()", "transaction"],
                             "aggregates": ["count()"],
                             "columns": ["transaction"],
-                            "conditions": "!event.type:error",
-                            "orderby": "-count",
+                            "conditions": "event.type:transaction",
+                            "orderby": "-count()",
                         },
                     ],
                 },
@@ -215,6 +252,7 @@ PREBUILT_DASHBOARDS = {
                     "title": "Overall User Misery",
                     "displayType": "big_number",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "",
@@ -230,14 +268,15 @@ PREBUILT_DASHBOARDS = {
                     "title": "High Throughput Transactions",
                     "displayType": "top_n",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "",
                             "fields": ["transaction", "count()"],
                             "aggregates": ["count()"],
                             "columns": ["transaction"],
-                            "conditions": "!event.type:error",
-                            "orderby": "-count",
+                            "conditions": "event.type:transaction",
+                            "orderby": "-count()",
                         },
                     ],
                 },
@@ -261,6 +300,7 @@ PREBUILT_DASHBOARDS = {
                     "title": "Transactions Ordered by Misery",
                     "displayType": "table",
                     "interval": "5m",
+                    "widgetType": "discover",
                     "queries": [
                         {
                             "name": "",
@@ -268,7 +308,7 @@ PREBUILT_DASHBOARDS = {
                             "aggregates": ["user_misery(300)"],
                             "columns": ["transaction"],
                             "conditions": "",
-                            "orderby": "-user_misery_300",
+                            "orderby": "-user_misery(300)",
                         },
                     ],
                 },

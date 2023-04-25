@@ -1,10 +1,15 @@
-import * as React from 'react';
+import {Component, Fragment} from 'react';
 import {Location} from 'history';
 
 import {
   ScrollbarManagerChildrenProps,
   withScrollbarManager,
 } from 'sentry/components/events/interfaces/spans/scrollbarManager';
+import {
+  SpanBoundsType,
+  SpanGeneratedBoundsType,
+  VerticalMark,
+} from 'sentry/components/events/interfaces/spans/utils';
 import {Organization} from 'sentry/types';
 import {TraceFullDetailed} from 'sentry/utils/performance/quickTrace/types';
 
@@ -13,6 +18,7 @@ import {TraceInfo, TraceRoot, TreeDepth} from './types';
 
 type Props = ScrollbarManagerChildrenProps & {
   continuingDepths: TreeDepth[];
+  generateBounds: (bounds: SpanBoundsType) => SpanGeneratedBoundsType;
   hasGuideAnchor: boolean;
   index: number;
   isLast: boolean;
@@ -24,13 +30,14 @@ type Props = ScrollbarManagerChildrenProps & {
   traceInfo: TraceInfo;
   transaction: TraceRoot | TraceFullDetailed;
   barColor?: string;
+  measurements?: Map<number, VerticalMark>;
 };
 
 type State = {
   isExpanded: boolean;
 };
 
-class TransactionGroup extends React.Component<Props, State> {
+class TransactionGroup extends Component<Props, State> {
   state: State = {
     isExpanded: true,
   };
@@ -59,14 +66,21 @@ class TransactionGroup extends React.Component<Props, State> {
       hasGuideAnchor,
       renderedChildren,
       barColor,
+      addContentSpanBarRef,
+      removeContentSpanBarRef,
+      onWheel,
+      measurements,
+      generateBounds,
     } = this.props;
     const {isExpanded} = this.state;
 
     return (
-      <React.Fragment>
+      <Fragment>
         <TransactionBar
           location={location}
           organization={organization}
+          measurements={measurements}
+          generateBounds={generateBounds}
           index={index}
           transaction={transaction}
           traceInfo={traceInfo}
@@ -78,9 +92,12 @@ class TransactionGroup extends React.Component<Props, State> {
           isVisible={isVisible}
           hasGuideAnchor={hasGuideAnchor}
           barColor={barColor}
+          addContentSpanBarRef={addContentSpanBarRef}
+          removeContentSpanBarRef={removeContentSpanBarRef}
+          onWheel={onWheel}
         />
         {isExpanded && renderedChildren}
-      </React.Fragment>
+      </Fragment>
     );
   }
 }

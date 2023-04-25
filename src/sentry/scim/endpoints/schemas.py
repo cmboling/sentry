@@ -1,8 +1,10 @@
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import region_silo_endpoint
+
 from .constants import SCIM_SCHEMA_GROUP, SCIM_SCHEMA_USER
-from .utils import SCIMEndpoint
+from .utils import OrganizationSCIMMemberPermission, SCIMEndpoint
 
 SCIM_USER_ATTRIBUTES_SCHEMA = {
     "id": SCIM_SCHEMA_USER,
@@ -182,8 +184,9 @@ SCIM_GROUP_ATTRIBUTES_SCHEMA = {
 SCIM_SCHEMA_LIST = [SCIM_USER_ATTRIBUTES_SCHEMA, SCIM_GROUP_ATTRIBUTES_SCHEMA]
 
 
+@region_silo_endpoint
 class OrganizationSCIMSchemaIndex(SCIMEndpoint):
-    private = True
+    permission_classes = (OrganizationSCIMMemberPermission,)
 
     def get(self, request: Request, organization) -> Response:
         query_params = self.get_query_parameters(request)

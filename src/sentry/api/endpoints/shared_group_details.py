@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry.api.base import Endpoint, EnvironmentMixin
+from sentry.api.base import Endpoint, EnvironmentMixin, region_silo_endpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.serializers import (
     SharedEventSerializer,
@@ -12,10 +14,13 @@ from sentry.api.serializers import (
 from sentry.models import Group
 
 
+@region_silo_endpoint
 class SharedGroupDetailsEndpoint(Endpoint, EnvironmentMixin):
     permission_classes = ()
 
-    def get(self, request: Request, share_id) -> Response:
+    def get(
+        self, request: Request, organization_slug: str | None = None, share_id: str | None = None
+    ) -> Response:
         """
         Retrieve an aggregate
 
@@ -32,6 +37,10 @@ class SharedGroupDetailsEndpoint(Endpoint, EnvironmentMixin):
             group = Group.objects.from_share_id(share_id)
         except Group.DoesNotExist:
             raise ResourceDoesNotExist
+
+        if organization_slug:
+            if organization_slug != group.organization.slug:
+                return ResourceDoesNotExist
 
         if group.organization.flags.disable_shared_issues:
             raise ResourceDoesNotExist

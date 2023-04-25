@@ -3,14 +3,14 @@ from __future__ import annotations
 import functools
 import itertools
 import logging
-from collections import OrderedDict, defaultdict, namedtuple
+from collections import defaultdict, namedtuple
 from typing import Any, Mapping, MutableMapping, MutableSequence, Sequence
 
-from sentry.app import tsdb
+from sentry import tsdb
 from sentry.digests import Digest, Record
 from sentry.eventstore.models import Event
 from sentry.models import Group, GroupStatus, Project, Rule
-from sentry.notifications.types import ActionTargetType
+from sentry.notifications.types import ActionTargetType, FallthroughChoiceType
 from sentry.utils.dates import to_timestamp
 from sentry.utils.pipeline import Pipeline
 
@@ -19,26 +19,41 @@ logger = logging.getLogger("sentry.digests")
 Notification = namedtuple("Notification", "event rules")
 
 
-def split_key(key: str) -> tuple[Project, ActionTargetType, str | None]:
-    key_parts = key.split(":", 4)
+def split_key(
+    key: str,
+) -> tuple[Project, ActionTargetType, str | None, FallthroughChoiceType | None]:
+    key_parts = key.split(":", 5)
     project_id = key_parts[2]
     # XXX: We transitioned to new style keys (len == 5) a while ago on
     # sentry.io. But self-hosted users might transition at any time, so we need
     # to keep this transition code around for a while, maybe indefinitely.
-    if len(key_parts) == 5:
+    if len(key_parts) == 6:
         target_type = ActionTargetType(key_parts[3])
         target_identifier = key_parts[4] if key_parts[4] else None
+        try:
+            fallthrough_choice = FallthroughChoiceType(key_parts[5])
+        except ValueError:
+            fallthrough_choice = None
+    elif len(key_parts) == 5:
+        target_type = ActionTargetType(key_parts[3])
+        target_identifier = key_parts[4] if key_parts[4] else None
+        fallthrough_choice = None
     else:
         target_type = ActionTargetType.ISSUE_OWNERS
         target_identifier = None
-    return Project.objects.get(pk=project_id), target_type, target_identifier
+        fallthrough_choice = None
+    return Project.objects.get(pk=project_id), target_type, target_identifier, fallthrough_choice
 
 
 def unsplit_key(
-    project: Project, target_type: ActionTargetType, target_identifier: str | None
+    project: Project,
+    target_type: ActionTargetType,
+    target_identifier: str | None,
+    fallthrough_choice: FallthroughChoiceType | None,
 ) -> str:
     target_str = target_identifier if target_identifier is not None else ""
-    return f"mail:p:{project.id}:{target_type.value}:{target_str}"
+    fallthrough = fallthrough_choice.value if fallthrough_choice is not None else ""
+    return f"mail:p:{project.id}:{target_type.value}:{target_str}:{fallthrough}"
 
 
 def event_to_record(event: Event, rules: Sequence[Rule]) -> Record:
@@ -61,15 +76,26 @@ def fetch_state(project: Project, records: Sequence[Record]) -> Mapping[str, Any
     end = records[0].datetime
 
     groups = Group.objects.in_bulk(record.value.event.group_id for record in records)
+    tenant_ids = {"organization_id": project.organization_id}
     return {
         "project": project,
         "groups": groups,
         "rules": Rule.objects.in_bulk(
             itertools.chain.from_iterable(record.value.rules for record in records)
         ),
-        "event_counts": tsdb.get_sums(tsdb.models.group, list(groups.keys()), start, end),
+        "event_counts": tsdb.get_sums(
+            tsdb.models.group,
+            list(groups.keys()),
+            start,
+            end,
+            tenant_ids=tenant_ids,
+        ),
         "user_counts": tsdb.get_distinct_counts_totals(
-            tsdb.models.users_affected_by_group, list(groups.keys()), start, end
+            tsdb.models.users_affected_by_group,
+            list(groups.keys()),
+            start,
+            end,
+            tenant_ids=tenant_ids,
         ),
     }
 
@@ -141,7 +167,7 @@ def sort_group_contents(
     rules: MutableMapping[str, Mapping[Group, Sequence[Record]]]
 ) -> Mapping[str, Mapping[Group, Sequence[Record]]]:
     for key, groups in rules.items():
-        rules[key] = OrderedDict(
+        rules[key] = dict(
             sorted(
                 groups.items(),
                 # x = (group, records)
@@ -153,7 +179,7 @@ def sort_group_contents(
 
 
 def sort_rule_groups(rules: Mapping[str, Rule]) -> Mapping[str, Rule]:
-    return OrderedDict(
+    return dict(
         sorted(
             rules.items(),
             # x = (rule, groups)

@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {forwardRef} from 'react';
 
 import DocIntegrationAvatar from 'sentry/components/avatar/docIntegrationAvatar';
 import OrganizationAvatar from 'sentry/components/avatar/organizationAvatar';
@@ -28,9 +28,9 @@ type Props = {
   project?: AvatarProject;
   sentryApp?: AvatarSentryApp;
   team?: Team;
-} & UserAvatar['props'];
+} & React.ComponentProps<typeof UserAvatar>;
 
-const Avatar = React.forwardRef(function Avatar(
+const Avatar = forwardRef(function Avatar(
   {
     hasTooltip = false,
     user,

@@ -3,6 +3,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationAdminPermission, OrganizationEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.models import AuthProvider
@@ -11,6 +12,7 @@ from sentry.tasks.auth import email_missing_links
 ERR_NO_SSO = _("The SSO feature is not enabled for this organization.")
 
 
+@region_silo_endpoint
 class OrganizationAuthProviderSendRemindersEndpoint(OrganizationEndpoint):
     permission_classes = (OrganizationAdminPermission,)
 
@@ -19,7 +21,7 @@ class OrganizationAuthProviderSendRemindersEndpoint(OrganizationEndpoint):
             return Response(ERR_NO_SSO, status=403)
 
         try:
-            auth_provider = AuthProvider.objects.get(organization=organization)
+            auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         except AuthProvider.DoesNotExist:
             raise ResourceDoesNotExist
 

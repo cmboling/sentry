@@ -9,8 +9,10 @@ from sentry.rules.history.base import RuleGroupHistory
 from sentry.rules.history.endpoints.project_rule_group_history import RuleGroupHistorySerializer
 from sentry.testutils import APITestCase, TestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class RuleGroupHistorySerializerTest(TestCase):
     def test(self):
         current_date = datetime.now()
@@ -21,11 +23,13 @@ class RuleGroupHistorySerializerTest(TestCase):
                 "group": serialize(self.group, self.user),
                 "count": group_history.count,
                 "lastTriggered": current_date,
+                "eventId": None,
             }
         ]
 
 
 @freezegun.freeze_time()
+@region_silo_test
 class ProjectRuleGroupHistoryIndexEndpointTest(APITestCase):
     endpoint = "sentry-api-0-project-rule-group-history-index"
 
@@ -93,3 +97,16 @@ class ProjectRuleGroupHistoryIndexEndpointTest(APITestCase):
             self.user,
             RuleGroupHistorySerializer(),
         )
+
+    def test_invalid_dates(self):
+        rule = Rule.objects.create(project=self.project)
+
+        self.login_as(self.user)
+        resp = self.get_response(
+            self.organization.slug,
+            self.project.slug,
+            rule.id,
+            start=iso_format(before_now(days=0)),
+            end=iso_format(before_now(days=6)),
+        )
+        assert resp.status_code == 400

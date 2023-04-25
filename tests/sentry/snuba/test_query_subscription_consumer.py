@@ -1,41 +1,54 @@
 import unittest
 from copy import deepcopy
-from datetime import timedelta
+from datetime import datetime, timedelta
+from functools import cached_property
 from unittest import mock
 
+import pytest
 import pytz
+from arroyo.backends.kafka import KafkaPayload
+from arroyo.codecs.json import JsonCodec
+from arroyo.types import BrokerValue, Message, Partition, Topic
 from dateutil.parser import parse as parse_date
 from django.conf import settings
-from exam import fixture, patcher
+from sentry_kafka_schemas import get_schema
 
-from sentry.snuba.dataset import EntityKey
-from sentry.snuba.models import QueryDatasets, QuerySubscription
-from sentry.snuba.query_subscription_consumer import (
-    InvalidMessageError,
+from sentry.runner.commands.run import DEFAULT_BLOCK_SIZE
+from sentry.snuba.dataset import Dataset
+from sentry.snuba.models import SnubaQuery
+from sentry.snuba.query_subscriptions.consumer import (
     InvalidSchemaError,
-    QuerySubscriptionConsumer,
+    parse_message_value,
     register_subscriber,
     subscriber_registry,
 )
+from sentry.snuba.query_subscriptions.run import QuerySubscriptionStrategyFactory
 from sentry.snuba.subscriptions import create_snuba_query, create_snuba_subscription
 from sentry.testutils.cases import TestCase
 from sentry.utils import json
 
 
 class BaseQuerySubscriptionTest:
-    @fixture
-    def consumer(self):
-        return QuerySubscriptionConsumer("hello")
+    @cached_property
+    def topic(self):
+        return settings.KAFKA_METRICS_SUBSCRIPTIONS_RESULTS
 
-    @fixture
+    @cached_property
+    def jsoncodec(self):
+        return JsonCodec(schema=get_schema(self.topic)["schema"])
+
+    @cached_property
     def valid_wrapper(self):
         return {"version": 3, "payload": self.valid_payload}
 
-    @fixture
+    @cached_property
     def valid_payload(self):
         return {
             "subscription_id": "1234",
-            "result": {"data": [{"hello": 50}]},
+            "result": {
+                "data": [{"hello": 50}],
+                "meta": [{"name": "count", "type": "UInt64"}],
+            },
             "request": {
                 "some": "data",
                 "query": """MATCH (metrics_counters) SELECT sum(value) AS value BY
@@ -43,15 +56,6 @@ class BaseQuerySubscriptionTest:
                         AND tags[3] IN tuple(13, 4)""",
             },
             "entity": "metrics_counters",
-            "timestamp": "2020-01-01T01:23:45.1234",
-        }
-
-    @fixture
-    def old_payload(self):
-        return {
-            "subscription_id": "1234",
-            "result": {"data": [{"hello": 50}]},
-            "request": {"some": "data"},
             "timestamp": "2020-01-01T01:23:45.1234",
         }
 
@@ -64,46 +68,19 @@ class BaseQuerySubscriptionTest:
 
 
 class HandleMessageTest(BaseQuerySubscriptionTest, TestCase):
-    metrics = patcher("sentry.snuba.query_subscription_consumer.metrics")
+    @pytest.fixture(autouse=True)
+    def _setup_metrics(self):
+        with mock.patch("sentry.utils.metrics") as self.metrics:
+            yield
 
-    def test_no_subscription(self):
-        with mock.patch("sentry.snuba.tasks._snuba_pool") as pool:
-            pool.urlopen.return_value.status = 202
-            self.consumer.handle_message(
-                self.build_mock_message(
-                    self.valid_wrapper, topic=settings.KAFKA_METRICS_SUBSCRIPTIONS_RESULTS
-                )
-            )
-            pool.urlopen.assert_called_once_with(
-                "DELETE",
-                "/{}/{}/subscriptions/{}".format(
-                    QueryDatasets.METRICS.value,
-                    EntityKey.MetricsCounters.value,
-                    self.valid_payload["subscription_id"],
-                ),
-            )
-        self.metrics.incr.assert_called_once_with(
-            "snuba_query_subscriber.subscription_doesnt_exist"
-        )
-
-    def test_subscription_not_registered(self):
-        sub = QuerySubscription.objects.create(
-            project=self.project, type="unregistered", subscription_id="an_id"
-        )
-        data = self.valid_wrapper
-        data["payload"]["subscription_id"] = sub.subscription_id
-        self.consumer.handle_message(self.build_mock_message(data))
-        self.metrics.incr.assert_called_once_with(
-            "snuba_query_subscriber.subscription_type_not_registered"
-        )
-
-    def test_subscription_registered(self):
-        registration_key = "registered_test"
+    def test_arroyo_consumer(self):
+        registration_key = "registered_test_2"
         mock_callback = mock.Mock()
         register_subscriber(registration_key)(mock_callback)
         with self.tasks():
             snuba_query = create_snuba_query(
-                QueryDatasets.EVENTS,
+                SnubaQuery.Type.ERROR,
+                Dataset.Events,
                 "hello",
                 "count()",
                 timedelta(minutes=10),
@@ -115,9 +92,36 @@ class HandleMessageTest(BaseQuerySubscriptionTest, TestCase):
 
         data = self.valid_wrapper
         data["payload"]["subscription_id"] = sub.subscription_id
-        self.consumer.handle_message(self.build_mock_message(data))
+        commit = mock.Mock()
+        partition = Partition(Topic("test"), 0)
+        strategy = QuerySubscriptionStrategyFactory(
+            self.topic,
+            1,
+            1,
+            1,
+            DEFAULT_BLOCK_SIZE,
+            DEFAULT_BLOCK_SIZE,
+            # We have to disable multi_proc here, otherwise the consumer attempts to access the dev
+            # database rather than the test one due to reinitialising Django
+            multi_proc=False,
+        ).create_with_partitions(commit, {partition: 0})
+        message = self.build_mock_message(data, topic=self.topic)
+
+        strategy.submit(
+            Message(
+                BrokerValue(
+                    KafkaPayload(b"key", message.value().encode("utf-8"), [("should_drop", b"1")]),
+                    partition,
+                    1,
+                    datetime.now(),
+                )
+            )
+        )
+
         data = deepcopy(data)
         data["payload"]["values"] = data["payload"]["result"]
+        data["payload"].pop("result")
+        data["payload"].pop("request")
         data["payload"]["timestamp"] = parse_date(data["payload"]["timestamp"]).replace(
             tzinfo=pytz.utc
         )
@@ -126,10 +130,10 @@ class HandleMessageTest(BaseQuerySubscriptionTest, TestCase):
 
 class ParseMessageValueTest(BaseQuerySubscriptionTest, unittest.TestCase):
     def run_test(self, message):
-        self.consumer.parse_message_value(json.dumps(message))
+        parse_message_value(json.dumps(message), self.jsoncodec)
 
     def run_invalid_schema_test(self, message):
-        with self.assertRaises(InvalidSchemaError):
+        with pytest.raises(InvalidSchemaError):
             self.run_test(message)
 
     def run_invalid_payload_test(self, remove_fields=None, update_fields=None):
@@ -153,9 +157,9 @@ class ParseMessageValueTest(BaseQuerySubscriptionTest, unittest.TestCase):
         self.run_invalid_payload_test(update_fields={"entity": -1})
 
     def test_invalid_version(self):
-        with self.assertRaises(InvalidMessageError) as cm:
-            self.run_test({"version": 50, "payload": {}})
-        assert str(cm.exception) == "Version specified in wrapper has no schema"
+        with pytest.raises(InvalidSchemaError) as excinfo:
+            self.run_test({"version": 50, "payload": self.valid_payload})
+        assert str(excinfo.value) == "Message wrapper does not match schema"
 
     def test_valid(self):
         self.run_test({"version": 3, "payload": self.valid_payload})
@@ -164,9 +168,6 @@ class ParseMessageValueTest(BaseQuerySubscriptionTest, unittest.TestCase):
         payload = deepcopy(self.valid_payload)
         payload["result"]["data"][0]["hello"] = float("nan")
         self.run_test({"version": 3, "payload": payload})
-
-    def test_old_version(self):
-        self.run_test({"version": 2, "payload": self.old_payload})
 
     def test_invalid_wrapper(self):
         self.run_invalid_schema_test({})
@@ -195,6 +196,6 @@ class RegisterSubscriberTest(unittest.TestCase):
         other_callback = object()
         register_subscriber("hello")(callback)
         assert subscriber_registry["hello"] == callback
-        with self.assertRaises(Exception) as cm:
+        with pytest.raises(Exception) as excinfo:
             register_subscriber("hello")(other_callback)
-        assert str(cm.exception) == "Handler already registered for hello"
+        assert str(excinfo.value) == "Handler already registered for hello"

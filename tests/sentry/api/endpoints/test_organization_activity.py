@@ -1,8 +1,11 @@
 from sentry.models import Activity
 from sentry.testutils import APITestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
+from sentry.types.activity import ActivityType
 
 
+@region_silo_test(stable=True)
 class OrganizationActivityTest(APITestCase):
     endpoint = "sentry-api-0-organization-activity"
 
@@ -21,8 +24,8 @@ class OrganizationActivityTest(APITestCase):
         activity = Activity.objects.create(
             group=group,
             project=group.project,
-            type=Activity.NOTE,
-            user=self.user,
+            type=ActivityType.NOTE.value,
+            user_id=self.user.id,
             data={"text": "hello world"},
         )
 
@@ -44,22 +47,22 @@ class OrganizationActivityTest(APITestCase):
         activity = Activity.objects.create(
             group=group,
             project=group.project,
-            type=Activity.NOTE,
-            user=self.user,
+            type=ActivityType.NOTE.value,
+            user_id=self.user.id,
             data={"text": "hello world"},
         )
         activity_2 = Activity.objects.create(
             group=group_2,
             project=group_2.project,
-            type=Activity.NOTE,
-            user=self.user,
+            type=ActivityType.NOTE.value,
+            user_id=self.user.id,
             data={"text": "hello world 2"},
         )
         activity_3 = Activity.objects.create(
             group=group,
             project=group.project,
-            type=Activity.NOTE,
-            user=self.user,
+            type=ActivityType.NOTE.value,
+            user_id=self.user.id,
             data={"text": "hello world 3"},
         )
 

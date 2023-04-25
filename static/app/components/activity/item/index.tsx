@@ -1,10 +1,9 @@
-import * as React from 'react';
 import styled from '@emotion/styled';
 import moment from 'moment-timezone';
 
 import DateTime from 'sentry/components/dateTime';
 import TimeSince from 'sentry/components/timeSince';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import textStyles from 'sentry/styles/text';
 import {AvatarUser} from 'sentry/types';
 import {isRenderFunc} from 'sentry/utils/isRenderFunc';
@@ -108,13 +107,9 @@ function ActivityItem({
 
             {showRange && (
               <StyledDateTimeWindow>
-                <StyledDateTime timeOnly={timeOnly} timeAndDate={!timeOnly} date={date} />
+                <StyledDateTime timeOnly={timeOnly} date={date} />
                 {' — '}
-                <StyledDateTime
-                  timeOnly={timeOnly}
-                  timeAndDate={!timeOnly}
-                  date={dateEnded}
-                />
+                <StyledDateTime timeOnly={timeOnly} date={dateEnded} />
               </StyledDateTimeWindow>
             )}
           </ActivityHeader>

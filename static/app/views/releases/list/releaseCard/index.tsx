@@ -5,17 +5,16 @@ import {Location} from 'history';
 import partition from 'lodash/partition';
 
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import Collapsible from 'sentry/components/collapsible';
 import GlobalSelectionLink from 'sentry/components/globalSelectionLink';
 import {Panel, PanelHeader} from 'sentry/components/panels';
 import TextOverflow from 'sentry/components/textOverflow';
 import TimeSince from 'sentry/components/timeSince';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import Version from 'sentry/components/version';
 import {t, tct, tn} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, PageFilters, Release} from 'sentry/types';
 
 import {ReleasesDisplayOption} from '../releasesDisplayOptions';
@@ -104,7 +103,7 @@ class ReleaseCard extends Component<Props> {
     }
 
     return (
-      <StyledPanel reloading={reloading ? 1 : 0}>
+      <StyledPanel reloading={reloading ? 1 : 0} data-test-id="release-panel">
         <ReleaseInfo>
           <ReleaseInfoHeader>
             <GlobalSelectionLink
@@ -115,7 +114,10 @@ class ReleaseCard extends Component<Props> {
                 query: {project: getReleaseProjectId(release, selection)},
               }}
             >
-              <GuideAnchor disabled={!isTopRelease} target="release_version">
+              <GuideAnchor
+                disabled={!isTopRelease || projectsToShow.length > 1}
+                target="release_version"
+              >
                 <VersionWrapper>
                   <StyledVersion version={version} tooltipRawVersion anchor={false} />
                 </VersionWrapper>
@@ -155,14 +157,14 @@ class ReleaseCard extends Component<Props> {
             <Collapsible
               expandButton={({onExpand, numberOfHiddenItems}) => (
                 <ExpandButtonWrapper>
-                  <Button priority="primary" size="xsmall" onClick={onExpand}>
+                  <Button priority="primary" size="xs" onClick={onExpand}>
                     {tct('Show [numberOfHiddenItems] More', {numberOfHiddenItems})}
                   </Button>
                 </ExpandButtonWrapper>
               )}
               collapseButton={({onCollapse}) => (
                 <CollapseButtonWrapper>
-                  <Button priority="primary" size="xsmall" onClick={onCollapse}>
+                  <Button priority="primary" size="xs" onClick={onCollapse}>
                     {t('Collapse')}
                   </Button>
                 </CollapseButtonWrapper>
@@ -188,7 +190,7 @@ class ReleaseCard extends Component<Props> {
           </ProjectRows>
 
           {projectsToHide.length > 0 && (
-            <HiddenProjectsMessage>
+            <HiddenProjectsMessage data-test-id="hidden-projects">
               <Tooltip title={getHiddenProjectsTooltip()}>
                 <TextOverflow>
                   {projectsToHide.length === 1
@@ -212,14 +214,14 @@ const VersionWrapper = styled('div')`
 `;
 
 const StyledVersion = styled(Version)`
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
 `;
 
 const StyledPanel = styled(Panel)<{reloading: number}>`
   opacity: ${p => (p.reloading ? 0.5 : 1)};
   pointer-events: ${p => (p.reloading ? 'none' : 'auto')};
 
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (min-width: ${p => p.theme.breakpoints.medium}) {
     display: flex;
   }
 `;
@@ -228,7 +230,7 @@ const ReleaseInfo = styled('div')`
   padding: ${space(1.5)} ${space(2)};
   flex-shrink: 0;
 
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (min-width: ${p => p.theme.breakpoints.medium}) {
     border-right: 1px solid ${p => p.theme.border};
     min-width: 260px;
     width: 22%;
@@ -251,7 +253,7 @@ const ReleaseProjects = styled('div')`
   flex-grow: 1;
   display: grid;
 
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (min-width: ${p => p.theme.breakpoints.medium}) {
     border-top: none;
   }
 `;
@@ -290,7 +292,7 @@ const ExpandButtonWrapper = styled('div')`
   border-bottom: ${space(1)} solid ${p => p.theme.background};
   border-top: ${space(1)} solid transparent;
   border-bottom-right-radius: ${p => p.theme.borderRadius};
-  @media (max-width: ${p => p.theme.breakpoints[1]}) {
+  @media (max-width: ${p => p.theme.breakpoints.medium}) {
     border-bottom-left-radius: ${p => p.theme.borderRadius};
   }
 `;
@@ -310,15 +312,15 @@ export const ReleaseProjectsLayout = styled('div')<{showReleaseAdoptionStages?: 
   align-items: center;
   width: 100%;
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     grid-template-columns: 1fr 1fr 1fr 0.5fr 0.5fr 0.5fr;
   }
 
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (min-width: ${p => p.theme.breakpoints.medium}) {
     grid-template-columns: 1fr 1fr 1fr 0.5fr 0.5fr 0.5fr;
   }
 
-  @media (min-width: ${p => p.theme.breakpoints[3]}) {
+  @media (min-width: ${p => p.theme.breakpoints.xlarge}) {
     ${p =>
       p.showReleaseAdoptionStages
         ? `
@@ -331,14 +333,14 @@ export const ReleaseProjectsLayout = styled('div')<{showReleaseAdoptionStages?: 
 `;
 
 export const ReleaseProjectColumn = styled('div')`
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
   line-height: 20px;
 `;
 
 export const NewIssuesColumn = styled(ReleaseProjectColumn)`
   font-variant-numeric: tabular-nums;
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     text-align: right;
   }
 `;
@@ -347,7 +349,7 @@ export const AdoptionColumn = styled(ReleaseProjectColumn)`
   display: none;
   font-variant-numeric: tabular-nums;
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     display: flex;
     /* Chart tooltips need overflow */
     overflow: visible;
@@ -362,7 +364,7 @@ export const AdoptionStageColumn = styled(ReleaseProjectColumn)`
   display: none;
   font-variant-numeric: tabular-nums;
 
-  @media (min-width: ${p => p.theme.breakpoints[3]}) {
+  @media (min-width: ${p => p.theme.breakpoints.xlarge}) {
     display: flex;
 
     /* Need to show the edges of the tags */
@@ -373,11 +375,11 @@ export const AdoptionStageColumn = styled(ReleaseProjectColumn)`
 export const CrashFreeRateColumn = styled(ReleaseProjectColumn)`
   font-variant-numeric: tabular-nums;
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     text-align: center;
   }
 
-  @media (min-width: ${p => p.theme.breakpoints[3]}) {
+  @media (min-width: ${p => p.theme.breakpoints.xlarge}) {
     text-align: right;
   }
 `;
@@ -386,7 +388,7 @@ export const CrashesColumn = styled(ReleaseProjectColumn)`
   display: none;
   font-variant-numeric: tabular-nums;
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     display: block;
     text-align: right;
   }
@@ -404,7 +406,7 @@ const HiddenProjectsMessage = styled('div')`
   color: ${p => p.theme.gray300};
   background-color: ${p => p.theme.backgroundSecondary};
   border-bottom-right-radius: ${p => p.theme.borderRadius};
-  @media (max-width: ${p => p.theme.breakpoints[1]}) {
+  @media (max-width: ${p => p.theme.breakpoints.medium}) {
     border-bottom-left-radius: ${p => p.theme.borderRadius};
   }
 `;

@@ -3,20 +3,20 @@ import styled from '@emotion/styled';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {openModal} from 'sentry/actionCreators/modal';
-import {Client} from 'sentry/api';
 import AsyncComponent from 'sentry/components/asyncComponent';
 import IssueSyncListElement from 'sentry/components/issueSyncListElement';
 import {t} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Group, GroupIntegration} from 'sentry/types';
-import withApi from 'sentry/utils/withApi';
-import IntegrationItem from 'sentry/views/organizationIntegrations/integrationItem';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import {getAnalyticsDataForGroup} from 'sentry/utils/events';
+import useApi from 'sentry/utils/useApi';
+import useOrganization from 'sentry/utils/useOrganization';
+import IntegrationItem from 'sentry/views/settings/organizationIntegrations/integrationItem';
 
 import ExternalIssueForm from './externalIssueForm';
 
 type Props = AsyncComponent['props'] & {
-  api: Client;
   configurations: GroupIntegration[];
   group: Group;
   onChange: (onSuccess?: () => void, onError?: () => void) => void;
@@ -27,7 +27,9 @@ type LinkedIssues = {
   unlinked: GroupIntegration[];
 };
 
-const ExternalIssueActions = ({configurations, group, onChange, api}: Props) => {
+function ExternalIssueActions({configurations, group, onChange}: Props) {
+  const organization = useOrganization();
+  const api = useApi();
   const {linked, unlinked} = configurations
     .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
     .reduce(
@@ -64,11 +66,21 @@ const ExternalIssueActions = ({configurations, group, onChange, api}: Props) => 
     });
   };
 
-  const doOpenModal = (integration: GroupIntegration) =>
+  const doOpenModal = (integration: GroupIntegration) => {
+    trackAnalytics('issue_details.external_issue_modal_opened', {
+      organization,
+      ...getAnalyticsDataForGroup(group),
+      external_issue_provider: integration.provider.key,
+      external_issue_type: 'first_party',
+    });
+
     openModal(
-      deps => <ExternalIssueForm {...deps} {...{group, onChange, integration}} />,
-      {allowClickClose: false}
+      deps => (
+        <ExternalIssueForm {...deps} {...{group, onChange, integration, organization}} />
+      ),
+      {closeEvents: 'escape-key'}
     );
+  };
 
   return (
     <Fragment>
@@ -84,7 +96,7 @@ const ExternalIssueActions = ({configurations, group, onChange, api}: Props) => 
             externalIssueDisplayName={issue.displayName}
             onClose={() => deleteIssue(config)}
             integrationType={provider.key}
-            hoverCardHeader={t('Linked %s Integration', provider.name)}
+            hoverCardHeader={t('%s Integration', provider.name)}
             hoverCardBody={
               <div>
                 <IssueTitle>{issue.title}</IssueTitle>
@@ -100,7 +112,7 @@ const ExternalIssueActions = ({configurations, group, onChange, api}: Props) => 
       {unlinked.length > 0 && (
         <IssueSyncListElement
           integrationType={unlinked[0].provider.key}
-          hoverCardHeader={t('Linked %s Integration', unlinked[0].provider.name)}
+          hoverCardHeader={t('%s Integration', unlinked[0].provider.name)}
           hoverCardBody={
             <Container>
               {unlinked.map(config => (
@@ -115,17 +127,17 @@ const ExternalIssueActions = ({configurations, group, onChange, api}: Props) => 
       )}
     </Fragment>
   );
-};
+}
 
 const IssueTitle = styled('div')`
   font-size: 1.1em;
   font-weight: 600;
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
 `;
 
 const IssueDescription = styled('div')`
   margin-top: ${space(1)};
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
 `;
 
 const Wrapper = styled('div')`
@@ -139,4 +151,4 @@ const Container = styled('div')`
   }
 `;
 
-export default withApi(ExternalIssueActions);
+export default ExternalIssueActions;

@@ -1,3 +1,5 @@
+from sentry.db.models import region_silo_only_model
+
 """
 sentry.models.deploy
 ~~~~~~~~~~~~~~~~~~~~
@@ -7,18 +9,25 @@ sentry.models.deploy
 from django.db import models
 from django.utils import timezone
 
-from sentry.app import locks
-from sentry.db.models import BoundedPositiveIntegerField, FlexibleForeignKey, Model
+from sentry.db.models import (
+    BoundedBigIntegerField,
+    BoundedPositiveIntegerField,
+    FlexibleForeignKey,
+    Model,
+)
+from sentry.locks import locks
+from sentry.types.activity import ActivityType
 from sentry.utils.retries import TimedRetryPolicy
 
 
+@region_silo_only_model
 class Deploy(Model):
     __include_in_export__ = False
 
-    organization_id = BoundedPositiveIntegerField(db_index=True)
+    organization_id = BoundedBigIntegerField(db_index=True)
     release = FlexibleForeignKey("sentry.Release")
     environment_id = BoundedPositiveIntegerField(db_index=True)
-    date_finished = models.DateTimeField(default=timezone.now)
+    date_finished = models.DateTimeField(default=timezone.now, db_index=True)
     date_started = models.DateTimeField(null=True, blank=True)
     name = models.CharField(max_length=64, null=True, blank=True)
     url = models.URLField(null=True, blank=True)
@@ -41,7 +50,7 @@ class Deploy(Model):
         from sentry.models import Activity, Environment, ReleaseCommit, ReleaseHeadCommit
 
         lock_key = cls.get_lock_key(deploy_id)
-        lock = locks.get(lock_key, duration=30)
+        lock = locks.get(lock_key, duration=30, name="deploy_notify")
         with TimedRetryPolicy(10)(lock.acquire):
             deploy = cls.objects.filter(id=deploy_id).select_related("release").get()
             if deploy.notified:
@@ -69,7 +78,7 @@ class Deploy(Model):
             activity = None
             for project in deploy.release.projects.all():
                 activity = Activity.objects.create(
-                    type=Activity.DEPLOY,
+                    type=ActivityType.DEPLOY.value,
                     project=project,
                     ident=Activity.get_version_ident(release.version),
                     data={

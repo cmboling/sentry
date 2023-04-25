@@ -1,4 +1,3 @@
-import * as React from 'react';
 import orderBy from 'lodash/orderBy';
 
 import {Relay, RelayActivity} from 'sentry/types';
@@ -18,14 +17,7 @@ type Props = {
 } & Pick<CardHeaderProps, 'onDelete' | 'onEdit'> &
   Pick<WaitingActivityProps, 'onRefresh'>;
 
-const List = ({
-  relays,
-  relayActivities,
-  onRefresh,
-  onDelete,
-  onEdit,
-  disabled,
-}: Props) => {
+function List({relays, relayActivities, onRefresh, onDelete, onEdit, disabled}: Props) {
   const orderedRelays = orderBy(relays, relay => relay.created, ['desc']);
 
   const relaysByPublicKey = getRelaysByPublicKey(orderedRelays, relayActivities);
@@ -60,6 +52,6 @@ const List = ({
       })}
     </div>
   );
-};
+}
 
 export default List;

@@ -2,7 +2,7 @@ import logging
 
 from django.utils import timezone
 
-from sentry.app import locks
+from sentry.locks import locks
 from sentry.models import ScheduledJob
 from sentry.tasks.base import instrumented_task
 
@@ -13,7 +13,7 @@ logger = logging.getLogger("sentry.scheduler")
 def enqueue_scheduled_jobs(**kwargs):
     from sentry.celery import app
 
-    with locks.get("scheduler.process", duration=60).acquire():
+    with locks.get("scheduler.process", duration=60, name="scheduler_process").acquire():
         job_list = list(ScheduledJob.objects.filter(date_scheduled__lte=timezone.now())[:101])
 
         if len(job_list) > 100:

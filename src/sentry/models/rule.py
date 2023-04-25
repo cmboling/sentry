@@ -8,8 +8,10 @@ from sentry.db.models import (
     FlexibleForeignKey,
     GzippedDictField,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
 from sentry.db.models.manager import BaseManager
 from sentry.utils.cache import cache
 
@@ -22,6 +24,7 @@ class RuleStatus:
     DELETION_IN_PROGRESS = 3
 
 
+@region_silo_only_model
 class Rule(Model):
     __include_in_export__ = True
 
@@ -38,7 +41,7 @@ class Rule(Model):
         choices=((RuleStatus.ACTIVE, "Active"), (RuleStatus.INACTIVE, "Inactive")),
         db_index=True,
     )
-    owner = FlexibleForeignKey("sentry.Actor", null=True)
+    owner = FlexibleForeignKey("sentry.Actor", null=True, on_delete=models.SET_NULL)
 
     date_added = models.DateTimeField(default=timezone.now)
 
@@ -61,12 +64,12 @@ class Rule(Model):
         return rules_list
 
     @property
-    def created_by(self):
+    def created_by_id(self):
         try:
             created_activity = RuleActivity.objects.get(
                 rule=self, type=RuleActivityType.CREATED.value
             )
-            return created_activity.user
+            return created_activity.user_id
         except RuleActivity.DoesNotExist:
             pass
 
@@ -101,11 +104,12 @@ class RuleActivityType(Enum):
     DISABLED = 5
 
 
+@region_silo_only_model
 class RuleActivity(Model):
     __include_in_export__ = True
 
     rule = FlexibleForeignKey("sentry.Rule")
-    user = FlexibleForeignKey("sentry.User", null=True, on_delete=models.SET_NULL)
+    user_id = HybridCloudForeignKey("sentry.User", on_delete="SET_NULL", null=True)
     type = models.IntegerField()
     date_added = models.DateTimeField(default=timezone.now)
 

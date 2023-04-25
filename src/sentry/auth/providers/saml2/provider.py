@@ -56,7 +56,7 @@ def get_provider(organization_slug):
         return None
 
     try:
-        provider = AuthProvider.objects.get(organization=organization).get_provider()
+        provider = AuthProvider.objects.get(organization_id=organization.id).get_provider()
     except AuthProvider.DoesNotExist:
         return None
 
@@ -77,6 +77,10 @@ class SAML2LoginView(AuthView):
         # so build the config first from the state.
         if not provider.config:
             provider.config = provider.build_config(helper.fetch_state())
+
+        if request.subdomain:
+            # See auth.helper.handle_existing_identity()
+            helper.bind_state("subdomain", request.subdomain)
 
         saml_config = build_saml_config(provider.config, helper.organization.slug)
         auth = build_auth(request, saml_config)
@@ -113,7 +117,7 @@ class SAML2AcceptACSView(BaseView):
             return self.redirect(reverse("sentry-login"))
 
         try:
-            auth_provider = AuthProvider.objects.get(organization=organization)
+            auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         except AuthProvider.DoesNotExist:
             messages.add_message(request, messages.ERROR, ERR_NO_SAML_SSO)
             return self.redirect(reverse("sentry-login"))

@@ -3,14 +3,17 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.group import GroupEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.serializers import serialize
 from sentry.api.serializers.rest_framework.group_notes import NoteSerializer
 from sentry.models import Activity
 from sentry.signals import comment_deleted, comment_updated
+from sentry.types.activity import ActivityType
 
 
+@region_silo_endpoint
 class GroupNotesDetailsEndpoint(GroupEndpoint):
     # We explicitly don't allow a request with an ApiKey
     # since an ApiKey is bound to the Organization, not
@@ -22,7 +25,7 @@ class GroupNotesDetailsEndpoint(GroupEndpoint):
 
         try:
             note = Activity.objects.get(
-                group=group, type=Activity.NOTE, user=request.user, id=note_id
+                group=group, type=ActivityType.NOTE.value, user_id=request.user.id, id=note_id
             )
         except Activity.DoesNotExist:
             raise ResourceDoesNotExist
@@ -52,7 +55,7 @@ class GroupNotesDetailsEndpoint(GroupEndpoint):
 
         try:
             note = Activity.objects.get(
-                group=group, type=Activity.NOTE, user=request.user, id=note_id
+                group=group, type=ActivityType.NOTE.value, user_id=request.user.id, id=note_id
             )
         except Activity.DoesNotExist:
             raise ResourceDoesNotExist

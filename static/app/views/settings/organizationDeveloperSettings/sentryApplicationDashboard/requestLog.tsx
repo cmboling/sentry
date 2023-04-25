@@ -1,28 +1,27 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import styled from '@emotion/styled';
 import memoize from 'lodash/memoize';
 import moment from 'moment-timezone';
 
 import AsyncComponent from 'sentry/components/asyncComponent';
-import Button from 'sentry/components/button';
+import {Button, StyledButton} from 'sentry/components/button';
 import Checkbox from 'sentry/components/checkbox';
+import {CompactSelect} from 'sentry/components/compactSelect';
 import DateTime from 'sentry/components/dateTime';
-import DropdownButton from 'sentry/components/dropdownButton';
-import DropdownControl, {DropdownItem} from 'sentry/components/dropdownControl';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import ExternalLink from 'sentry/components/links/externalLink';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
 import Tag from 'sentry/components/tag';
 import {IconChevron, IconFlag, IconOpen} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {SentryApp, SentryAppSchemaIssueLink, SentryAppWebhookRequest} from 'sentry/types';
-import {use24Hours} from 'sentry/utils/dates';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
+import {shouldUse24Hours} from 'sentry/utils/dates';
 
 const ALL_EVENTS = t('All Events');
 const MAX_PER_PAGE = 10;
-const is24Hours = use24Hours();
+const is24Hours = shouldUse24Hours();
 
 const componentHasSelectUri = (issueLinkComponent: SentryAppSchemaIssueLink): boolean => {
   const hasSelectUri = (fields: any[]): boolean =>
@@ -78,7 +77,7 @@ const getEventTypes = memoize((app: SentryApp) => {
   return events;
 });
 
-const ResponseCode = ({code}: {code: number}) => {
+function ResponseCode({code}: {code: number}) {
   let type: React.ComponentProps<typeof Tag>['type'] = 'error';
   if (code <= 399 && code >= 300) {
     type = 'warning';
@@ -91,17 +90,18 @@ const ResponseCode = ({code}: {code: number}) => {
       <StyledTag type={type}>{code === 0 ? 'timeout' : code}</StyledTag>
     </Tags>
   );
-};
+}
 
-const TimestampLink = ({date, link}: {date: moment.MomentInput; link?: string}) =>
-  link ? (
+function TimestampLink({date, link}: {date: moment.MomentInput; link?: string}) {
+  return link ? (
     <ExternalLink href={link}>
       <DateTime date={date} />
-      <StyledIconOpen size="12px" />
+      <StyledIconOpen size="xs" />
     </ExternalLink>
   ) : (
     <DateTime date={date} format={is24Hours ? 'MMM D, YYYY HH:mm:ss z' : 'll LTS z'} />
   );
+}
 
 type Props = AsyncComponent['props'] & {
   app: SentryApp;
@@ -197,7 +197,7 @@ export default class RequestLog extends AsyncComponent<Props, State> {
     );
 
     return (
-      <React.Fragment>
+      <Fragment>
         <h5>{t('Request Log')}</h5>
 
         <div>
@@ -208,26 +208,15 @@ export default class RequestLog extends AsyncComponent<Props, State> {
           </p>
 
           <RequestLogFilters>
-            <DropdownControl
-              label={eventType}
-              menuWidth="220px"
-              button={({isOpen, getActorProps}) => (
-                <StyledDropdownButton {...getActorProps()} isOpen={isOpen}>
-                  {eventType}
-                </StyledDropdownButton>
-              )}
-            >
-              {getEventTypes(app).map(type => (
-                <DropdownItem
-                  key={type}
-                  onSelect={this.handleChangeEventType}
-                  eventKey={type}
-                  isActive={eventType === type}
-                >
-                  {type}
-                </DropdownItem>
-              ))}
-            </DropdownControl>
+            <CompactSelect
+              triggerLabel={eventType}
+              value={eventType}
+              options={getEventTypes(app).map(type => ({
+                value: type,
+                label: type,
+              }))}
+              onChange={opt => this.handleChangeEventType(opt?.value)}
+            />
 
             <StyledErrorsOnlyButton onClick={this.handleChangeErrorsOnly}>
               <ErrorsOnlyCheckbox>
@@ -253,7 +242,7 @@ export default class RequestLog extends AsyncComponent<Props, State> {
             <PanelBody>
               {currentRequests.length > 0 ? (
                 currentRequests.map((request, idx) => (
-                  <PanelItem key={idx}>
+                  <PanelItem key={idx} data-test-id="request-item">
                     <TableLayout hasOrganization={app.status !== 'internal'}>
                       <TimestampLink date={request.date} link={request.errorUrl} />
                       <ResponseCode code={request.responseCode} />
@@ -292,7 +281,7 @@ export default class RequestLog extends AsyncComponent<Props, State> {
             aria-label={t('Next page')}
           />
         </PaginationButtons>
-      </React.Fragment>
+      </Fragment>
     );
   }
 }
@@ -330,23 +319,16 @@ const RequestLogFilters = styled('div')`
   display: flex;
   align-items: center;
   padding-bottom: ${space(1)};
+
+  > :first-child ${StyledButton} {
+    border-radius: ${p => p.theme.borderRadiusLeft};
+  }
 `;
 
 const ErrorsOnlyCheckbox = styled('div')`
-  input {
-    margin: 0 ${space(1)} 0 0;
-  }
-
   display: flex;
+  gap: ${space(1)};
   align-items: center;
-`;
-
-const StyledDropdownButton = styled(DropdownButton)`
-  z-index: ${p => p.theme.zIndex.header - 1};
-  white-space: nowrap;
-
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
 `;
 
 const StyledErrorsOnlyButton = styled(Button)`

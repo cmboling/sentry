@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any, Mapping, Sequence
 from urllib.parse import quote
 
 from django.urls import reverse
@@ -14,6 +15,7 @@ API_VERSION = "/api/v4"
 
 class GitLabApiClientPath:
     oauth_token = "/oauth/token"
+    blame = "/projects/{project}/repository/files/{path}/blame"
     commit = "/projects/{project}/repository/commits/{sha}"
     commits = "/projects/{project}/repository/commits"
     compare = "/projects/{project}/repository/compare"
@@ -258,6 +260,13 @@ class GitLabApiClient(ApiClient):
         path = GitLabApiClientPath.commits.format(project=project_id)
         return self.get(path, params={"until": end_date})
 
+    def get_commit(self, project_id, sha):
+        """
+        Get the details of a commit
+        See https://docs.gitlab.com/ee/api/commits.html#get-a-single-commit
+        """
+        return self.get_cached(GitLabApiClientPath.commit.format(project=project_id, sha=sha))
+
     def compare_commits(self, project_id, start_sha, end_sha):
         """Compare commits between two SHAs
 
@@ -310,3 +319,15 @@ class GitLabApiClient(ApiClient):
 
         encoded_content = contents["content"]
         return b64decode(encoded_content).decode("utf-8")
+
+    def get_blame_for_file(
+        self, repo: Repository, path: str, ref: str, lineno: int
+    ) -> Sequence[Mapping[str, Any]]:
+        project_id = repo.config["project_id"]
+        encoded_path = quote(path, safe="")
+        request_path = GitLabApiClientPath.blame.format(project=project_id, path=encoded_path)
+        contents = self.get(
+            request_path, params={"ref": ref, "range[start]": lineno, "range[end]": lineno}
+        )
+
+        return contents or []

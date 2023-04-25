@@ -1,12 +1,12 @@
-import type {LegendComponentOption} from 'echarts';
-import {Location} from 'history';
+import type {EChartsOption, LegendComponentOption, LineSeriesOption} from 'echarts';
+import type {Location} from 'history';
 import moment from 'moment';
 
 import {DEFAULT_STATS_PERIOD} from 'sentry/constants';
 import {EventsStats, MultiSeriesEventsStats, PageFilters} from 'sentry/types';
 import {defined, escape} from 'sentry/utils';
-import {parsePeriodToHours} from 'sentry/utils/dates';
-import {TableDataWithTitle} from 'sentry/utils/discover/discoverQuery';
+import {getFormattedDate, parsePeriodToHours} from 'sentry/utils/dates';
+import type {TableDataWithTitle} from 'sentry/utils/discover/discoverQuery';
 import {decodeList} from 'sentry/utils/queryString';
 
 const DEFAULT_TRUNCATE_LENGTH = 80;
@@ -50,7 +50,7 @@ export function useShortInterval(datetimeObj: DateTimeObject): boolean {
   return diffInMinutes <= TWENTY_FOUR_HOURS;
 }
 
-type Fidelity = 'high' | 'medium' | 'low';
+export type Fidelity = 'high' | 'medium' | 'low';
 
 export function getInterval(datetimeObj: DateTimeObject, fidelity: Fidelity = 'medium') {
   const diffInMinutes = getDiffInMinutes(datetimeObj);
@@ -136,6 +136,11 @@ export function getSeriesApiInterval(datetimeObj: DateTimeObject) {
     return '4h';
   }
 
+  if (diffInMinutes < SIX_HOURS) {
+    // Less than 6 hours
+    return '5m';
+  }
+
   return '1h';
 }
 
@@ -211,7 +216,7 @@ export function isMultiSeriesStats(
   return (
     defined(data) &&
     ((data.data === undefined && data.totals === undefined) ||
-      (defined(isTopN) && isTopN && defined(data) && !!!isSingleSeriesStats(data))) // the isSingleSeriesStats check is for topN queries returning null data
+      (defined(isTopN) && isTopN && defined(data) && !isSingleSeriesStats(data))) // the isSingleSeriesStats check is for topN queries returning null data
   );
 }
 
@@ -251,13 +256,13 @@ export const processTableResults = (tableResults?: TableDataWithTitle[]) => {
 
   const tableResult = tableResults[0];
 
-  const {data, meta} = tableResult;
+  const {data} = tableResult;
 
-  if (!data || !data.length || !meta) {
+  if (!data || !data.length) {
     return DEFAULT_GEO_DATA;
   }
 
-  const preAggregate = Object.keys(meta).find(column => {
+  const preAggregate = Object.keys(data[0]).find(column => {
     return column !== 'geo.country_code';
   });
 
@@ -279,3 +284,98 @@ export const processTableResults = (tableResults?: TableDataWithTitle[]) => {
 export const getPreviousSeriesName = (seriesName: string) => {
   return `previous ${seriesName}`;
 };
+
+function formatList(items: Array<string | number | undefined>) {
+  const filteredItems = items.filter(item => !!item);
+  return [[...filteredItems].slice(0, -1).join(', '), [...filteredItems].slice(-1)]
+    .filter(type => !!type)
+    .join(' and ');
+}
+
+export function useEchartsAriaLabels(
+  {series, useUTC}: Omit<EChartsOption, 'series'>,
+  isGroupedByDate: boolean
+) {
+  const filteredSeries = Array.isArray(series)
+    ? series.filter(s => s && !!s.data && s.data.length > 0)
+    : [series];
+
+  const dateFormat = useShortInterval({
+    start: filteredSeries[0]?.data?.[0][0],
+    end: filteredSeries[0]?.data?.slice(-1)[0][0],
+  })
+    ? `MMMM D, h:mm A`
+    : 'MMMM Do';
+
+  if (!filteredSeries[0]) {
+    return {enabled: false};
+  }
+
+  function formatDate(date) {
+    return getFormattedDate(date, dateFormat, {
+      local: !useUTC,
+    });
+  }
+
+  // Generate title (first sentence)
+  const chartTypes = new Set(filteredSeries.map(s => s.type));
+  const title = [
+    `${formatList([...chartTypes])} chart`,
+    isGroupedByDate
+      ? `with ${formatDate(filteredSeries[0].data?.[0][0])} to ${formatDate(
+          filteredSeries[0].data?.slice(-1)[0][0]
+        )}`
+      : '',
+    `featuring ${filteredSeries.length} data series: ${formatList(
+      filteredSeries.filter(s => s.data && s.data.length > 0).map(s => s.name)
+    )}`,
+  ].join(' ');
+
+  // Generate series descriptions
+  const seriesDescriptions = filteredSeries
+    .map(s => {
+      if (!s.data || s.data.length === 0) {
+        return '';
+      }
+
+      let highestValue: NonNullable<LineSeriesOption['data']>[0] = [0, -Infinity];
+      let lowestValue: NonNullable<LineSeriesOption['data']>[0] = [0, Infinity];
+
+      s.data.forEach(datum => {
+        if (!Array.isArray(datum)) {
+          return;
+        }
+
+        if (datum[1] > highestValue[1]) {
+          highestValue = datum;
+        }
+        if (datum[1] < lowestValue[1]) {
+          lowestValue = datum;
+        }
+      });
+
+      const lowestX = isGroupedByDate ? formatDate(lowestValue[0]) : lowestValue[0];
+      const highestX = isGroupedByDate ? formatDate(lowestValue[0]) : lowestValue[0];
+
+      const lowestY =
+        typeof lowestValue[1] === 'number' ? +lowestValue[1].toFixed(3) : lowestValue[1];
+      const highestY =
+        typeof highestValue[1] === 'number'
+          ? +highestValue[1].toFixed(3)
+          : lowestValue[1];
+
+      return `The ${s.name} series contains ${
+        s.data?.length
+      } data points. Its lowest value is ${lowestY} ${
+        isGroupedByDate ? 'on' : 'at'
+      } ${lowestX} and highest value is ${highestY} ${
+        isGroupedByDate ? 'on' : 'at'
+      } ${highestX}`;
+    })
+    .filter(s => !!s);
+
+  return {
+    enabled: true,
+    label: {description: [title, ...seriesDescriptions].join('. ')},
+  };
+}

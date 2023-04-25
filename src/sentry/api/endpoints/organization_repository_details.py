@@ -4,12 +4,14 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint, OrganizationIntegrationsPermission
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.fields.empty_integer import EmptyIntegerField
 from sentry.api.serializers import serialize
 from sentry.constants import ObjectStatus
 from sentry.models import Commit, Integration, Repository, ScheduledDeletion
+from sentry.services.hybrid_cloud import coerce_id_from
 
 
 class RepositorySerializer(serializers.Serializer):
@@ -25,6 +27,7 @@ class RepositorySerializer(serializers.Serializer):
     integrationId = EmptyIntegerField(required=False, allow_null=True)
 
 
+@region_silo_endpoint
 class OrganizationRepositoryDetailsEndpoint(OrganizationEndpoint):
     permission_classes = (OrganizationIntegrationsPermission,)
 
@@ -55,7 +58,8 @@ class OrganizationRepositoryDetailsEndpoint(OrganizationEndpoint):
         if result.get("integrationId"):
             try:
                 integration = Integration.objects.get(
-                    id=result["integrationId"], organizations=organization
+                    id=result["integrationId"],
+                    organizationintegration__organization_id=coerce_id_from(organization),
                 )
             except Integration.DoesNotExist:
                 return Response({"detail": "Invalid integration id"}, status=400)

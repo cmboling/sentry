@@ -1,13 +1,20 @@
-import * as React from 'react';
+import {Component, createRef, Fragment} from 'react';
 import {Location} from 'history';
 
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
 import Count from 'sentry/components/count';
-import * as AnchorLinkManager from 'sentry/components/events/interfaces/spans/anchorLinkManager';
 import * as DividerHandlerManager from 'sentry/components/events/interfaces/spans/dividerHandlerManager';
 import * as ScrollbarManager from 'sentry/components/events/interfaces/spans/scrollbarManager';
+import {MeasurementMarker} from 'sentry/components/events/interfaces/spans/styles';
+import {
+  getMeasurementBounds,
+  SpanBoundsType,
+  SpanGeneratedBoundsType,
+  transactionTargetHash,
+  VerticalMark,
+} from 'sentry/components/events/interfaces/spans/utils';
 import ProjectBadge from 'sentry/components/idBadge/projectBadge';
-import {ROW_HEIGHT} from 'sentry/components/performance/waterfall/constants';
+import {ROW_HEIGHT, SpanBarType} from 'sentry/components/performance/waterfall/constants';
 import {
   Row,
   RowCell,
@@ -38,8 +45,9 @@ import {
   getHumanDuration,
   toPercent,
 } from 'sentry/components/performance/waterfall/utils';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {Organization} from 'sentry/types';
+import {defined} from 'sentry/utils';
 import {TraceFullDetailed} from 'sentry/utils/performance/quickTrace/types';
 import {isTraceFullDetailed} from 'sentry/utils/performance/quickTrace/utils';
 import Projects from 'sentry/utils/projects';
@@ -51,7 +59,9 @@ import {TraceInfo, TraceRoot, TreeDepth} from './types';
 const MARGIN_LEFT = 0;
 
 type Props = {
+  addContentSpanBarRef: (instance: HTMLDivElement | null) => void;
   continuingDepths: TreeDepth[];
+  generateBounds: (bounds: SpanBoundsType) => SpanGeneratedBoundsType;
   hasGuideAnchor: boolean;
   index: number;
   isExpanded: boolean;
@@ -59,23 +69,51 @@ type Props = {
   isOrphan: boolean;
   isVisible: boolean;
   location: Location;
+  onWheel: (deltaX: number) => void;
   organization: Organization;
+  removeContentSpanBarRef: (instance: HTMLDivElement | null) => void;
   toggleExpandedState: () => void;
   traceInfo: TraceInfo;
   transaction: TraceRoot | TraceFullDetailed;
   barColor?: string;
+  measurements?: Map<number, VerticalMark>;
 };
 
 type State = {
   showDetail: boolean;
 };
 
-class TransactionBar extends React.Component<Props, State> {
+class TransactionBar extends Component<Props, State> {
   state: State = {
     showDetail: false,
   };
 
-  transactionRowDOMRef = React.createRef<HTMLDivElement>();
+  componentDidMount() {
+    const {location, transaction} = this.props;
+
+    if (
+      'event_id' in transaction &&
+      transactionTargetHash(transaction.event_id) === location.hash
+    ) {
+      this.scrollIntoView();
+    }
+
+    if (this.transactionTitleRef.current) {
+      this.transactionTitleRef.current.addEventListener('wheel', this.handleWheel, {
+        passive: false,
+      });
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.transactionTitleRef.current) {
+      this.transactionTitleRef.current.removeEventListener('wheel', this.handleWheel);
+    }
+  }
+
+  transactionRowDOMRef = createRef<HTMLDivElement>();
+  transactionTitleRef = createRef<HTMLDivElement>();
+  spanContentRef: HTMLDivElement | null = null;
 
   toggleDisplayDetail = () => {
     const {transaction} = this.props;
@@ -91,6 +129,57 @@ class TransactionBar extends React.Component<Props, State> {
     const {generation} = transaction;
 
     return getOffset(generation);
+  }
+
+  handleWheel = (event: WheelEvent) => {
+    // https://stackoverflow.com/q/57358640
+    // https://github.com/facebook/react/issues/14856
+    if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (Math.abs(event.deltaY) === Math.abs(event.deltaX)) {
+      return;
+    }
+
+    const {onWheel} = this.props;
+    onWheel(event.deltaX);
+  };
+
+  renderMeasurements() {
+    const {measurements, generateBounds} = this.props;
+    if (!measurements) {
+      return null;
+    }
+
+    return (
+      <Fragment>
+        {Array.from(measurements.values()).map(verticalMark => {
+          const mark = Object.values(verticalMark.marks)[0];
+          const {timestamp} = mark;
+          const bounds = getMeasurementBounds(timestamp, generateBounds);
+
+          const shouldDisplay = defined(bounds.left) && defined(bounds.width);
+
+          if (!shouldDisplay || !bounds.isSpanVisibleInView) {
+            return null;
+          }
+
+          return (
+            <MeasurementMarker
+              key={String(timestamp)}
+              style={{
+                left: `clamp(0%, ${toPercent(bounds.left || 0)}, calc(100% - 1px))`,
+              }}
+              failedThreshold={verticalMark.failedThreshold}
+            />
+          );
+        })}
+      </Fragment>
+    );
   }
 
   renderConnector(hasToggle: boolean) {
@@ -199,18 +288,17 @@ class TransactionBar extends React.Component<Props, State> {
     );
   }
 
-  renderTitle(
-    scrollbarManagerChildrenProps: ScrollbarManager.ScrollbarManagerChildrenProps
-  ) {
-    const {generateContentSpanBarRef} = scrollbarManagerChildrenProps;
-    const {organization, transaction} = this.props;
+  // TODO: Use ScrollbarManager to bring autoscrolling here
+  renderTitle(_: ScrollbarManager.ScrollbarManagerChildrenProps) {
+    const {organization, transaction, addContentSpanBarRef, removeContentSpanBarRef} =
+      this.props;
     const left = this.getCurrentOffset();
     const errored = isTraceFullDetailed(transaction)
-      ? transaction.errors.length > 0
+      ? transaction.errors.length + transaction.performance_issues.length > 0
       : false;
 
     const content = isTraceFullDetailed(transaction) ? (
-      <React.Fragment>
+      <Fragment>
         <Projects orgId={organization.slug} slugs={[transaction.project_slug]}>
           {({projects}) => {
             const project = projects.find(p => p.slug === transaction.project_slug);
@@ -234,7 +322,7 @@ class TransactionBar extends React.Component<Props, State> {
           </strong>
           {transaction.transaction}
         </RowTitleContent>
-      </React.Fragment>
+      </Fragment>
     ) : (
       <RowTitleContent errored={false}>
         <strong>{'Trace \u2014 '}</strong>
@@ -243,7 +331,17 @@ class TransactionBar extends React.Component<Props, State> {
     );
 
     return (
-      <RowTitleContainer ref={generateContentSpanBarRef()}>
+      <RowTitleContainer
+        ref={ref => {
+          if (!ref) {
+            removeContentSpanBarRef(this.spanContentRef);
+            return;
+          }
+
+          addContentSpanBarRef(ref);
+          this.spanContentRef = ref;
+        }}
+      >
         {this.renderToggle(errored)}
         <RowTitle
           style={{
@@ -331,7 +429,10 @@ class TransactionBar extends React.Component<Props, State> {
   renderErrorBadge() {
     const {transaction} = this.props;
 
-    if (!isTraceFullDetailed(transaction) || !transaction.errors.length) {
+    if (
+      !isTraceFullDetailed(transaction) ||
+      !(transaction.errors.length + transaction.performance_issues.length)
+    ) {
       return null;
     }
 
@@ -342,7 +443,7 @@ class TransactionBar extends React.Component<Props, State> {
     const {transaction, traceInfo, barColor} = this.props;
     const {showDetail} = this.state;
 
-    // Use 1 as the difference in the event that startTimestamp === endTimestamp
+    // Use 1 as the difference in the case that startTimestamp === endTimestamp
     const delta = Math.abs(traceInfo.endTimestamp - traceInfo.startTimestamp) || 1;
     const startPosition = Math.abs(
       transaction.start_timestamp - traceInfo.startTimestamp
@@ -353,25 +454,53 @@ class TransactionBar extends React.Component<Props, State> {
 
     return (
       <RowRectangle
-        spanBarHatch={false}
         style={{
           backgroundColor: barColor,
           left: `min(${toPercent(startPercentage || 0)}, calc(100% - 1px))`,
           width: toPercent(widthPercentage || 0),
         }}
       >
+        {this.renderPerformanceIssues()}
         <DurationPill
           durationDisplay={getDurationDisplay({
             left: startPercentage,
             width: widthPercentage,
           })}
           showDetail={showDetail}
-          spanBarHatch={false}
         >
           {getHumanDuration(duration)}
         </DurationPill>
       </RowRectangle>
     );
+  }
+
+  renderPerformanceIssues() {
+    const {transaction, barColor} = this.props;
+    if (!isTraceFullDetailed(transaction)) {
+      return null;
+    }
+
+    const rows: React.ReactElement[] = [];
+    // Use 1 as the difference in the case that startTimestamp === endTimestamp
+    const delta = Math.abs(transaction.timestamp - transaction.start_timestamp) || 1;
+    for (let i = 0; i < transaction.performance_issues.length; i++) {
+      const issue = transaction.performance_issues[i];
+      const startPosition = Math.abs(issue.start - transaction.start_timestamp);
+      const startPercentage = startPosition / delta;
+      const duration = Math.abs(issue.end - issue.start);
+      const widthPercentage = duration / delta;
+      rows.push(
+        <RowRectangle
+          style={{
+            backgroundColor: barColor,
+            left: `min(${toPercent(startPercentage || 0)}, calc(100% - 1px))`,
+            width: toPercent(widthPercentage || 0),
+          }}
+          spanBarType={SpanBarType.AFFECTED}
+        />
+      );
+    }
+    return rows;
   }
 
   renderHeader({
@@ -396,6 +525,7 @@ class TransactionBar extends React.Component<Props, State> {
           }}
           showDetail={showDetail}
           onClick={this.toggleDisplayDetail}
+          ref={this.transactionTitleRef}
         >
           <GuideAnchor target="trace_view_guide_row" disabled={!hasGuideAnchor}>
             {this.renderTitle(scrollbarManagerChildrenProps)}
@@ -418,6 +548,7 @@ class TransactionBar extends React.Component<Props, State> {
         >
           <GuideAnchor target="trace_view_guide_row_details" disabled={!hasGuideAnchor}>
             {this.renderRectangle()}
+            {this.renderMeasurements()}
           </GuideAnchor>
         </RowCell>
         {!showDetail && this.renderGhostDivider(dividerHandlerChildrenProps)}
@@ -439,29 +570,21 @@ class TransactionBar extends React.Component<Props, State> {
     const {location, organization, isVisible, transaction} = this.props;
     const {showDetail} = this.state;
 
+    if (!isTraceFullDetailed(transaction)) {
+      return null;
+    }
+
+    if (!isVisible || !showDetail) {
+      return null;
+    }
+
     return (
-      <AnchorLinkManager.Consumer>
-        {({registerScrollFn, scrollToHash}) => {
-          if (!isTraceFullDetailed(transaction)) {
-            return null;
-          }
-
-          registerScrollFn(`#txn-${transaction.event_id}`, this.scrollIntoView);
-
-          if (!isVisible || !showDetail) {
-            return null;
-          }
-
-          return (
-            <TransactionDetail
-              location={location}
-              organization={organization}
-              transaction={transaction}
-              scrollToHash={scrollToHash}
-            />
-          );
-        }}
-      </AnchorLinkManager.Consumer>
+      <TransactionDetail
+        location={location}
+        organization={organization}
+        transaction={transaction}
+        scrollIntoView={this.scrollIntoView}
+      />
     );
   }
 

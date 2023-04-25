@@ -1,8 +1,9 @@
 import styled from '@emotion/styled';
 
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import Clipboard from 'sentry/components/clipboard';
 import Confirm from 'sentry/components/confirm';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import {
   Panel,
   PanelAlert,
@@ -12,8 +13,7 @@ import {
 } from 'sentry/components/panels';
 import {IconCopy, IconDownload, IconPrint} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
+import {space} from 'sentry/styles/space';
 
 type Props = {
   codes: string[];
@@ -22,12 +22,7 @@ type Props = {
   className?: string;
 };
 
-const RecoveryCodes = ({
-  className,
-  isEnrolled,
-  codes,
-  onRegenerateBackupCodes,
-}: Props) => {
+function RecoveryCodes({className, isEnrolled, codes, onRegenerateBackupCodes}: Props) {
   const printCodes = () => {
     // eslint-disable-next-line dot-notation
     const iframe = window.frames['printable'];
@@ -49,15 +44,15 @@ const RecoveryCodes = ({
 
         <Actions>
           <Clipboard hideUnsupported value={formattedCodes}>
-            <Button size="small" aria-label={t('copy')}>
+            <Button size="sm" aria-label={t('copy')}>
               <IconCopy />
             </Button>
           </Clipboard>
-          <Button size="small" onClick={printCodes} aria-label={t('print')}>
+          <Button size="sm" onClick={printCodes} aria-label={t('print')}>
             <IconPrint />
           </Button>
           <Button
-            size="small"
+            size="sm"
             download="sentry-recovery-codes.txt"
             href={`data:text/plain;charset=utf-8,${formattedCodes}`}
             aria-label={t('download')}
@@ -70,7 +65,7 @@ const RecoveryCodes = ({
               'Are you sure you want to regenerate recovery codes? Your old codes will no longer work.'
             )}
           >
-            <Button priority="danger" size="small">
+            <Button priority="danger" size="sm">
               {t('Regenerate Codes')}
             </Button>
           </Confirm>
@@ -87,10 +82,10 @@ const RecoveryCodes = ({
           <EmptyMessage>{t('You have no more recovery codes to use')}</EmptyMessage>
         )}
       </PanelBody>
-      <iframe name="printable" style={{display: 'none'}} />
+      <iframe data-test-id="frame" name="printable" style={{display: 'none'}} />
     </CodeContainer>
   );
-};
+}
 
 export default RecoveryCodes;
 

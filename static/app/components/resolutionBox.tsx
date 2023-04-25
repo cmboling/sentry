@@ -8,11 +8,12 @@ import TimeSince from 'sentry/components/timeSince';
 import Version from 'sentry/components/version';
 import {IconCheckmark} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {
   GroupActivity,
   GroupActivitySetByResolvedInRelease,
   GroupActivityType,
+  Repository,
   ResolutionStatusDetails,
 } from 'sentry/types';
 
@@ -95,15 +96,17 @@ function renderReason(
           ),
         });
   }
-  if (!!statusDetails.inCommit) {
+  if (statusDetails.inCommit) {
     return tct('This issue has been marked as resolved by [commit]', {
       commit: (
         <Fragment>
           <CommitLink
             commitId={statusDetails.inCommit.id}
-            repository={statusDetails.inCommit.repository}
+            repository={statusDetails.inCommit.repository as Repository}
           />
-          <StyledTimeSince date={statusDetails.inCommit.dateCreated} />
+          {statusDetails.inCommit.dateCreated && (
+            <StyledTimeSince date={statusDetails.inCommit.dateCreated} />
+          )}
         </Fragment>
       ),
     });
@@ -115,7 +118,7 @@ function ResolutionBox({statusDetails, projectId, activities = []}: Props) {
   return (
     <BannerContainer priority="default">
       <BannerSummary>
-        <StyledIconCheckmark color="green300" />
+        <StyledIconCheckmark color="successText" />
         <span>{renderReason(statusDetails, projectId, activities)}</span>
       </BannerSummary>
     </BannerContainer>
@@ -133,7 +136,7 @@ const StyledIconCheckmark = styled(IconCheckmark)`
   margin-top: 0 !important;
   align-self: center;
 
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
     margin-top: ${space(0.5)} !important;
     align-self: flex-start;
   }

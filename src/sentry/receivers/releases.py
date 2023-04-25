@@ -1,5 +1,7 @@
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models.signals import post_save
+from django.db.models import F
+from django.db.models.signals import post_save, pre_save
 from django.utils import timezone
 
 from sentry import analytics
@@ -12,10 +14,12 @@ from sentry.models import (
     GroupLink,
     GroupStatus,
     GroupSubscription,
+    GroupSubStatus,
+    Project,
     PullRequest,
     Release,
+    ReleaseProject,
     Repository,
-    UserOption,
     remove_group_from_inbox,
 )
 from sentry.models.grouphistory import (
@@ -24,15 +28,25 @@ from sentry.models.grouphistory import (
     record_group_history_from_activity_type,
 )
 from sentry.notifications.types import GroupSubscriptionReason
-from sentry.signals import issue_resolved
+from sentry.services.hybrid_cloud.user import RpcUser
+from sentry.services.hybrid_cloud.user_option import get_option_from_list, user_option_service
+from sentry.signals import buffer_incr_complete, issue_resolved
 from sentry.tasks.clear_expired_resolutions import clear_expired_resolutions
+from sentry.types.activity import ActivityType
+
+
+def validate_release_empty_version(instance: Release, **kwargs):
+    if not Release.is_valid_version(instance.version):
+        raise ValidationError(
+            f"release_id({instance.id}) failed to save because of invalid version"
+        )
 
 
 def resolve_group_resolutions(instance, created, **kwargs):
     if not created:
         return
 
-    clear_expired_resolutions.delay(release_id=instance.id)
+    transaction.on_commit(lambda: clear_expired_resolutions.delay(release_id=instance.id))
 
 
 def remove_resolved_link(link):
@@ -42,17 +56,18 @@ def remove_resolved_link(link):
     with transaction.atomic():
         link.delete()
         affected = Group.objects.filter(status=GroupStatus.RESOLVED, id=link.group_id).update(
-            status=GroupStatus.UNRESOLVED
+            status=GroupStatus.UNRESOLVED,
+            substatus=GroupSubStatus.ONGOING,
         )
         if affected:
             Activity.objects.create(
                 project_id=link.project_id,
                 group_id=link.group_id,
-                type=Activity.SET_UNRESOLVED,
+                type=ActivityType.SET_UNRESOLVED.value,
                 ident=link.group_id,
             )
             record_group_history_from_activity_type(
-                Group.objects.get(id=link.group_id), Activity.SET_UNRESOLVED
+                Group.objects.get(id=link.group_id), ActivityType.SET_UNRESOLVED.value
             )
 
 
@@ -98,10 +113,15 @@ def resolved_in_commit(instance, created, **kwargs):
                 acting_user = None
 
                 if user_list:
-                    acting_user = user_list[0]
-                    self_assign_issue = UserOption.objects.get_value(
-                        user=acting_user, key="self_assign_issue", default="0"
+                    acting_user: RpcUser = user_list[0]
+                    self_assign_issue: str = get_option_from_list(
+                        user_option_service.get_many(
+                            filter={"user_ids": [acting_user.id], "keys": ["self_assign_issue"]}
+                        ),
+                        key="self_assign_issue",
+                        default="0",
                     )
+
                     if self_assign_issue == "1" and not group.assignee_set.exists():
                         GroupAssignee.objects.assign(
                             group=group, assigned_to=acting_user, acting_user=acting_user
@@ -111,24 +131,35 @@ def resolved_in_commit(instance, created, **kwargs):
                     # subscribe every user
                     for user in user_list:
                         GroupSubscription.objects.subscribe(
-                            user=user, group=group, reason=GroupSubscriptionReason.status_change
+                            user=user,
+                            group=group,
+                            reason=GroupSubscriptionReason.status_change,
                         )
 
-                Activity.objects.create(
-                    project_id=group.project_id,
-                    group=group,
-                    type=Activity.SET_RESOLVED_IN_COMMIT,
-                    ident=instance.id,
-                    user=acting_user,
-                    data={"commit": instance.id},
-                )
+                activity_kwargs = {
+                    "project_id": group.project_id,
+                    "group": group,
+                    "type": ActivityType.SET_RESOLVED_IN_COMMIT.value,
+                    "ident": instance.id,
+                    "data": {"commit": instance.id},
+                }
+                if acting_user is not None:
+                    activity_kwargs["user_id"] = acting_user.id
+
+                Activity.objects.create(**activity_kwargs)
+
                 Group.objects.filter(id=group.id).update(
-                    status=GroupStatus.RESOLVED, resolved_at=current_datetime
+                    status=GroupStatus.RESOLVED,
+                    resolved_at=current_datetime,
+                    substatus=None,
                 )
+                group.status = GroupStatus.RESOLVED
+                group.substatus = None
+
                 remove_group_from_inbox(group, action=GroupInboxRemoveAction.RESOLVED)
                 record_group_history_from_activity_type(
                     group,
-                    Activity.SET_RESOLVED_IN_COMMIT,
+                    ActivityType.SET_RESOLVED_IN_COMMIT.value,
                     actor=acting_user if acting_user else None,
                 )
 
@@ -191,7 +222,7 @@ def resolved_in_pull_request(instance, created, **kwargs):
                     user_list = ()
                 acting_user = None
                 if user_list:
-                    acting_user = user_list[0]
+                    acting_user: RpcUser = user_list[0]
                     GroupAssignee.objects.assign(
                         group=group, assigned_to=acting_user, acting_user=acting_user
                     )
@@ -199,9 +230,9 @@ def resolved_in_pull_request(instance, created, **kwargs):
                 Activity.objects.create(
                     project_id=group.project_id,
                     group=group,
-                    type=Activity.SET_RESOLVED_IN_PULL_REQUEST,
+                    type=ActivityType.SET_RESOLVED_IN_PULL_REQUEST.value,
                     ident=instance.id,
-                    user=acting_user,
+                    user_id=acting_user.id if acting_user else None,
                     data={"pull_request": instance.id},
                 )
                 record_group_history(
@@ -219,6 +250,13 @@ def resolved_in_pull_request(instance, created, **kwargs):
                 )
 
 
+pre_save.connect(
+    validate_release_empty_version,
+    sender=Release,
+    dispatch_uid="validate_release_empty_version",
+    weak=False,
+)
+
 post_save.connect(
     resolve_group_resolutions, sender=Release, dispatch_uid="resolve_group_resolutions", weak=False
 )
@@ -231,3 +269,17 @@ post_save.connect(
     dispatch_uid="resolved_in_pull_request",
     weak=False,
 )
+
+
+@buffer_incr_complete.connect(
+    sender=ReleaseProject, dispatch_uid="project_has_releases_receiver", weak=False
+)
+def project_has_releases_receiver(filters, **_):
+    try:
+        project = ReleaseProject.objects.select_related("project").get(**filters).project
+    except ReleaseProject.DoesNotExist:
+        return
+
+    if not project.flags.has_releases:
+        project.flags.has_releases = True
+        project.update(flags=F("flags").bitor(Project.flags.has_releases))

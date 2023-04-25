@@ -1,6 +1,5 @@
-import * as React from 'react';
-
 import ExternalLink from 'sentry/components/links/externalLink';
+import {DEFAULT_QUERY} from 'sentry/constants';
 import {t, tct} from 'sentry/locale';
 import {Organization} from 'sentry/types';
 
@@ -8,21 +7,32 @@ export enum Query {
   FOR_REVIEW = 'is:unresolved is:for_review assigned_or_suggested:[me, none]',
   UNRESOLVED = 'is:unresolved',
   IGNORED = 'is:ignored',
+  ARCHIVED = 'is:archived',
   REPROCESSING = 'is:reprocessing',
 }
 
 type OverviewTab = {
-  /** Emitted analytics event tab name  */
+  /**
+   * Emitted analytics event tab name
+   */
   analyticsName: string;
-  /** Will fetch a count to display on this tab */
+  /**
+   * Will fetch a count to display on this tab
+   */
   count: boolean;
-  /** Tabs can be disabled via flag */
+  /**
+   * Tabs can be disabled via flag
+   */
   enabled: boolean;
   name: string;
-  /** Tooltip text for each tab */
-  tooltipTitle: React.ReactNode;
-  /** Tooltip text to be hoverable when text has links */
+  /**
+   * Tooltip text to be hoverable when text has links
+   */
   tooltipHoverable?: boolean;
+  /**
+   * Tooltip text for each tab
+   */
+  tooltipTitle?: React.ReactNode;
 };
 
 /**
@@ -37,7 +47,6 @@ export function getTabs(organization: Organization) {
         analyticsName: 'unresolved',
         count: true,
         enabled: true,
-        tooltipTitle: t(`All unresolved issues.`),
       },
     ],
     [
@@ -53,17 +62,28 @@ export function getTabs(organization: Organization) {
           Issues are automatically marked reviewed in 7 days.`),
       },
     ],
-    [
-      Query.IGNORED,
-      {
-        name: t('Ignored'),
-        analyticsName: 'ignored',
-        count: true,
-        enabled: true,
-        tooltipTitle: t(`Ignored issues don’t trigger alerts. When their ignore
+    organization.features.includes('escalating-issues-ui')
+      ? [
+          Query.ARCHIVED,
+          {
+            name: t('Archived'),
+            analyticsName: 'archived',
+            count: true,
+            enabled: true,
+            tooltipTitle: t(`Archived issues don’t trigger alerts.`),
+          },
+        ]
+      : [
+          Query.IGNORED,
+          {
+            name: t('Ignored'),
+            analyticsName: 'ignored',
+            count: true,
+            enabled: true,
+            tooltipTitle: t(`Ignored issues don’t trigger alerts. When their ignore
         conditions are met they become Unresolved and are flagged for review.`),
-      },
-    ],
+          },
+        ],
     [
       Query.REPROCESSING,
       {
@@ -120,6 +140,12 @@ export enum IssueSortOptions {
   INBOX = 'inbox',
 }
 
+export const DEFAULT_ISSUE_STREAM_SORT = IssueSortOptions.DATE;
+
+export function isDefaultIssueStreamSearch({query, sort}: {query: string; sort: string}) {
+  return query === DEFAULT_QUERY && sort === DEFAULT_ISSUE_STREAM_SORT;
+}
+
 export function getSortLabel(key: string) {
   switch (key) {
     case IssueSortOptions.NEW:
@@ -154,3 +180,6 @@ export const DISCOVER_EXCLUSION_FIELDS: string[] = [
   'is',
   '__text',
 ];
+
+export const SAVED_SEARCHES_SIDEBAR_OPEN_LOCALSTORAGE_KEY =
+  'issue-stream-saved-searches-sidebar-open';

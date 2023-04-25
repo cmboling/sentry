@@ -9,18 +9,19 @@ from django.utils import timezone
 
 from sentry.lang.native import appconnect
 from sentry.utils import json
+from sentry.utils.appleconnect import appstore_connect
 
 if TYPE_CHECKING:
     from sentry.models import Project
 
 
 class TestAppStoreConnectConfig:
-    @pytest.fixture  # type: ignore
+    @pytest.fixture
     def now(self) -> datetime:
         # Fixture so we can have one "now" for the entire test and its fixtures.
         return datetime.utcnow()
 
-    @pytest.fixture  # type: ignore
+    @pytest.fixture
     def data(self, now: datetime) -> json.JSONData:
         return {
             "type": "appStoreConnect",
@@ -59,7 +60,7 @@ class TestAppStoreConnectConfig:
 
         assert new_data == data
 
-    @pytest.mark.django_db  # type: ignore
+    @pytest.mark.django_db
     def test_from_project_config_empty_sources(
         self, default_project: "Project", data: json.JSONData
     ) -> None:
@@ -68,7 +69,7 @@ class TestAppStoreConnectConfig:
 
 
 class TestAppStoreConnectConfigUpdateProjectSymbolSource:
-    @pytest.fixture  # type: ignore
+    @pytest.fixture
     def config(self) -> appconnect.AppStoreConnectConfig:
         return appconnect.AppStoreConnectConfig(
             type="appStoreConnect",
@@ -82,7 +83,7 @@ class TestAppStoreConnectConfigUpdateProjectSymbolSource:
             bundleId="com.example.app",
         )
 
-    @pytest.mark.django_db  # type: ignore
+    @pytest.mark.django_db
     def test_new_source(
         self, default_project: "Project", config: appconnect.AppStoreConnectConfig
     ) -> None:
@@ -95,7 +96,7 @@ class TestAppStoreConnectConfigUpdateProjectSymbolSource:
         stored_sources = json.loads(raw)
         assert stored_sources == sources
 
-    @pytest.mark.django_db  # type: ignore
+    @pytest.mark.django_db
     def test_new_sources_with_existing(
         self, default_project: "Project", config: appconnect.AppStoreConnectConfig
     ) -> None:
@@ -117,7 +118,7 @@ class TestAppStoreConnectConfigUpdateProjectSymbolSource:
         new_sources.append(cfg.to_json())
         assert stored_sources == new_sources
 
-    @pytest.mark.django_db  # type: ignore
+    @pytest.mark.django_db
     def test_update(
         self, default_project: "Project", config: appconnect.AppStoreConnectConfig
     ) -> None:
@@ -140,7 +141,7 @@ class TestAppStoreConnectConfigUpdateProjectSymbolSource:
         current = appconnect.AppStoreConnectConfig.from_project_config(default_project, config.id)
         assert current.appconnectPrivateKey == "A NEW KEY"
 
-    @pytest.mark.django_db  # type: ignore
+    @pytest.mark.django_db
     def test_update_no_matching_id(
         self, default_project: "Project", config: appconnect.AppStoreConnectConfig
     ) -> None:
@@ -163,11 +164,11 @@ class TestAppStoreConnectConfigUpdateProjectSymbolSource:
 
 
 class TestDownloadDsyms:
-    @pytest.fixture  # type: ignore
+    @pytest.fixture
     def client(self) -> appconnect.AppConnectClient:
         return appconnect.AppConnectClient(
             app_id="honk",
-            api_credentials=appconnect.appstore_connect.AppConnectCredentials(
+            api_credentials=appstore_connect.AppConnectCredentials(
                 key_id="beep",
                 key="honkbeep",
                 issuer_id="beeper",

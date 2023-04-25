@@ -4,8 +4,10 @@ from django.utils import timezone
 
 from sentry.models import Environment, Release, ReleaseProjectEnvironment
 from sentry.testutils import TestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test(stable=True)
 class GetOrCreateTest(TestCase):
     def setUp(self):
         self.project = self.create_project(name="foo")
@@ -16,7 +18,7 @@ class GetOrCreateTest(TestCase):
         )
         self.release.add_project(self.project)
         self.environment = Environment.objects.create(
-            project_id=self.project.id, organization_id=self.project.organization_id, name="prod"
+            organization_id=self.project.organization_id, name="prod"
         )
 
     def test_create(self):

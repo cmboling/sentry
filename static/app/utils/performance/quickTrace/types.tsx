@@ -1,9 +1,10 @@
+import {Theme} from '@emotion/react';
+
 import {EventTag, Measurement} from 'sentry/types/event';
 import {
   DiscoverQueryProps,
   GenericChildrenProps,
 } from 'sentry/utils/discover/genericDiscoverQuery';
-import {Theme} from 'sentry/utils/theme';
 
 /**
  * `EventLite` represents the type of a simplified event from
@@ -14,6 +15,7 @@ export type EventLite = {
   generation: number | null;
   parent_event_id: string | null;
   parent_span_id: string | null;
+  performance_issues: TracePerformanceIssue[];
   project_id: number;
   project_slug: string;
   span_id: string;
@@ -30,6 +32,16 @@ export type TraceError = {
   project_slug: string;
   span: string;
   title: string;
+};
+
+export type TracePerformanceIssue = Omit<TraceError, 'issue' | 'span'> & {
+  culprit: string;
+  end: number;
+  span: string[];
+  start: number;
+  suspect_spans: string[];
+  type: number;
+  issue_short_id?: string;
 };
 
 export type TraceLite = EventLite[];
@@ -64,6 +76,7 @@ export type TraceFullDetailed = Omit<TraceFull, 'children'> & {
   'transaction.op': string;
   'transaction.status': string;
   measurements?: Record<string, Measurement>;
+  profile_id?: string;
   tags?: EventTag[];
 };
 
@@ -105,6 +118,7 @@ export type QuickTraceQueryChildrenProps = BaseTraceChildrenProps &
 
 export type TraceMeta = {
   errors: number;
+  performance_issues: number;
   projects: number;
   transactions: number;
 };

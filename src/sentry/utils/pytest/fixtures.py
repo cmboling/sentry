@@ -15,11 +15,14 @@ from datetime import datetime
 import pytest
 import requests
 import yaml
+from django.core.cache import cache
 
 import sentry
 
 # These chars cannot be used in Windows paths so replace them:
 # https://docs.microsoft.com/en-us/windows/desktop/FileIO/naming-a-file#naming-conventions
+from sentry.types.activity import ActivityType
+
 UNSAFE_PATH_CHARS = ("<", ">", ":", '"', " | ", "?", "*")
 
 
@@ -146,6 +149,11 @@ def factories():
 
 @pytest.fixture
 def task_runner():
+    """Context manager that ensures Celery tasks run directly inline where invoked.
+
+    While this context manager is active any Celery tasks created will run immediately at
+    the callsite rather than being sent to RabbitMQ and handled by a worker.
+    """
     from sentry.testutils.helpers.task_runner import TaskRunner
 
     return TaskRunner
@@ -153,6 +161,14 @@ def task_runner():
 
 @pytest.fixture
 def burst_task_runner():
+    """Context manager that queues up Celery tasks until called.
+
+    The yielded value which can be assigned by the ``as`` clause is callable and will
+    execute all queued up tasks. It takes a ``max_jobs`` argument to limit the number of
+    jobs to process.
+
+    The queue itself can be inspected via the ``queue`` attribute of the yielded value.
+    """
     from sentry.testutils.helpers.task_runner import BurstTaskRunner
 
     return BurstTaskRunner
@@ -238,19 +254,25 @@ def default_activity(default_group, default_project, default_user):
     from sentry.models import Activity
 
     return Activity.objects.create(
-        group=default_group, project=default_project, type=Activity.NOTE, user=default_user, data={}
+        group=default_group,
+        project=default_project,
+        type=ActivityType.NOTE.value,
+        user_id=default_user.id,
+        data={},
     )
 
 
 @pytest.fixture()
 def dyn_sampling_data():
     # return a function that returns fresh config so we don't accidentally get tests interfering with each other
-    def inner():
+    def inner(active=True):
         return {
+            "mode": "total",
             "rules": [
                 {
                     "sampleRate": 0.7,
                     "type": "trace",
+                    "active": active,
                     "condition": {
                         "op": "and",
                         "inner": [
@@ -259,7 +281,7 @@ def dyn_sampling_data():
                         ],
                     },
                 }
-            ]
+            ],
         }
 
     return inner
@@ -394,9 +416,48 @@ def reset_snuba(call_snuba):
         "/tests/transactions/drop",
         "/tests/sessions/drop",
         "/tests/metrics/drop",
+        "/tests/generic_metrics/drop",
+        "/tests/search_issues/drop",
     ]
 
     assert all(
         response.status_code == 200
-        for response in ThreadPoolExecutor(4).map(call_snuba, init_endpoints)
+        for response in ThreadPoolExecutor(len(init_endpoints)).map(call_snuba, init_endpoints)
     )
+
+
+@pytest.fixture
+def set_sentry_option():
+    """
+    A pytest-style wrapper around override_options.
+
+    ```python
+    def test_basic(set_sentry_option):
+        with set_sentry_option("key", 1.0):
+            do stuff
+    ```
+    """
+    from sentry.testutils.helpers.options import override_options
+
+    def inner(key, value):
+        return override_options({key: value})
+
+    return inner
+
+
+@pytest.fixture
+def django_cache():
+    yield cache
+    cache.clear()
+
+
+# NOTE:
+# If you are using a local instance of Symbolicator, you may need to either change `system.url-prefix`
+# to `system.internal-url-prefix` or add `127.0.0.1 host.docker.internal` entry to your `/etc/hosts`.
+@pytest.fixture(ids=["without_symbolicator", "with_symbolicator"], params=[0, 1])
+def process_with_symbolicator(request, set_sentry_option, live_server):
+    with set_sentry_option("system.url-prefix", live_server.url), set_sentry_option(
+        "symbolicator.sourcemaps-processing-sample-rate", request.param
+    ):
+        # Run test case
+        yield request.param

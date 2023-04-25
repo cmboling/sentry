@@ -2,17 +2,18 @@ from datetime import datetime
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from django.utils import timezone
 
-from sentry.models import Commit, CommitAuthor, Integration, PullRequest, Repository
-from sentry.testutils import APITestCase
-
-from .testutils import (
+from fixtures.github_enterprise import (
     PULL_REQUEST_CLOSED_EVENT_EXAMPLE,
     PULL_REQUEST_EDITED_EVENT_EXAMPLE,
     PULL_REQUEST_OPENED_EVENT_EXAMPLE,
     PUSH_EVENT_EXAMPLE_INSTALLATION,
 )
+from sentry.models import Commit, CommitAuthor, Integration, PullRequest, Repository
+from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
 class WebhookTest(APITestCase):
@@ -99,7 +100,9 @@ class WebhookTest(APITestCase):
         assert response.status_code == 204
 
 
+@region_silo_test
 class PushEventWebhookTest(APITestCase):
+    @pytest.mark.skip(reason="Host has been taken down")
     @patch("sentry.integrations.github_enterprise.client.get_jwt")
     @patch("sentry.integrations.github_enterprise.webhook.get_installation_metadata")
     def test_simple(self, mock_get_installation_metadata, mock_get_jwt):
@@ -250,6 +253,7 @@ class PushEventWebhookTest(APITestCase):
         assert commit.author.email == "baxterthehacker@example.com"
         assert commit.date_added == datetime(2015, 5, 5, 23, 40, 15, tzinfo=timezone.utc)
 
+    @pytest.mark.skip(reason="Host has been taken down")
     @patch("sentry.integrations.github_enterprise.client.get_jwt")
     @patch("sentry.integrations.github_enterprise.webhook.get_installation_metadata")
     def test_multiple_orgs(self, mock_get_installation_metadata, mock_get_jwt):
@@ -336,6 +340,7 @@ class PushEventWebhookTest(APITestCase):
         assert len(commit_list) == 0
 
 
+@region_silo_test
 class PullRequestEventWebhook(APITestCase):
     @patch("sentry.integrations.github_enterprise.webhook.get_installation_metadata")
     def test_opened(self, mock_get_installation_metadata):

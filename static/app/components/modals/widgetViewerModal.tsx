@@ -1,22 +1,24 @@
-import * as React from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
+import {Fragment, memo, useEffect, useMemo, useRef, useState} from 'react';
 import {components} from 'react-select';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
 import {truncate} from '@sentry/utils';
+import type {DataZoomComponentOption} from 'echarts';
 import {Location} from 'history';
 import cloneDeep from 'lodash/cloneDeep';
+import isEqual from 'lodash/isEqual';
+import trimStart from 'lodash/trimStart';
 import moment from 'moment';
 
 import {fetchTotalCount} from 'sentry/actionCreators/events';
 import {ModalRenderProps} from 'sentry/actionCreators/modal';
 import {Client} from 'sentry/api';
-import Alert from 'sentry/components/alert';
-import Button from 'sentry/components/button';
+import {Alert} from 'sentry/components/alert';
+import {Button} from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
-import SelectControl from 'sentry/components/forms/selectControl';
-import Option from 'sentry/components/forms/selectOption';
+import SelectControl from 'sentry/components/forms/controls/selectControl';
+import Option from 'sentry/components/forms/controls/selectOption';
 import GridEditable, {
   COL_WIDTH_UNDEFINED,
   GridColumnOrder,
@@ -26,55 +28,81 @@ import QuestionTooltip from 'sentry/components/questionTooltip';
 import {parseSearch} from 'sentry/components/searchSyntax/parser';
 import HighlightQuery from 'sentry/components/searchSyntax/renderer';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, PageFilters, SelectValue} from 'sentry/types';
 import {Series} from 'sentry/types/echarts';
 import {defined} from 'sentry/utils';
-import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import {getUtcDateString} from 'sentry/utils/dates';
 import {TableDataWithTitle} from 'sentry/utils/discover/discoverQuery';
 import EventView from 'sentry/utils/discover/eventView';
-import {getAggregateAlias, isAggregateField} from 'sentry/utils/discover/fields';
+import {
+  AggregationOutputType,
+  isAggregateField,
+  isEquation,
+  isEquationAlias,
+} from 'sentry/utils/discover/fields';
 import parseLinkHeader from 'sentry/utils/parseLinkHeader';
+import {MetricsCardinalityProvider} from 'sentry/utils/performance/contexts/metricsCardinality';
+import {MEPSettingProvider} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {decodeInteger, decodeList, decodeScalar} from 'sentry/utils/queryString';
 import useApi from 'sentry/utils/useApi';
+import {useLocation} from 'sentry/utils/useLocation';
+import useRouter from 'sentry/utils/useRouter';
 import withPageFilters from 'sentry/utils/withPageFilters';
-import {DisplayType, Widget, WidgetType} from 'sentry/views/dashboardsV2/types';
+import {DisplayType, Widget, WidgetType} from 'sentry/views/dashboards/types';
 import {
+  dashboardFiltersToString,
   eventViewFromWidget,
+  getDashboardFiltersFromURL,
   getFieldsFromEquations,
+  getNumEquations,
   getWidgetDiscoverUrl,
   getWidgetIssueUrl,
-} from 'sentry/views/dashboardsV2/utils';
-import WidgetCardChart from 'sentry/views/dashboardsV2/widgetCard/chart';
-import IssueWidgetQueries from 'sentry/views/dashboardsV2/widgetCard/issueWidgetQueries';
-import MetricsWidgetQueries from 'sentry/views/dashboardsV2/widgetCard/metricsWidgetQueries';
-import {WidgetCardChartContainer} from 'sentry/views/dashboardsV2/widgetCard/widgetCardChartContainer';
-import WidgetQueries from 'sentry/views/dashboardsV2/widgetCard/widgetQueries';
-import {decodeColumnOrder} from 'sentry/views/eventsV2/utils';
+  getWidgetReleasesUrl,
+} from 'sentry/views/dashboards/utils';
+import {SESSION_DURATION_ALERT} from 'sentry/views/dashboards/widgetCard';
+import WidgetCardChart, {
+  AugmentedEChartDataZoomHandler,
+  SLIDER_HEIGHT,
+} from 'sentry/views/dashboards/widgetCard/chart';
+import {
+  DashboardsMEPConsumer,
+  DashboardsMEPProvider,
+  useDashboardsMEPContext,
+} from 'sentry/views/dashboards/widgetCard/dashboardsMEPContext';
+import {GenericWidgetQueriesChildrenProps} from 'sentry/views/dashboards/widgetCard/genericWidgetQueries';
+import IssueWidgetQueries from 'sentry/views/dashboards/widgetCard/issueWidgetQueries';
+import ReleaseWidgetQueries from 'sentry/views/dashboards/widgetCard/releaseWidgetQueries';
+import {WidgetCardChartContainer} from 'sentry/views/dashboards/widgetCard/widgetCardChartContainer';
+import WidgetQueries from 'sentry/views/dashboards/widgetCard/widgetQueries';
+import {decodeColumnOrder} from 'sentry/views/discover/utils';
+import {OrganizationContext} from 'sentry/views/organizationContext';
+import {MetricsDataSwitcher} from 'sentry/views/performance/landing/metricsDataSwitcher';
 
 import {WidgetViewerQueryField} from './widgetViewerModal/utils';
 import {
   renderDiscoverGridHeaderCell,
   renderGridBodyCell,
   renderIssueGridHeaderCell,
-  renderMetricsGridHeaderCell,
+  renderReleaseGridHeaderCell,
 } from './widgetViewerModal/widgetViewerTableCell';
 
-export type WidgetViewerModalOptions = {
+export interface WidgetViewerModalOptions {
   organization: Organization;
   widget: Widget;
   onEdit?: () => void;
+  pageLinks?: string;
   seriesData?: Series[];
+  seriesResultsType?: Record<string, AggregationOutputType>;
   tableData?: TableDataWithTitle[];
-};
+  totalIssuesCount?: string;
+}
 
-type Props = ModalRenderProps &
-  WithRouterProps &
-  WidgetViewerModalOptions & {
-    organization: Organization;
-    selection: PageFilters;
-  };
+interface Props extends ModalRenderProps, WidgetViewerModalOptions {
+  organization: Organization;
+  selection: PageFilters;
+}
 
 const FULL_TABLE_ITEM_LIMIT = 20;
 const HALF_TABLE_ITEM_LIMIT = 10;
@@ -82,35 +110,28 @@ const GEO_COUNTRY_CODE = 'geo.country_code';
 const HALF_CONTAINER_HEIGHT = 300;
 const EMPTY_QUERY_NAME = '(Empty Query Condition)';
 
-// WidgetCardChartContainer rerenders if selection was changed.
-// This is required because we want to prevent ECharts interactions from
-// causing unnecessary rerenders which can break persistent legends functionality.
-const MemoizedWidgetCardChartContainer = React.memo(
-  WidgetCardChartContainer,
-  (prevProps, props) => {
-    return (
-      props.selection === prevProps.selection &&
-      props.location.query[WidgetViewerQueryField.QUERY] ===
-        prevProps.location.query[WidgetViewerQueryField.QUERY] &&
-      props.location.query[WidgetViewerQueryField.SORT] ===
-        prevProps.location.query[WidgetViewerQueryField.SORT] &&
-      props.location.query[WidgetViewerQueryField.WIDTH] ===
-        prevProps.location.query[WidgetViewerQueryField.WIDTH]
-    );
-  }
-);
-
-const MemoizedWidgetCardChart = React.memo(WidgetCardChart, (prevProps, props) => {
-  return (
-    props.selection === prevProps.selection &&
-    props.location.query[WidgetViewerQueryField.QUERY] ===
-      prevProps.location.query[WidgetViewerQueryField.QUERY] &&
+const shouldWidgetCardChartMemo = (prevProps, props) => {
+  const selectionMatches = props.selection === prevProps.selection;
+  const sortMatches =
     props.location.query[WidgetViewerQueryField.SORT] ===
-      prevProps.location.query[WidgetViewerQueryField.SORT] &&
-    props.location.query[WidgetViewerQueryField.WIDTH] ===
-      prevProps.location.query[WidgetViewerQueryField.WIDTH]
+    prevProps.location.query[WidgetViewerQueryField.SORT];
+  const chartZoomOptionsMatches = isEqual(
+    props.chartZoomOptions,
+    prevProps.chartZoomOptions
   );
-});
+  const isNotTopNWidget =
+    props.widget.displayType !== DisplayType.TOP_N && !defined(props.widget.limit);
+  return selectionMatches && chartZoomOptionsMatches && (sortMatches || isNotTopNWidget);
+};
+
+// WidgetCardChartContainer and WidgetCardChart rerenders if selection was changed.
+// This is required because we want to prevent ECharts interactions from causing
+// unnecessary rerenders which can break legends and zoom functionality.
+const MemoizedWidgetCardChartContainer = memo(
+  WidgetCardChartContainer,
+  shouldWidgetCardChartMemo
+);
+const MemoizedWidgetCardChart = memo(WidgetCardChart, shouldWidgetCardChartMemo);
 
 async function fetchDiscoverTotal(
   api: Client,
@@ -140,53 +161,80 @@ function WidgetViewerModal(props: Props) {
     organization,
     widget,
     selection,
-    location,
     Footer,
     Body,
     Header,
     closeModal,
     onEdit,
-    router,
-    routes,
-    params,
     seriesData,
     tableData,
+    totalIssuesCount,
+    pageLinks: defaultPageLinks,
+    seriesResultsType,
   } = props;
+  const location = useLocation();
+  const router = useRouter();
+  const shouldShowSlider = organization.features.includes('widget-viewer-modal-minimap');
+  // TODO(Tele-Team): Re-enable this when we have a better way to determine if the data is transaction only
+  // let widgetContentLoadingStatus: boolean | undefined = undefined;
   // Get widget zoom from location
   // We use the start and end query params for just the initial state
   const start = decodeScalar(location.query[WidgetViewerQueryField.START]);
   const end = decodeScalar(location.query[WidgetViewerQueryField.END]);
   const isTableWidget = widget.displayType === DisplayType.TABLE;
-  const locationPageFilter =
-    start && end
-      ? {
-          ...selection,
-          datetime: {start, end, period: null, utc: null},
-        }
-      : selection;
+  const hasSessionDuration = widget.queries.some(query =>
+    query.aggregates.some(aggregate => aggregate.includes('session.duration'))
+  );
+  const locationPageFilter = useMemo(
+    () =>
+      start && end
+        ? {
+            ...selection,
+            datetime: {start, end, period: null, utc: null},
+          }
+        : selection,
+    [start, end, selection]
+  );
 
-  const [chartUnmodified, setChartUnmodified] = React.useState<boolean>(true);
+  const [chartUnmodified, setChartUnmodified] = useState<boolean>(true);
 
-  const [modalSelection, setModalSelection] =
-    React.useState<PageFilters>(locationPageFilter);
+  const [chartZoomOptions, setChartZoomOptions] = useState<DataZoomComponentOption>({
+    start: 0,
+    end: 100,
+  });
+
+  // We wrap the modalChartSelection in a useRef because we do not want to recalculate this value
+  // (which would cause an unnecessary rerender on calculation) except for the initial load.
+  // We use this for when a user visit a widget viewer url directly.
+  const [modalTableSelection, setModalTableSelection] =
+    useState<PageFilters>(locationPageFilter);
+  const modalChartSelection = useRef(modalTableSelection);
 
   // Detect when a user clicks back and set the PageFilter state to match the location
-  // We need to use useEffect to prevent infinite looping rerenders due to the setModalSelection call
-  React.useEffect(() => {
+  // We need to use useEffect to prevent infinite looping rerenders due to the setModalTableSelection call
+  useEffect(() => {
     if (location.action === 'POP') {
-      setModalSelection(locationPageFilter);
+      setModalTableSelection(locationPageFilter);
+      if (start && end) {
+        setChartZoomOptions({
+          startValue: moment.utc(start).unix() * 1000,
+          endValue: moment.utc(end).unix() * 1000,
+        });
+      } else {
+        setChartZoomOptions({start: 0, end: 100});
+      }
     }
-  }, [location]);
+  }, [end, location, locationPageFilter, start]);
 
   // Get legends toggle settings from location
   // We use the legend query params for just the initial state
-  const [disabledLegends, setDisabledLegends] = React.useState<{[key: string]: boolean}>(
+  const [disabledLegends, setDisabledLegends] = useState<{[key: string]: boolean}>(
     decodeList(location.query[WidgetViewerQueryField.LEGEND]).reduce((acc, legend) => {
       acc[legend] = false;
       return acc;
     }, {})
   );
-  const [totalResults, setTotalResults] = React.useState<string | undefined>();
+  const [totalResults, setTotalResults] = useState<string | undefined>();
 
   // Get query selection settings from location
   const selectedQueryIndex =
@@ -201,13 +249,15 @@ function WidgetViewerModal(props: Props) {
 
   // Get table sort settings from location
   const sort = decodeScalar(location.query[WidgetViewerQueryField.SORT]);
-  const sortedQueries = sort
-    ? widget.queries.map(query => ({...query, orderby: sort}))
-    : widget.queries;
 
-  // Top N widget charts results rely on the sorting of the query
+  const sortedQueries = cloneDeep(
+    sort ? widget.queries.map(query => ({...query, orderby: sort})) : widget.queries
+  );
+
+  // Top N widget charts (including widgets with limits) results rely on the sorting of the query
+  // Set the orderby of the widget chart to match the location query params
   const primaryWidget =
-    widget.displayType === DisplayType.TOP_N
+    widget.displayType === DisplayType.TOP_N || widget.limit !== undefined
       ? {...widget, queries: sortedQueries}
       : widget;
   const api = useApi();
@@ -218,10 +268,49 @@ function WidgetViewerModal(props: Props) {
     displayType: DisplayType.TABLE,
   };
   const {aggregates, columns} = tableWidget.queries[0];
+  const {orderby} = widget.queries[0];
+  const order = orderby.startsWith('-');
+  const rawOrderby = trimStart(orderby, '-');
 
   const fields = defined(tableWidget.queries[0].fields)
     ? tableWidget.queries[0].fields
     : [...columns, ...aggregates];
+
+  // Some Discover Widgets (Line, Area, Bar) allow the user to specify an orderby
+  // that is not explicitly selected as an aggregate or column. We need to explicitly
+  // include the orderby in the table widget aggregates and columns otherwise
+  // eventsv2 will complain about sorting on an unselected field.
+  if (
+    widget.widgetType === WidgetType.DISCOVER &&
+    orderby &&
+    !isEquationAlias(rawOrderby) &&
+    !fields.includes(rawOrderby)
+  ) {
+    fields.push(rawOrderby);
+    [tableWidget, primaryWidget].forEach(aggregatesAndColumns => {
+      if (isAggregateField(rawOrderby) || isEquation(rawOrderby)) {
+        aggregatesAndColumns.queries.forEach(query => {
+          if (!query.aggregates.includes(rawOrderby)) {
+            query.aggregates.push(rawOrderby);
+          }
+        });
+      } else {
+        aggregatesAndColumns.queries.forEach(query => {
+          if (!query.columns.includes(rawOrderby)) {
+            query.columns.push(rawOrderby);
+          }
+        });
+      }
+    });
+  }
+
+  // Need to set the orderby of the eventsv2 query to equation[index] format
+  // since eventsv2 does not accept the raw equation as a valid sort payload
+  if (isEquation(rawOrderby) && tableWidget.queries[0].orderby === orderby) {
+    tableWidget.queries[0].orderby = `${order ? '-' : ''}equation[${
+      getNumEquations(fields) - 1
+    }]`;
+  }
 
   // World Map view should always have geo.country in the table chart
   if (
@@ -238,17 +327,15 @@ function WidgetViewerModal(props: Props) {
       DisplayType.LINE,
       DisplayType.BIG_NUMBER,
       DisplayType.BAR,
-    ].includes(widget.displayType) && widget.widgetType === WidgetType.DISCOVER;
+    ].includes(widget.displayType) &&
+    widget.widgetType &&
+    [WidgetType.DISCOVER, WidgetType.RELEASE].includes(widget.widgetType) &&
+    !defined(widget.limit);
 
-  let equationFieldsCount = 0;
   // Updates fields by adding any individual terms from equation fields as a column
   if (!isTableWidget) {
     const equationFields = getFieldsFromEquations(fields);
     equationFields.forEach(term => {
-      if (Array.isArray(fields) && !fields.includes(term)) {
-        equationFieldsCount++;
-        fields.unshift(term);
-      }
       if (isAggregateField(term) && !aggregates.includes(term)) {
         aggregates.unshift(term);
       }
@@ -258,34 +345,45 @@ function WidgetViewerModal(props: Props) {
     });
   }
 
-  if (shouldReplaceTableColumns) {
-    if (fields.length === 1) {
-      tableWidget.queries[0].orderby =
-        tableWidget.queries[0].orderby || `-${getAggregateAlias(fields[0])}`;
+  // Add any group by columns into table fields if missing
+  columns.forEach(column => {
+    if (!fields.includes(column)) {
+      fields.unshift(column);
     }
-    fields.unshift('title');
-    columns.unshift('title');
+  });
+
+  if (shouldReplaceTableColumns) {
+    switch (widget.widgetType) {
+      case WidgetType.DISCOVER:
+        if (fields.length === 1) {
+          tableWidget.queries[0].orderby =
+            tableWidget.queries[0].orderby || `-${fields[0]}`;
+        }
+        fields.unshift('title');
+        columns.unshift('title');
+        break;
+      case WidgetType.RELEASE:
+        fields.unshift('release');
+        columns.unshift('release');
+        break;
+      default:
+        break;
+    }
   }
 
   const eventView = eventViewFromWidget(
     tableWidget.title,
     tableWidget.queries[0],
-    modalSelection,
+    modalTableSelection,
     tableWidget.displayType
   );
 
   let columnOrder = decodeColumnOrder(
-    tableWidget.queries[0].fields?.map(field => ({
+    fields.map(field => ({
       field,
-    })) ?? []
+    }))
   );
   const columnSortBy = eventView.getSorts();
-  // Filter out equation terms from columnOrder so we don't clutter the table
-  if (shouldReplaceTableColumns && equationFieldsCount) {
-    columnOrder = columnOrder.filter(
-      (_, index) => index === 0 || index > equationFieldsCount
-    );
-  }
   columnOrder = columnOrder.map((column, index) => ({
     ...column,
     width: parseInt(widths[index], 10) || -1,
@@ -293,7 +391,15 @@ function WidgetViewerModal(props: Props) {
 
   const queryOptions = sortedQueries.map(({name, conditions}, index) => {
     // Creates the highlighted query elements to be used in the Query Select
-    const parsedQuery = !!!name && !!conditions ? parseSearch(conditions) : null;
+    const dashboardFilters = dashboardFiltersToString(
+      getDashboardFiltersFromURL(location)
+    );
+    const parsedQuery =
+      !name && !!conditions
+        ? parseSearch(
+            conditions + (dashboardFilters === '' ? '' : ` ${dashboardFilters}`)
+          )
+        : null;
     const getHighlightedQuery = (
       highlightedContainerProps: React.ComponentProps<typeof HighlightContainer>
     ) => {
@@ -328,13 +434,16 @@ function WidgetViewerModal(props: Props) {
   };
 
   // Get discover result totals
-  React.useEffect(() => {
+  useEffect(() => {
     const getDiscoverTotals = async () => {
-      if (widget.widgetType !== WidgetType.ISSUE) {
+      if (widget.widgetType === WidgetType.DISCOVER) {
         setTotalResults(await fetchDiscoverTotal(api, organization, location, eventView));
       }
     };
     getDiscoverTotals();
+    // Disabling this for now since this effect should only run on initial load and query index changes
+    // Including all exhaustive deps would cause fetchDiscoverTotal on nearly every update
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedQueryIndex]);
 
   function onLegendSelectChanged({selected}: {selected: Record<string, boolean>}) {
@@ -348,23 +457,247 @@ function WidgetViewerModal(props: Props) {
         ),
       },
     });
-    trackAdvancedAnalyticsEvent('dashboards_views.widget_viewer.toggle_legend', {
+    trackAnalytics('dashboards_views.widget_viewer.toggle_legend', {
       organization,
       widget_type: widget.widgetType ?? WidgetType.DISCOVER,
       display_type: widget.displayType,
     });
   }
 
-  function onZoom(_evt, chart) {
+  function DiscoverTable({
+    tableResults,
+    loading,
+    pageLinks,
+  }: GenericWidgetQueriesChildrenProps) {
+    const {isMetricsData} = useDashboardsMEPContext();
+    const links = parseLinkHeader(pageLinks ?? null);
+    const isFirstPage = links.previous?.results === false;
+    return (
+      <Fragment>
+        <GridEditable
+          isLoading={loading}
+          data={tableResults?.[0]?.data ?? []}
+          columnOrder={columnOrder}
+          columnSortBy={columnSortBy}
+          grid={{
+            renderHeadCell: renderDiscoverGridHeaderCell({
+              ...props,
+              location,
+              widget: tableWidget,
+              tableData: tableResults?.[0],
+              onHeaderClick: () => {
+                if (
+                  [DisplayType.TOP_N, DisplayType.TABLE].includes(widget.displayType) ||
+                  defined(widget.limit)
+                ) {
+                  setChartUnmodified(false);
+                }
+              },
+              isMetricsData,
+            }) as (column: GridColumnOrder, columnIndex: number) => React.ReactNode,
+            renderBodyCell: renderGridBodyCell({
+              ...props,
+              location,
+              tableData: tableResults?.[0],
+              isFirstPage,
+            }),
+            onResizeColumn,
+          }}
+          location={location}
+        />
+        {(links?.previous?.results || links?.next?.results) && (
+          <Pagination
+            pageLinks={pageLinks}
+            onCursor={newCursor => {
+              router.replace({
+                pathname: location.pathname,
+                query: {
+                  ...location.query,
+                  [WidgetViewerQueryField.CURSOR]: newCursor,
+                },
+              });
+
+              if (widget.displayType === DisplayType.TABLE) {
+                setChartUnmodified(false);
+              }
+
+              trackAnalytics('dashboards_views.widget_viewer.paginate', {
+                organization,
+                widget_type: WidgetType.DISCOVER,
+                display_type: widget.displayType,
+              });
+            }}
+          />
+        )}
+      </Fragment>
+    );
+  }
+
+  const renderIssuesTable = ({
+    tableResults,
+    loading,
+    pageLinks,
+    totalCount,
+  }: GenericWidgetQueriesChildrenProps) => {
+    if (totalResults === undefined && totalCount) {
+      setTotalResults(totalCount);
+    }
+    const links = parseLinkHeader(pageLinks ?? null);
+    return (
+      <Fragment>
+        <GridEditable
+          isLoading={loading}
+          data={tableResults?.[0]?.data ?? []}
+          columnOrder={columnOrder}
+          columnSortBy={columnSortBy}
+          grid={{
+            renderHeadCell: renderIssueGridHeaderCell({
+              location,
+              organization,
+              selection,
+              widget: tableWidget,
+              onHeaderClick: () => {
+                setChartUnmodified(false);
+              },
+            }) as (column: GridColumnOrder, columnIndex: number) => React.ReactNode,
+            renderBodyCell: renderGridBodyCell({
+              location,
+              organization,
+              selection,
+              widget: tableWidget,
+            }),
+            onResizeColumn,
+          }}
+          location={location}
+        />
+        {(links?.previous?.results || links?.next?.results) && (
+          <Pagination
+            pageLinks={pageLinks}
+            onCursor={(nextCursor, _path, _query, delta) => {
+              let nextPage = isNaN(page) ? delta : page + delta;
+              let newCursor = nextCursor;
+              // unset cursor and page when we navigate back to the first page
+              // also reset cursor if somehow the previous button is enabled on
+              // first page and user attempts to go backwards
+              if (nextPage <= 0) {
+                newCursor = undefined;
+                nextPage = 0;
+              }
+              router.replace({
+                pathname: location.pathname,
+                query: {
+                  ...location.query,
+                  [WidgetViewerQueryField.CURSOR]: newCursor,
+                  [WidgetViewerQueryField.PAGE]: nextPage,
+                },
+              });
+
+              if (widget.displayType === DisplayType.TABLE) {
+                setChartUnmodified(false);
+              }
+
+              trackAnalytics('dashboards_views.widget_viewer.paginate', {
+                organization,
+                widget_type: WidgetType.ISSUE,
+                display_type: widget.displayType,
+              });
+            }}
+          />
+        )}
+      </Fragment>
+    );
+  };
+
+  const renderReleaseTable: ReleaseWidgetQueries['props']['children'] = ({
+    tableResults,
+    loading,
+    pageLinks,
+  }) => {
+    const links = parseLinkHeader(pageLinks ?? null);
+    const isFirstPage = links.previous?.results === false;
+    return (
+      <Fragment>
+        <GridEditable
+          isLoading={loading}
+          data={tableResults?.[0]?.data ?? []}
+          columnOrder={columnOrder}
+          columnSortBy={columnSortBy}
+          grid={{
+            renderHeadCell: renderReleaseGridHeaderCell({
+              ...props,
+              location,
+              widget: tableWidget,
+              tableData: tableResults?.[0],
+              onHeaderClick: () => {
+                if (
+                  [DisplayType.TOP_N, DisplayType.TABLE].includes(widget.displayType) ||
+                  defined(widget.limit)
+                ) {
+                  setChartUnmodified(false);
+                }
+              },
+            }) as (column: GridColumnOrder, columnIndex: number) => React.ReactNode,
+            renderBodyCell: renderGridBodyCell({
+              ...props,
+              location,
+              tableData: tableResults?.[0],
+              isFirstPage,
+            }),
+            onResizeColumn,
+          }}
+          location={location}
+        />
+        {!tableWidget.queries[0].orderby.match(/^-?release$/) &&
+          (links?.previous?.results || links?.next?.results) && (
+            <Pagination
+              pageLinks={pageLinks}
+              onCursor={newCursor => {
+                router.replace({
+                  pathname: location.pathname,
+                  query: {
+                    ...location.query,
+                    [WidgetViewerQueryField.CURSOR]: newCursor,
+                  },
+                });
+                trackAnalytics('dashboards_views.widget_viewer.paginate', {
+                  organization,
+                  widget_type: WidgetType.RELEASE,
+                  display_type: widget.displayType,
+                });
+              }}
+            />
+          )}
+      </Fragment>
+    );
+  };
+
+  const onZoom: AugmentedEChartDataZoomHandler = (evt, chart) => {
     // @ts-ignore getModel() is private but we need this to retrieve datetime values of zoomed in region
     const model = chart.getModel();
-    const {startValue, endValue} = model._payload.batch[0];
+    const {seriesStart, seriesEnd} = evt;
+    let startValue, endValue;
+    startValue = model._payload.batch?.[0].startValue;
+    endValue = model._payload.batch?.[0].endValue;
+    const seriesStartTime = seriesStart ? new Date(seriesStart).getTime() : undefined;
+    const seriesEndTime = seriesEnd ? new Date(seriesEnd).getTime() : undefined;
+    // Slider zoom events don't contain the raw date time value, only the percentage
+    // We use the percentage with the start and end of the series to calculate the adjusted zoom
+    if (startValue === undefined || endValue === undefined) {
+      if (seriesStartTime && seriesEndTime) {
+        const diff = seriesEndTime - seriesStartTime;
+        startValue = diff * model._payload.start * 0.01 + seriesStartTime;
+        endValue = diff * model._payload.end * 0.01 + seriesStartTime;
+      } else {
+        return;
+      }
+    }
+    setChartZoomOptions({startValue, endValue});
     const newStart = getUtcDateString(moment.utc(startValue));
     const newEnd = getUtcDateString(moment.utc(endValue));
-    setModalSelection({
-      ...modalSelection,
+    setModalTableSelection({
+      ...modalTableSelection,
       datetime: {
-        ...modalSelection.datetime,
+        ...modalTableSelection.datetime,
         start: newStart,
         end: newEnd,
         period: null,
@@ -378,27 +711,134 @@ function WidgetViewerModal(props: Props) {
         [WidgetViewerQueryField.END]: newEnd,
       },
     });
-    trackAdvancedAnalyticsEvent('dashboards_views.widget_viewer.zoom', {
+    trackAnalytics('dashboards_views.widget_viewer.zoom', {
       organization,
       widget_type: widget.widgetType ?? WidgetType.DISCOVER,
       display_type: widget.displayType,
     });
-  }
+  };
 
-  const shouldUseDataFromProps = (!!seriesData || !!tableData) && chartUnmodified;
+  function renderWidgetViewerTable() {
+    switch (widget.widgetType) {
+      case WidgetType.ISSUE:
+        if (tableData && chartUnmodified && widget.displayType === DisplayType.TABLE) {
+          return renderIssuesTable({
+            tableResults: tableData,
+            loading: false,
+            errorMessage: undefined,
+            pageLinks: defaultPageLinks,
+            totalCount: totalIssuesCount,
+          });
+        }
+        return (
+          <IssueWidgetQueries
+            api={api}
+            organization={organization}
+            widget={tableWidget}
+            selection={modalTableSelection}
+            limit={
+              widget.displayType === DisplayType.TABLE
+                ? FULL_TABLE_ITEM_LIMIT
+                : HALF_TABLE_ITEM_LIMIT
+            }
+            cursor={cursor}
+            dashboardFilters={getDashboardFiltersFromURL(location) ?? undefined}
+          >
+            {renderIssuesTable}
+          </IssueWidgetQueries>
+        );
+      case WidgetType.RELEASE:
+        if (tableData && chartUnmodified && widget.displayType === DisplayType.TABLE) {
+          return renderReleaseTable({
+            tableResults: tableData,
+            loading: false,
+            pageLinks: defaultPageLinks,
+          });
+        }
+        return (
+          <ReleaseWidgetQueries
+            api={api}
+            organization={organization}
+            widget={tableWidget}
+            selection={modalTableSelection}
+            limit={
+              widget.displayType === DisplayType.TABLE
+                ? FULL_TABLE_ITEM_LIMIT
+                : HALF_TABLE_ITEM_LIMIT
+            }
+            cursor={cursor}
+            dashboardFilters={getDashboardFiltersFromURL(location) ?? undefined}
+          >
+            {renderReleaseTable}
+          </ReleaseWidgetQueries>
+        );
+      case WidgetType.DISCOVER:
+      default:
+        if (tableData && chartUnmodified && widget.displayType === DisplayType.TABLE) {
+          return (
+            <DiscoverTable
+              tableResults={tableData}
+              loading={false}
+              pageLinks={defaultPageLinks}
+            />
+          );
+        }
+        return (
+          <WidgetQueries
+            api={api}
+            organization={organization}
+            widget={tableWidget}
+            selection={modalTableSelection}
+            limit={
+              widget.displayType === DisplayType.TABLE
+                ? FULL_TABLE_ITEM_LIMIT
+                : HALF_TABLE_ITEM_LIMIT
+            }
+            cursor={cursor}
+            dashboardFilters={getDashboardFiltersFromURL(location) ?? undefined}
+          >
+            {({tableResults, loading, pageLinks}) => {
+              // TODO(Tele-Team): Re-enable this when we have a better way to determine if the data is transaction only
+              // small hack that improves the concurrency render of the warning triangle
+              // widgetContentLoadingStatus = loading;
+              return (
+                <DiscoverTable
+                  tableResults={tableResults}
+                  loading={loading}
+                  pageLinks={pageLinks}
+                />
+              );
+            }}
+          </WidgetQueries>
+        );
+    }
+  }
 
   function renderWidgetViewer() {
     return (
-      <React.Fragment>
+      <Fragment>
+        {hasSessionDuration && SESSION_DURATION_ALERT}
         {widget.displayType !== DisplayType.TABLE && (
           <Container
             height={
-              widget.displayType !== DisplayType.BIG_NUMBER ? HALF_CONTAINER_HEIGHT : null
+              widget.displayType !== DisplayType.BIG_NUMBER
+                ? HALF_CONTAINER_HEIGHT +
+                  (shouldShowSlider &&
+                  [
+                    DisplayType.AREA,
+                    DisplayType.LINE,
+                    DisplayType.BAR,
+                    DisplayType.TOP_N,
+                  ].includes(widget.displayType)
+                    ? SLIDER_HEIGHT
+                    : 0)
+                : null
             }
           >
-            {shouldUseDataFromProps ? (
+            {(!!seriesData || !!tableData) && chartUnmodified ? (
               <MemoizedWidgetCardChart
                 timeseriesResults={seriesData}
+                timeseriesResultsTypes={seriesResultsType}
                 tableResults={tableData}
                 errorMessage={undefined}
                 loading={false}
@@ -407,57 +847,30 @@ function WidgetViewerModal(props: Props) {
                 selection={selection}
                 router={router}
                 organization={organization}
-                onZoom={(_evt, chart) => {
-                  onZoom(_evt, chart);
-                  setChartUnmodified(false);
-                }}
+                onZoom={onZoom}
                 onLegendSelectChanged={onLegendSelectChanged}
                 legendOptions={{selected: disabledLegends}}
                 expandNumbers
+                showSlider={shouldShowSlider}
+                noPadding
+                chartZoomOptions={chartZoomOptions}
               />
             ) : (
               <MemoizedWidgetCardChartContainer
                 location={location}
-                router={router}
-                routes={routes}
-                params={params}
                 api={api}
                 organization={organization}
-                selection={modalSelection}
+                selection={modalChartSelection.current}
+                dashboardFilters={getDashboardFiltersFromURL(location) ?? undefined}
                 // Top N charts rely on the orderby of the table
                 widget={primaryWidget}
-                onZoom={(_evt, chart) => {
-                  // @ts-ignore getModel() is private but we need this to retrieve datetime values of zoomed in region
-                  const model = chart.getModel();
-                  const {startValue, endValue} = model._payload.batch[0];
-                  const newStart = getUtcDateString(moment.utc(startValue));
-                  const newEnd = getUtcDateString(moment.utc(endValue));
-                  setModalSelection({
-                    ...modalSelection,
-                    datetime: {
-                      ...modalSelection.datetime,
-                      start: newStart,
-                      end: newEnd,
-                      period: null,
-                    },
-                  });
-                  router.push({
-                    pathname: location.pathname,
-                    query: {
-                      ...location.query,
-                      [WidgetViewerQueryField.START]: newStart,
-                      [WidgetViewerQueryField.END]: newEnd,
-                    },
-                  });
-                  trackAdvancedAnalyticsEvent('dashboards_views.widget_viewer.zoom', {
-                    organization,
-                    widget_type: widget.widgetType ?? WidgetType.DISCOVER,
-                    display_type: widget.displayType,
-                  });
-                }}
+                onZoom={onZoom}
                 onLegendSelectChanged={onLegendSelectChanged}
                 legendOptions={{selected: disabledLegends}}
                 expandNumbers
+                showSlider={shouldShowSlider}
+                noPadding
+                chartZoomOptions={chartZoomOptions}
               />
             )}
           </Container>
@@ -485,14 +898,11 @@ function WidgetViewerModal(props: Props) {
                   },
                 });
 
-                trackAdvancedAnalyticsEvent(
-                  'dashboards_views.widget_viewer.select_query',
-                  {
-                    organization,
-                    widget_type: widget.widgetType ?? WidgetType.DISCOVER,
-                    display_type: widget.displayType,
-                  }
-                );
+                trackAnalytics('dashboards_views.widget_viewer.select_query', {
+                  organization,
+                  widget_type: widget.widgetType ?? WidgetType.DISCOVER,
+                  display_type: widget.displayType,
+                });
               }}
               components={{
                 // Replaces the displayed selected value
@@ -505,6 +915,7 @@ function WidgetViewerModal(props: Props) {
                         wordBreak: 'break-word',
                         flex: 1,
                         display: 'flex',
+                        padding: `0 ${space(0.5)}`,
                       })}
                     >
                       {queryOptions[selectedQueryIndex].getHighlightedQuery({
@@ -555,305 +966,156 @@ function WidgetViewerModal(props: Props) {
             )}
           </QueryContainer>
         )}
-        {widget.widgetType === WidgetType.ISSUE ? (
-          <IssueWidgetQueries
-            api={api}
-            organization={organization}
-            widget={tableWidget}
-            selection={modalSelection}
-            limit={
-              widget.displayType === DisplayType.TABLE
-                ? FULL_TABLE_ITEM_LIMIT
-                : HALF_TABLE_ITEM_LIMIT
-            }
-            cursor={cursor}
-          >
-            {({transformedResults, loading, pageLinks, totalCount}) => {
-              if (totalResults === undefined) {
-                setTotalResults(totalCount);
-              }
-              const links = parseLinkHeader(pageLinks ?? null);
-              return (
-                <React.Fragment>
-                  <GridEditable
-                    isLoading={loading}
-                    data={transformedResults}
-                    columnOrder={columnOrder}
-                    columnSortBy={columnSortBy}
-                    grid={{
-                      renderHeadCell: renderIssueGridHeaderCell({
-                        location,
-                        organization,
-                        selection,
-                        widget: tableWidget,
-                      }) as (
-                        column: GridColumnOrder,
-                        columnIndex: number
-                      ) => React.ReactNode,
-                      renderBodyCell: renderGridBodyCell({
-                        location,
-                        organization,
-                        selection,
-                        widget: tableWidget,
-                      }),
-                      onResizeColumn,
-                    }}
-                    location={location}
-                  />
-                  {(links?.previous?.results || links?.next?.results) && (
-                    <Pagination
-                      pageLinks={pageLinks}
-                      onCursor={(nextCursor, _path, _query, delta) => {
-                        let nextPage = isNaN(page) ? delta : page + delta;
-                        let newCursor = nextCursor;
-                        // unset cursor and page when we navigate back to the first page
-                        // also reset cursor if somehow the previous button is enabled on
-                        // first page and user attempts to go backwards
-                        if (nextPage <= 0) {
-                          newCursor = undefined;
-                          nextPage = 0;
-                        }
-                        router.replace({
-                          pathname: location.pathname,
-                          query: {
-                            ...location.query,
-                            [WidgetViewerQueryField.CURSOR]: newCursor,
-                            [WidgetViewerQueryField.PAGE]: nextPage,
-                          },
-                        });
-
-                        trackAdvancedAnalyticsEvent(
-                          'dashboards_views.widget_viewer.paginate',
-                          {
-                            organization,
-                            widget_type: WidgetType.ISSUE,
-                            display_type: widget.displayType,
-                          }
-                        );
-                      }}
-                    />
-                  )}
-                </React.Fragment>
-              );
-            }}
-          </IssueWidgetQueries>
-        ) : widget.widgetType === WidgetType.METRICS ? (
-          <MetricsWidgetQueries
-            api={api}
-            organization={organization}
-            widget={tableWidget}
-            selection={modalSelection}
-            limit={
-              widget.displayType === DisplayType.TABLE
-                ? FULL_TABLE_ITEM_LIMIT
-                : HALF_TABLE_ITEM_LIMIT
-            }
-            includeAllArgs
-            cursor={cursor}
-          >
-            {({tableResults, loading, pageLinks}) => {
-              const links = parseLinkHeader(pageLinks ?? null);
-              const isFirstPage = links.previous?.results === false;
-              return (
-                <React.Fragment>
-                  <GridEditable
-                    isLoading={loading}
-                    data={tableResults?.[0]?.data ?? []}
-                    columnOrder={columnOrder}
-                    columnSortBy={columnSortBy}
-                    grid={{
-                      renderHeadCell: renderMetricsGridHeaderCell({
-                        ...props,
-                        widget: tableWidget,
-                        tableData: tableResults?.[0],
-                        onHeaderClick: () => setChartUnmodified(false),
-                      }) as (
-                        column: GridColumnOrder,
-                        columnIndex: number
-                      ) => React.ReactNode,
-                      renderBodyCell: renderGridBodyCell({
-                        ...props,
-                        tableData: tableResults?.[0],
-                        isFirstPage,
-                      }),
-                      onResizeColumn,
-                    }}
-                    location={location}
-                  />
-                  {(links?.previous?.results || links?.next?.results) && (
-                    <Pagination
-                      pageLinks={pageLinks}
-                      onCursor={newCursor => {
-                        router.replace({
-                          pathname: location.pathname,
-                          query: {
-                            ...location.query,
-                            [WidgetViewerQueryField.CURSOR]: newCursor,
-                          },
-                        });
-                        trackAdvancedAnalyticsEvent(
-                          'dashboards_views.widget_viewer.paginate',
-                          {
-                            organization,
-                            widget_type: WidgetType.METRICS,
-                            display_type: widget.displayType,
-                          }
-                        );
-                      }}
-                    />
-                  )}
-                </React.Fragment>
-              );
-            }}
-          </MetricsWidgetQueries>
-        ) : (
-          <WidgetQueries
-            api={api}
-            organization={organization}
-            widget={tableWidget}
-            selection={modalSelection}
-            limit={
-              widget.displayType === DisplayType.TABLE
-                ? FULL_TABLE_ITEM_LIMIT
-                : HALF_TABLE_ITEM_LIMIT
-            }
-            pagination
-            cursor={cursor}
-          >
-            {({tableResults, loading, pageLinks}) => {
-              const isFirstPage = pageLinks
-                ? parseLinkHeader(pageLinks).previous.results === false
-                : false;
-              const links = parseLinkHeader(pageLinks ?? null);
-              return (
-                <React.Fragment>
-                  <GridEditable
-                    isLoading={loading}
-                    data={tableResults?.[0]?.data ?? []}
-                    columnOrder={columnOrder}
-                    columnSortBy={columnSortBy}
-                    grid={{
-                      renderHeadCell: renderDiscoverGridHeaderCell({
-                        ...props,
-                        widget: tableWidget,
-                        tableData: tableResults?.[0],
-                        onHeaderClick: () => setChartUnmodified(false),
-                      }) as (
-                        column: GridColumnOrder,
-                        columnIndex: number
-                      ) => React.ReactNode,
-                      renderBodyCell: renderGridBodyCell({
-                        ...props,
-                        tableData: tableResults?.[0],
-                        isFirstPage,
-                      }),
-                      onResizeColumn,
-                    }}
-                    location={location}
-                  />
-                  {(links?.previous?.results || links?.next?.results) && (
-                    <Pagination
-                      pageLinks={pageLinks}
-                      onCursor={newCursor => {
-                        router.replace({
-                          pathname: location.pathname,
-                          query: {
-                            ...location.query,
-                            [WidgetViewerQueryField.CURSOR]: newCursor,
-                          },
-                        });
-                        trackAdvancedAnalyticsEvent(
-                          'dashboards_views.widget_viewer.paginate',
-                          {
-                            organization,
-                            widget_type: WidgetType.DISCOVER,
-                            display_type: widget.displayType,
-                          }
-                        );
-                      }}
-                    />
-                  )}
-                </React.Fragment>
-              );
-            }}
-          </WidgetQueries>
-        )}
-      </React.Fragment>
+        {renderWidgetViewerTable()}
+      </Fragment>
     );
   }
 
+  return (
+    <Fragment>
+      <OrganizationContext.Provider value={organization}>
+        <DashboardsMEPProvider>
+          <MetricsCardinalityProvider organization={organization} location={location}>
+            <MetricsDataSwitcher
+              organization={organization}
+              eventView={eventView}
+              location={location}
+              hideLoadingIndicator
+            >
+              {metricsDataSide => (
+                <MEPSettingProvider
+                  location={location}
+                  forceTransactions={metricsDataSide.forceTransactionsOnly}
+                >
+                  <Header closeButton>
+                    <WidgetTitle>
+                      <h3>{widget.title}</h3>
+                      <DashboardsMEPConsumer>
+                        {({}) => {
+                          // TODO(Tele-Team): Re-enable this when we have a better way to determine if the data is transaction only
+                          // if (
+                          //   widgetContentLoadingStatus === false &&
+                          //   widget.widgetType === WidgetType.DISCOVER &&
+                          //   isMetricsData === false
+                          // ) {
+                          //   return (
+                          //     <Tooltip
+                          //       containerDisplayMode="inline-flex"
+                          //       title={t(
+                          //         'Based on your search criteria, the sampled events available may be limited and may not be representative of all events.'
+                          //       )}
+                          //     >
+                          //       <IconWarning color="warningText" size="md" />
+                          //     </Tooltip>
+                          //   );
+                          // }
+
+                          return null;
+                        }}
+                      </DashboardsMEPConsumer>
+                    </WidgetTitle>
+                  </Header>
+                  <Body>{renderWidgetViewer()}</Body>
+                  <Footer>
+                    <ResultsContainer>
+                      {renderTotalResults(totalResults, widget.widgetType)}
+                      <ButtonBar gap={1}>
+                        {onEdit && widget.id && (
+                          <Button
+                            onClick={() => {
+                              closeModal();
+                              onEdit();
+                              trackAnalytics('dashboards_views.widget_viewer.edit', {
+                                organization,
+                                widget_type: widget.widgetType ?? WidgetType.DISCOVER,
+                                display_type: widget.displayType,
+                              });
+                            }}
+                          >
+                            {t('Edit Widget')}
+                          </Button>
+                        )}
+                        {widget.widgetType && (
+                          <OpenButton
+                            widget={primaryWidget}
+                            organization={organization}
+                            selection={modalTableSelection}
+                            selectedQueryIndex={selectedQueryIndex}
+                          />
+                        )}
+                      </ButtonBar>
+                    </ResultsContainer>
+                  </Footer>
+                </MEPSettingProvider>
+              )}
+            </MetricsDataSwitcher>
+          </MetricsCardinalityProvider>
+        </DashboardsMEPProvider>
+      </OrganizationContext.Provider>
+    </Fragment>
+  );
+}
+
+interface OpenButtonProps {
+  organization: Organization;
+  selectedQueryIndex: number;
+  selection: PageFilters;
+  widget: Widget;
+}
+
+function OpenButton({
+  widget,
+  selection,
+  organization,
+  selectedQueryIndex,
+}: OpenButtonProps) {
   let openLabel: string;
   let path: string;
+  const {isMetricsData} = useDashboardsMEPContext();
+
   switch (widget.widgetType) {
     case WidgetType.ISSUE:
       openLabel = t('Open in Issues');
-      path = getWidgetIssueUrl(primaryWidget, modalSelection, organization);
+      path = getWidgetIssueUrl(widget, selection, organization);
+      break;
+    case WidgetType.RELEASE:
+      openLabel = t('Open in Releases');
+      path = getWidgetReleasesUrl(widget, selection, organization);
       break;
     case WidgetType.DISCOVER:
     default:
       openLabel = t('Open in Discover');
       path = getWidgetDiscoverUrl(
-        {...primaryWidget, queries: [primaryWidget.queries[selectedQueryIndex]]},
-        modalSelection,
-        organization
+        {...widget, queries: [widget.queries[selectedQueryIndex]]},
+        selection,
+        organization,
+        0,
+        isMetricsData
       );
       break;
   }
 
   return (
-    <React.Fragment>
-      <Header closeButton>
-        <h3>{widget.title}</h3>
-      </Header>
-      <Body>{renderWidgetViewer()}</Body>
-      <Footer>
-        <ResultsContainer>
-          {totalResults && renderTotalResults(totalResults, widget.widgetType)}
-          <ButtonBar gap={1}>
-            {onEdit && widget.id && (
-              <Button
-                type="button"
-                onClick={() => {
-                  closeModal();
-                  onEdit();
-                  trackAdvancedAnalyticsEvent('dashboards_views.widget_viewer.edit', {
-                    organization,
-                    widget_type: widget.widgetType ?? WidgetType.DISCOVER,
-                    display_type: widget.displayType,
-                  });
-                }}
-              >
-                {t('Edit Widget')}
-              </Button>
-            )}
-            {widget.widgetType &&
-              [WidgetType.DISCOVER, WidgetType.ISSUE].includes(widget.widgetType) && (
-                <Button
-                  to={path}
-                  priority="primary"
-                  type="button"
-                  onClick={() => {
-                    trackAdvancedAnalyticsEvent(
-                      'dashboards_views.widget_viewer.open_source',
-                      {
-                        organization,
-                        widget_type: widget.widgetType ?? WidgetType.DISCOVER,
-                        display_type: widget.displayType,
-                      }
-                    );
-                  }}
-                >
-                  {openLabel}
-                </Button>
-              )}
-          </ButtonBar>
-        </ResultsContainer>
-      </Footer>
-    </React.Fragment>
+    <Button
+      to={path}
+      priority="primary"
+      onClick={() => {
+        trackAnalytics('dashboards_views.widget_viewer.open_source', {
+          organization,
+          widget_type: widget.widgetType ?? WidgetType.DISCOVER,
+          display_type: widget.displayType,
+        });
+      }}
+    >
+      {openLabel}
+    </Button>
   );
 }
 
-function renderTotalResults(totalResults: string, widgetType?: WidgetType) {
+function renderTotalResults(totalResults?: string, widgetType?: WidgetType) {
+  if (totalResults === undefined) {
+    return <span />;
+  }
   switch (widgetType) {
     case WidgetType.ISSUE:
       return (
@@ -885,8 +1147,8 @@ export const modalCss = css`
 
 const Container = styled('div')<{height?: number | null}>`
   height: ${p => (p.height ? `${p.height}px` : 'auto')};
-  max-height: ${HALF_CONTAINER_HEIGHT}px;
   position: relative;
+  padding-bottom: ${space(3)};
 `;
 
 const QueryContainer = styled('div')`
@@ -906,6 +1168,7 @@ const HighlightContainer = styled('span')<{display?: 'block' | 'flex'}>`
   font-family: ${p => p.theme.text.familyMono};
   font-size: ${p => p.theme.fontSizeSmall};
   line-height: 2;
+  flex: 1;
 `;
 
 const ResultsContainer = styled('div')`
@@ -914,7 +1177,7 @@ const ResultsContainer = styled('div')`
   flex-direction: column;
   gap: ${space(1)};
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     align-items: center;
     flex-direction: row;
     justify-content: space-between;
@@ -925,4 +1188,10 @@ const EmptyQueryContainer = styled('span')`
   color: ${p => p.theme.disabled};
 `;
 
-export default withRouter(withPageFilters(WidgetViewerModal));
+const WidgetTitle = styled('div')`
+  display: flex;
+  gap: ${space(1)};
+  align-items: center;
+`;
+
+export default withPageFilters(WidgetViewerModal);

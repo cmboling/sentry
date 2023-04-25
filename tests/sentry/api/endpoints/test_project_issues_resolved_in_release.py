@@ -2,8 +2,10 @@ from uuid import uuid1
 
 from sentry.models import Commit, GroupLink, GroupResolution, ReleaseCommit, Repository
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class ProjectIssuesResolvedInReleaseEndpointTest(APITestCase):
     endpoint = "sentry-api-0-project-release-resolved"
     method = "get"
@@ -49,7 +51,7 @@ class ProjectIssuesResolvedInReleaseEndpointTest(APITestCase):
         )
 
     def run_test(self, expected_groups):
-        response = self.get_valid_response(self.org.slug, self.project.slug, self.release.version)
+        response = self.get_success_response(self.org.slug, self.project.slug, self.release.version)
         assert len(response.data) == len(expected_groups)
         expected = set(map(str, [g.id for g in expected_groups]))
         assert {item["id"] for item in response.data} == expected

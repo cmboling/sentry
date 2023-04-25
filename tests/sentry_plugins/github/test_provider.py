@@ -1,10 +1,10 @@
+from functools import cached_property
 from unittest.mock import patch
 
 import responses
-from exam import fixture
 
 from sentry.models import Integration, OrganizationIntegration, Repository
-from sentry.testutils import PluginTestCase
+from sentry.testutils import TestCase
 from sentry.utils import json
 from sentry_plugins.github.client import GitHubAppsClient, GitHubClient
 from sentry_plugins.github.plugin import GitHubAppsRepositoryProvider, GitHubRepositoryProvider
@@ -17,8 +17,8 @@ from sentry_plugins.github.testutils import (
 from social_auth.models import UserSocialAuth
 
 
-class GitHubPluginTest(PluginTestCase):
-    @fixture
+class GitHubPluginTest(TestCase):
+    @cached_property
     def provider(self):
         return GitHubRepositoryProvider("github")
 
@@ -168,8 +168,8 @@ class GitHubPluginTest(PluginTestCase):
         assert repo.config["webhook_events"] == ["push", "pull_request"]
 
 
-class GitHubAppsProviderTest(PluginTestCase):
-    @fixture
+class GitHubAppsProviderTest(TestCase):
+    @cached_property
     def provider(self):
         return GitHubAppsRepositoryProvider("github_apps")
 
@@ -193,7 +193,7 @@ class GitHubAppsProviderTest(PluginTestCase):
         self.provider.link_auth(user, organization, {"integration_id": integration.id})
 
         assert OrganizationIntegration.objects.filter(
-            organization=organization, integration=integration
+            organization_id=organization.id, integration=integration
         ).exists()
 
     def test_delete_repository(self):

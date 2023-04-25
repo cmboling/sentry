@@ -4,8 +4,10 @@ from django.utils import timezone
 
 from sentry.models import UserIP
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import control_silo_test
 
 
+@control_silo_test
 class UserEmailsTest(APITestCase):
     endpoint = "sentry-api-0-user-ips"
 
@@ -29,7 +31,7 @@ class UserEmailsTest(APITestCase):
             last_seen=datetime(2013, 4, 10, 3, 29, 45, tzinfo=timezone.utc),
         )
 
-        response = self.get_valid_response("me")
+        response = self.get_success_response("me")
         assert len(response.data) == 2
 
         assert response.data[0]["ipAddress"] == "127.0.0.1"

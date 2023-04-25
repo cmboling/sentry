@@ -14,11 +14,8 @@ import Version from 'sentry/components/version';
 import {URL_PARAM} from 'sentry/constants/pageFilters';
 import {IconOpen} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Release} from 'sentry/types';
-import {analytics} from 'sentry/utils/analytics';
-import {RELEASES_TOUR_STEPS} from 'sentry/views/releases/list/releasesPromo';
 
 import MissingReleasesButtons from './missingFeatureButtons/missingReleasesButtons';
 import {SectionHeadingLink, SectionHeadingWrapper, SidebarSection} from './styles';
@@ -109,17 +106,6 @@ class ProjectLatestReleases extends AsyncComponent<Props, State> {
 
     this.setState({hasOlderReleases, loading: false});
   }
-
-  handleTourAdvance = (index: number) => {
-    const {organization, projectId} = this.props;
-
-    analytics('releases.landing_card_clicked', {
-      org_id: parseInt(organization.id, 10),
-      project_id: projectId && parseInt(projectId, 10),
-      step_id: index,
-      step_title: RELEASES_TOUR_STEPS[index].title,
-    });
-  };
 
   get releasesLink() {
     const {organization} = this.props;
@@ -221,7 +207,7 @@ const ReleasesTable = styled('div')`
 `;
 
 const StyledVersion = styled(Version)`
-  ${overflowEllipsis}
+  ${p => p.theme.overflowEllipsis}
   line-height: 1.6;
   font-variant-numeric: tabular-nums;
 `;

@@ -1,12 +1,13 @@
-import * as React from 'react';
 import keyBy from 'lodash/keyBy';
 
 import {
   BooleanField,
   EmailField,
-  RadioBooleanField,
+  NumberField,
+  RadioField,
   TextField,
 } from 'sentry/components/forms';
+import ExternalLink from 'sentry/components/links/externalLink';
 import {t, tct} from 'sentry/locale';
 import ConfigStore from 'sentry/stores/configStore';
 
@@ -15,20 +16,23 @@ type Section = {
   heading?: string;
 };
 
+// TODO(epurkhiser): This should really use the types from the form system, but
+// they're still pretty bad so that's difficult I guess?
 type Field = {
   key: string;
   label: React.ReactNode;
   allowEmpty?: boolean;
+  choices?: [value: string, label: string][];
   component?: React.ComponentType<any>;
-  defaultValue?: () => string | false;
+  defaultValue?: () => string | number | false;
   disabled?: boolean;
   disabledReason?: string;
   help?: React.ReactNode;
-  noLabel?: string;
+  max?: number;
+  min?: number;
   placeholder?: string;
   required?: boolean;
-  yesFirst?: boolean;
-  yesLabel?: string;
+  step?: number;
 };
 
 // This are ordered based on their display order visually
@@ -47,6 +51,373 @@ const sections: Section[] = [
   {
     key: 'beacon',
     heading: t('Beacon'),
+  },
+];
+
+const HIGH_THROUGHPUT_RATE_OPTION = {
+  defaultValue: () => '0',
+  component: NumberField,
+  min: 0.0,
+  max: 1.0,
+  step: 0.0001,
+};
+
+const performanceOptionDefinitions: Field[] = [
+  {
+    key: 'performance.issues.all.problem-detection',
+    label: t('Performance problem detection rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected across the entire system. A value of 0 will disable performance issue detection, and a value of 1.0 turns on detection for every ingested transaction.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.all.problem-creation',
+    label: t('Performance problem creation rate'),
+    help: t(
+      'Controls the rate at which performance issues are created across the entire system. A value of 0 will disable performance issue detection, and a value of 1.0 turns on creation for every detected performance problem.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.all.early-adopter-rollout',
+    label: t('Performance issues creation EA Rollout'),
+    help: t(
+      'Controls the rate at which performance issues are created for EA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.all.general-availability-rollout',
+    label: t('Performance issues creation GA Rollout'),
+    help: t(
+      'Controls the rate at which performance issues are created for all organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.all.post-process-group-early-adopter-rollout',
+    label: t('Performance issues post process group EA Rollout'),
+    help: t(
+      'Controls the rate at which performance issues sent through post process group for EA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.all.post-process-group-ga-rollout',
+    label: t('Performance issues post process group GA Rollout'),
+    help: t(
+      'Controls the rate at which performance issues sent through post process group for all organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one.problem-detection',
+    label: t('N+1 detection rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected specifically for N+1 detection. Value of 0 will disable detection, a value of 1.0 fully enables it.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one.problem-creation',
+    label: t('N+1 creation rate'),
+    help: t(
+      'Controls the rate at which performance issues are created specifically for N+1 detection. Value of 0 will disable creation, a value of 1.0 fully enables it.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one_db.problem-detection',
+    label: t('N+1 (DB) detection rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected specifically for N+1 detection. Value of 0 will disable detection, a value of 1.0 fully enables it.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one_db.problem-creation',
+    label: t('N+1 (DB) creation rate'),
+    help: t(
+      'Controls the rate at which performance issues are created specifically for N+1 detection. Value of 0 will disable creation, a value of 1.0 fully enables it.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one_db_ext.problem-creation',
+    label: t('N+1 (DB) (Extended) creation rate'),
+    help: t(
+      'Controls the rate at which performance issues are created specifically for N+1 detection (extended). Value of 0 will disable creation, a value of 1.0 fully enables it.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one_db.count_threshold',
+    label: t('N+1 (DB) count threshold'),
+    help: t(
+      'Detector threshold. Controls the number of spans required to trigger performance issues. This affects all organizations system-wide.'
+    ),
+    defaultValue: () => '5',
+    component: NumberField,
+    min: 0,
+    max: Number.MAX_SAFE_INTEGER,
+    step: 1,
+  },
+  {
+    key: 'performance.issues.n_plus_one_db.duration_threshold', // TODO: For fixing typo later.
+    label: t('N+1 (DB) duration threshold'),
+    help: t(
+      'Detector threshold. Controls the threshold for the cumulative duration of involved spans required to trigger performance issues. This affects all organizations system-wide.'
+    ),
+    defaultValue: () => '100',
+    component: NumberField,
+    min: 0,
+    max: Number.MAX_SAFE_INTEGER,
+    step: 1,
+  },
+  {
+    key: 'performance.issues.consecutive_db.problem-creation',
+    label: t('Problem Creation Rate'),
+    help: t(
+      'Controls the overall rate at which performance problems are detected by the Consecutive DB detector.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.consecutive_db.la-rollout',
+    label: t('Limited Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the Consecutive DB detector for LA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.consecutive_db.ea-rollout',
+    label: t('Early Adopter Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the Consecutive DB detector for EA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.consecutive_db.ga-rollout',
+    label: t('General Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the Consecutive DB detector for GA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one_api_calls.problem-creation',
+    label: t('Problem Creation Rate'),
+    help: t(
+      'Controls the overall rate at which performance problems are detected by the N+1 API Calls detector.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one_api_calls.la-rollout',
+    label: t('Limited Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the N+1 API Calls detector for LA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one_api_calls.ea-rollout',
+    label: t('Early Adopter Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the N+1 API Calls detector for EA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.n_plus_one_api_calls.ga-rollout',
+    label: t('General Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the for N+1 API Calls detector for GA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.compressed_assets.problem-creation',
+    label: t('Problem Creation Rate'),
+    help: t(
+      'Controls the overall rate at which performance problems are detected by the compressed assets detector.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.compressed_assets.la-rollout',
+    label: t('Limited Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the compressed assets detector for LA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.compressed_assets.ea-rollout',
+    label: t('Early Adopter Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the compressed assets detector for EA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.compressed_assets.ga-rollout',
+    label: t('General Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the compressed assets detector for GA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.file_io_main_thread.problem-creation',
+    label: t('File IO Problem Creation Rate'),
+    help: t(
+      'Controls the overall rate at which performance problems are detected by the File IO Detector'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.slow_db_query.problem-creation',
+    label: t('Problem Creation Rate'),
+    help: t(
+      'Controls the overall rate at which performance problems are detected by the slow DB span detector.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.slow_db_query.la-rollout',
+    label: t('Limited Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the slow DB span detector for LA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.slow_db_query.ea-rollout',
+    label: t('Early Adopter Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the slow DB span detector for EA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.slow_db_query.ga-rollout',
+    label: t('General Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the slow DB span detector for GA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.m_n_plus_one_db.problem-creation',
+    label: t('Problem Creation Rate'),
+    help: t(
+      'Controls the overall rate at which performance problems are detected by the MN+1 DB detector.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.m_n_plus_one_db.la-rollout',
+    label: t('Limited Availability Detection Rate'),
+    help: t(
+      'Controls the % of orgs in which performance problems are detected by the MN+1 DB detector for LA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.m_n_plus_one_db.ea-rollout',
+    label: t('Early Adopter Detection Rate'),
+    help: t(
+      'Controls the % of orgs in which performance problems are detected by the MN+1 DB detector for EA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.m_n_plus_one_db.ga-rollout',
+    label: t('General Availability Detection Rate'),
+    help: t(
+      'Controls the % of orgs in which performance problems are detected by the MN+1 DB detector for GA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'performance.issues.render_blocking_assets.problem-creation',
+    label: t('Problem Creation Rate'),
+    help: t(
+      'Controls the overall rate at which performance problems are detected by the large render blocking asset detector.'
+    ),
+  },
+  {
+    key: 'performance.issues.render_blocking_assets.la-rollout',
+    label: t('Limited Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the large render blocking asset detector for LA organizations.'
+    ),
+  },
+  {
+    key: 'performance.issues.render_blocking_assets.ea-rollout',
+    label: t('Early Adopter Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the large render blocking asset detector for EA organizations.'
+    ),
+  },
+  {
+    key: 'performance.issues.render_blocking_assets.ga-rollout',
+    label: t('General Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the large render blocking asset detector for GA organizations.'
+    ),
+  },
+  {
+    key: 'profile.issues.blocked_main_thread-ingest.la-rollout',
+    label: t('Limited Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the blocked main thread profiling detector for LA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'profile.issues.blocked_main_thread-ingest.ea-rollout',
+    label: t('Early Adopter Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the blocked main thread profiling detector for EA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'profile.issues.blocked_main_thread-ingest.ga-rollout',
+    label: t('General Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which performance problems are detected by the blocked main thread profiling detector for GA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'profile.issues.blocked_main_thread-ppg.la-rollout',
+    label: t('Limited Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which profile blocked main thread performance problems are sent to post process group for LA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'profile.issues.blocked_main_thread-ppg.ea-rollout',
+    label: t('Early Adopter Detection Rate'),
+    help: t(
+      'Controls the rate at which profile blocked main thread performance problems are sent to post process group for EA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
+  },
+  {
+    key: 'profile.issues.blocked_main_thread-ppg.ga-rollout',
+    label: t('General Availability Detection Rate'),
+    help: t(
+      'Controls the rate at which profile blocked main thread performance problems are sent to post process group for GA organizations.'
+    ),
+    ...HIGH_THROUGHPUT_RATE_OPTION,
   },
 ];
 
@@ -128,15 +499,16 @@ const definitions: Field[] = [
   {
     key: 'beacon.anonymous',
     label: 'Usage Statistics',
-    component: RadioBooleanField,
+    component: RadioField,
     // yes and no are inverted here due to the nature of this configuration
-    noLabel: 'Send my contact information along with usage statistics',
-    yesLabel: 'Please keep my usage information anonymous',
-    yesFirst: false,
+    choices: [
+      ['false', 'Send my contact information along with usage statistics'],
+      ['true', 'Please keep my usage information anonymous'],
+    ],
     help: tct(
-      'If enabled, any stats reported to sentry.io will exclude identifying information (such as your administrative email address). By anonymizing your installation the Sentry team will be unable to contact you about security updates. For more information on what data is sent to Sentry, see the [link:documentation].',
+      'If enabled, any stats reported to sentry.io will exclude identifying information (such as your administrative email address). By anonymizing your installation the Sentry team will be unable to contact you about security updates. For more information on what data is sent to Sentry, see the [link:documentation]. Note: This is separate from error-reporting for the self-hosted installer. The data reported to the beacon only includes usage stats from your running self-hosted instance.',
       {
-        link: <a href="https://develop.sentry.dev/self-hosted/" />,
+        link: <ExternalLink href="https://develop.sentry.dev/self-hosted/" />,
       }
     ),
   },
@@ -185,6 +557,7 @@ const definitions: Field[] = [
     component: BooleanField,
     defaultValue: () => false,
   },
+  ...performanceOptionDefinitions,
 ];
 
 const definitionsMap = keyBy(definitions, def => def.key);
@@ -199,7 +572,7 @@ export function getOption(option: string): Field {
   return definitionsMap[option];
 }
 
-export function getOptionDefault(option: string): string | false | undefined {
+export function getOptionDefault(option: string): string | number | false | undefined {
   const meta = getOption(option);
   return meta.defaultValue ? meta.defaultValue() : undefined;
 }

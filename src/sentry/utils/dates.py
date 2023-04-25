@@ -4,14 +4,11 @@ from typing import Any, Mapping, Optional, Tuple, Union, cast, overload
 
 import pytz
 from dateutil.parser import parse
-from django.db import connections
 from django.http.request import HttpRequest
 from django.utils.timezone import is_aware, make_aware
 
 from sentry import quotas
 from sentry.constants import MAX_ROLLUP_POINTS
-
-DATE_TRUNC_GROUPERS = {"date": "day", "hour": "hour", "minute": "minute"}
 
 epoch = datetime(1970, 1, 1, tzinfo=pytz.utc)
 
@@ -63,12 +60,6 @@ def floor_to_utc_day(value: datetime) -> datetime:
     return value.astimezone(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def get_sql_date_trunc(col: Any, db: str = "default", grouper: str = "hour") -> Any:
-    conn = connections[db]
-    method = DATE_TRUNC_GROUPERS[grouper]
-    return conn.ops.date_trunc_sql(method, col)
-
-
 def parse_date(datestr: str, timestr: str) -> Optional[datetime]:
     # format is Y-m-d
     if not (datestr or timestr):
@@ -113,12 +104,19 @@ def parse_stats_period(period: str) -> Optional[timedelta]:
     if not m:
         return None
     value, unit = m.groups()
-    value = int(value)  # type: ignore
+    value = int(value)
     if not unit:
         unit = "s"
-    return timedelta(
-        **{{"h": "hours", "d": "days", "m": "minutes", "s": "seconds", "w": "weeks"}[unit]: value}  # type: ignore
-    )
+    try:
+        return timedelta(
+            **{
+                {"h": "hours", "d": "days", "m": "minutes", "s": "seconds", "w": "weeks"}[
+                    unit
+                ]: value
+            }
+        )
+    except OverflowError:
+        return timedelta.max
 
 
 def get_interval_from_range(date_range: timedelta, high_fidelity: bool) -> str:
@@ -154,6 +152,14 @@ def get_rollup_from_request(
     interval = parse_stats_period(request.GET.get("interval", default_interval))
     if interval is None:
         interval = timedelta(hours=1)
+    validate_interval(interval, error, date_range, top_events)
+
+    return int(interval.total_seconds())
+
+
+def validate_interval(
+    interval: timedelta, error: Exception, date_range: timedelta, top_events: int
+) -> None:
     if interval.total_seconds() <= 0:
         raise error.__class__("Interval cannot result in a zero duration.")
 
@@ -162,7 +168,6 @@ def get_rollup_from_request(
 
     if date_range.total_seconds() / interval.total_seconds() > max_rollup_points:
         raise error
-    return int(interval.total_seconds())
 
 
 def outside_retention_with_modified_start(

@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import petname
 from django.conf import settings
-from django.db import models
+from django.db import ProgrammingError, models
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import ugettext_lazy as _
@@ -17,9 +17,10 @@ from sentry.db.models import (
     FlexibleForeignKey,
     JSONField,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
-from sentry.tasks.relay import schedule_update_config_cache
+from sentry.tasks.relay import schedule_invalidate_project_config
 
 _uuid4_re = re.compile(r"^[a-f0-9]{32}$")
 
@@ -33,16 +34,17 @@ class ProjectKeyStatus:
 
 class ProjectKeyManager(BaseManager):
     def post_save(self, instance, **kwargs):
-        schedule_update_config_cache(
-            public_key=instance.public_key, generate=True, update_reason="projectkey.post_save"
+        schedule_invalidate_project_config(
+            public_key=instance.public_key, trigger="projectkey.post_save"
         )
 
     def post_delete(self, instance, **kwargs):
-        schedule_update_config_cache(
-            public_key=instance.public_key, generate=True, update_reason="projectkey.post_delete"
+        schedule_invalidate_project_config(
+            public_key=instance.public_key, trigger="projectkey.post_delete"
         )
 
 
+@region_silo_only_model
 class ProjectKey(Model):
     __include_in_export__ = True
 
@@ -209,7 +211,7 @@ class ProjectKey(Model):
         return f"{self.get_endpoint()}/api/{self.project_id}/unreal/{self.public_key}/"
 
     @property
-    def js_sdk_loader_cdn_url(self):
+    def js_sdk_loader_cdn_url(self) -> str:
         if settings.JS_SDK_LOADER_CDN_URL:
             return f"{settings.JS_SDK_LOADER_CDN_URL}{self.public_key}.min.js"
         else:
@@ -228,7 +230,16 @@ class ProjectKey(Model):
         if not endpoint:
             endpoint = options.get("system.url-prefix")
 
-        if features.has("organizations:org-subdomains", self.project.organization):
+        has_org_subdomain = False
+        try:
+            has_org_subdomain = features.has(
+                "organizations:org-subdomains", self.project.organization
+            )
+        except ProgrammingError:
+            # This happens during migration generation for the organization model.
+            pass
+
+        if has_org_subdomain:
             urlparts = urlparse(endpoint)
             if urlparts.scheme and urlparts.netloc:
                 endpoint = "{}://{}.{}{}".format(

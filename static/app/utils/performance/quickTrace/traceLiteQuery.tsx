@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 
 import GenericDiscoverQuery, {
   DiscoverQueryProps,
@@ -13,7 +13,6 @@ import {
   getTraceRequestPayload,
   makeEventView,
 } from 'sentry/utils/performance/quickTrace/utils';
-import withApi from 'sentry/utils/withApi';
 
 type AdditionalQueryProps = {
   eventId: string;
@@ -39,14 +38,14 @@ function getTraceLiteRequestPayload({
 
 function EmptyTrace({children}: Pick<QueryProps, 'children'>) {
   return (
-    <React.Fragment>
+    <Fragment>
       {children({
         isLoading: false,
         error: null,
         trace: null,
         type: 'partial',
       })}
-    </React.Fragment>
+    </Fragment>
   );
 }
 
@@ -86,4 +85,4 @@ function TraceLiteQuery({
   );
 }
 
-export default withApi(TraceLiteQuery);
+export default TraceLiteQuery;

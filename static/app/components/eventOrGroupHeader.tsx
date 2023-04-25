@@ -1,5 +1,4 @@
 import {Fragment} from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 import capitalize from 'lodash/capitalize';
@@ -7,20 +6,22 @@ import capitalize from 'lodash/capitalize';
 import ErrorBoundary from 'sentry/components/errorBoundary';
 import EventOrGroupTitle from 'sentry/components/eventOrGroupTitle';
 import GlobalSelectionLink from 'sentry/components/globalSelectionLink';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {IconMute, IconStar} from 'sentry/icons';
 import {tct} from 'sentry/locale';
+import {space} from 'sentry/styles/space';
 import {Group, GroupTombstone, Level, Organization} from 'sentry/types';
 import {Event} from 'sentry/types/event';
 import {getLocation, getMessage} from 'sentry/utils/events';
+import {useLocation} from 'sentry/utils/useLocation';
 import withOrganization from 'sentry/utils/withOrganization';
-import {TagAndMessageWrapper} from 'sentry/views/organizationGroupDetails/unhandledTag';
+import {TagAndMessageWrapper} from 'sentry/views/issueDetails/unhandledTag';
 
 import EventTitleError from './eventTitleError';
 
 type Size = 'small' | 'normal';
 
-type Props = WithRouterProps<{orgId: string}> & {
+type Props = {
   data: Event | Group | GroupTombstone;
   organization: Organization;
   className?: string;
@@ -34,6 +35,7 @@ type Props = WithRouterProps<{orgId: string}> & {
   onClick?: () => void;
   query?: string;
   size?: Size;
+  source?: string;
 };
 
 /**
@@ -43,7 +45,6 @@ function EventOrGroupHeader({
   data,
   index,
   organization,
-  params,
   query,
   onClick,
   className,
@@ -52,8 +53,10 @@ function EventOrGroupHeader({
   includeLink = true,
   size = 'normal',
   grouping = false,
-  ...props
+  source,
 }: Props) {
+  const location = useLocation();
+
   const hasGroupingTreeUI = !!organization.features?.includes('grouping-tree-ui');
 
   function getTitleChildren() {
@@ -61,20 +64,22 @@ function EventOrGroupHeader({
     return (
       <Fragment>
         {!hideLevel && level && (
-          <GroupLevel level={level}>
-            <Tooltip title={tct('Error level: [level]', {level: capitalize(level)})}>
-              <span />
-            </Tooltip>
-          </GroupLevel>
+          <Tooltip
+            skipWrapper
+            disabled={level === 'unknown'}
+            title={tct('Error level: [level]', {level: capitalize(level)})}
+          >
+            <GroupLevel level={level} />
+          </Tooltip>
         )}
         {!hideIcons && status === 'ignored' && (
           <IconWrapper>
-            <IconMute color="red300" />
+            <IconMute color="red400" />
           </IconWrapper>
         )}
         {!hideIcons && isBookmarked && (
           <IconWrapper>
-            <IconStar isSolid color="yellow300" />
+            <IconStar isSolid color="yellow400" />
           </IconWrapper>
         )}
         <ErrorBoundary customComponent={<EventTitleError />} mini>
@@ -92,11 +97,10 @@ function EventOrGroupHeader({
   }
 
   function getTitle() {
-    const orgId = params?.orgId;
+    const orgId = organization.slug;
 
     const {id, status} = data as Group;
     const {eventID, groupID} = data as Event;
-    const {location} = props;
 
     const commonEleProps = {
       'data-test-id': status === 'resolved' ? 'resolved-issue' : null,
@@ -105,29 +109,39 @@ function EventOrGroupHeader({
 
     if (includeLink) {
       return (
-        <GlobalSelectionLink
+        <TitleWithLink
           {...commonEleProps}
           to={{
             pathname: `/organizations/${orgId}/issues/${eventID ? groupID : id}/${
               eventID ? `events/${eventID}/` : ''
             }`,
             query: {
+              referrer: source || 'event-or-group-header',
+              stream_index: index,
               query,
-              ...(location.query.sort !== undefined ? {sort: location.query.sort} : {}), // This adds sort to the query if one was selected from the issues list page
-              ...(location.query.project !== undefined ? {} : {_allp: 1}), // This appends _allp to the URL parameters if they have no project selected ("all" projects included in results). This is so that when we enter the issue details page and lock them to a project, we can properly take them back to the issue list page with no project selected (and not the locked project selected)
+              // This adds sort to the query if one was selected from the
+              // issues list page
+              ...(location.query.sort !== undefined ? {sort: location.query.sort} : {}),
+              // This appends _allp to the URL parameters if they have no
+              // project selected ("all" projects included in results). This is
+              // so that when we enter the issue details page and lock them to
+              // a project, we can properly take them back to the issue list
+              // page with no project selected (and not the locked project
+              // selected)
+              ...(location.query.project !== undefined ? {} : {_allp: 1}),
             },
           }}
           onClick={onClick}
         >
           {getTitleChildren()}
-        </GlobalSelectionLink>
+        </TitleWithLink>
       );
     }
 
-    return <span {...commonEleProps}>{getTitleChildren()}</span>;
+    return <TitleWithoutLink {...commonEleProps}>{getTitleChildren()}</TitleWithoutLink>;
   }
 
-  const location = getLocation(data);
+  const eventLocation = getLocation(data);
   const message = getMessage(data);
 
   return (
@@ -135,7 +149,7 @@ function EventOrGroupHeader({
       <Title size={size} hasGroupingTreeUI={hasGroupingTreeUI}>
         {getTitle()}
       </Title>
-      {location && <Location size={size}>{location}</Location>}
+      {eventLocation && <Location size={size}>{eventLocation}</Location>}
       {message && (
         <StyledTagAndMessageWrapper size={size}>
           {message && <Message>{message}</Message>}
@@ -162,23 +176,13 @@ const getMargin = ({size}: {size: Size}) => {
 
 const Title = styled('div')<{hasGroupingTreeUI: boolean; size: Size}>`
   line-height: 1;
-  ${getMargin};
+  margin-bottom: ${space(0.25)};
   & em {
     font-size: ${p => p.theme.fontSizeMedium};
     font-style: normal;
     font-weight: 300;
     color: ${p => p.theme.subText};
   }
-  ${p =>
-    !p.hasGroupingTreeUI
-      ? css`
-          ${truncateStyles}
-        `
-      : css`
-          > a:first-child {
-            display: flex;
-          }
-        `}
 `;
 
 const LocationWrapper = styled('div')`
@@ -206,6 +210,7 @@ function Location(props) {
 
 const StyledTagAndMessageWrapper = styled(TagAndMessageWrapper)`
   ${getMargin};
+  line-height: 1.2;
 `;
 
 const Message = styled('div')`
@@ -215,7 +220,6 @@ const Message = styled('div')`
 
 const IconWrapper = styled('span')`
   position: relative;
-  display: flex;
   margin-right: 5px;
 `;
 
@@ -227,15 +231,16 @@ const GroupLevel = styled('div')<{level: Level}>`
   border-radius: 0 3px 3px 0;
 
   background-color: ${p => p.theme.level[p.level] ?? p.theme.level.default};
-
-  & span {
-    display: block;
-    width: 9px;
-    height: 15px;
-  }
 `;
 
-export default withRouter(withOrganization(EventOrGroupHeader));
+const TitleWithLink = styled(GlobalSelectionLink)`
+  display: flex;
+`;
+const TitleWithoutLink = styled('span')`
+  display: flex;
+`;
+
+export default withOrganization(EventOrGroupHeader);
 
 const StyledEventOrGroupTitle = styled(EventOrGroupTitle)<{
   hasSeen: boolean;

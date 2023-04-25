@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 from datetime import datetime, timedelta
 
@@ -8,7 +10,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import analytics, release_health
-from sentry.api.base import EnvironmentMixin, ReleaseAnalyticsMixin
+from sentry.api.base import EnvironmentMixin, ReleaseAnalyticsMixin, region_silo_endpoint
 from sentry.api.bases import NoProjects
 from sentry.api.bases.organization import OrganizationReleasesBaseEndpoint
 from sentry.api.exceptions import ConflictError, InvalidRepository
@@ -42,8 +44,8 @@ from sentry.search.events.constants import (
 from sentry.search.events.filter import handle_operator_negation, parse_semver
 from sentry.signals import release_created
 from sentry.snuba.sessions import STATS_PERIODS
+from sentry.types.activity import ActivityType
 from sentry.utils.cache import cache
-from sentry.utils.compat import zip as izip
 from sentry.utils.sdk import bind_organization_context, configure_scope
 
 ERR_INVALID_STATS_PERIOD = "Invalid %s. Valid choices are %s"
@@ -106,7 +108,7 @@ def _filter_releases_by_query(queryset, organization, query, filter_params):
             )
 
         if search_filter.key.name == SEMVER_PACKAGE_ALIAS:
-            negated = True if search_filter.operator == "!=" else False
+            negated = search_filter.operator == "!="
             queryset = queryset.filter_by_semver(
                 organization.id,
                 SemverFilter("exact", [], search_filter.value.raw_value, negated),
@@ -149,7 +151,7 @@ def debounce_update_release_health_data(organization, project_ids):
     should_update = {}
     cache_keys = ["debounce-health:%d" % id for id in project_ids]
     cache_data = cache.get_many(cache_keys)
-    for project_id, cache_key in izip(project_ids, cache_keys):
+    for project_id, cache_key in zip(project_ids, cache_keys):
         if cache_data.get(cache_key) is None:
             should_update[project_id] = cache_key
 
@@ -187,6 +189,10 @@ def debounce_update_release_health_data(organization, project_ids):
                 # should not happen
                 continue
 
+            # Ignore versions that were saved with an empty string before validation was added
+            if not Release.is_valid_version(version):
+                continue
+
             # We might have never observed the release.  This for instance can
             # happen if the release only had health data so far.  For these cases
             # we want to create the release the first time we observed it on the
@@ -200,9 +206,10 @@ def debounce_update_release_health_data(organization, project_ids):
             release.add_project(project)
 
     # Debounce updates for a minute
-    cache.set_many(dict(izip(should_update.values(), [True] * len(should_update))), 60)
+    cache.set_many(dict(zip(should_update.values(), [True] * len(should_update))), 60)
 
 
+@region_silo_endpoint
 class OrganizationReleasesEndpoint(
     OrganizationReleasesBaseEndpoint, EnvironmentMixin, ReleaseAnalyticsMixin
 ):
@@ -216,6 +223,14 @@ class OrganizationReleasesEndpoint(
             "users_24h",
         ]
     )
+
+    def get_projects(self, request: Request, organization, project_ids=None):
+        return super().get_projects(
+            request,
+            organization,
+            project_ids=project_ids,
+            include_all_accessible="GET" != request.method,
+        )
 
     def get(self, request: Request, organization) -> Response:
         """
@@ -268,7 +283,7 @@ class OrganizationReleasesEndpoint(
             else:
                 queryset = queryset.filter(status=status_int)
 
-        queryset = queryset.select_related("owner").annotate(date=F("date_added"))
+        queryset = queryset.annotate(date=F("date_added"))
 
         queryset = add_environment_to_queryset(queryset, filter_params)
         if query:
@@ -449,6 +464,9 @@ class OrganizationReleasesEndpoint(
                     projects.append(allowed_projects[slug])
 
                 new_status = result.get("status")
+                owner_id: int | None = None
+                if owner := result.get("owner"):
+                    owner_id = owner.id
 
                 # release creation is idempotent to simplify user
                 # experiences
@@ -459,9 +477,10 @@ class OrganizationReleasesEndpoint(
                         defaults={
                             "ref": result.get("ref"),
                             "url": result.get("url"),
-                            "owner": result.get("owner"),
+                            "owner_id": owner_id,
                             "date_released": result.get("dateReleased"),
                             "status": new_status or ReleaseStatus.OPEN,
+                            "user_agent": request.META.get("HTTP_USER_AGENT", "")[:256],
                         },
                     )
                 except IntegrityError:
@@ -484,7 +503,7 @@ class OrganizationReleasesEndpoint(
                 if release.date_released:
                     for project in new_projects:
                         Activity.objects.create(
-                            type=Activity.RELEASE,
+                            type=ActivityType.RELEASE.value,
                             project=project,
                             ident=Activity.get_version_ident(result["version"]),
                             data={"version": result["version"]},
@@ -523,7 +542,7 @@ class OrganizationReleasesEndpoint(
                         )
                     fetch_commits = not commit_list
                     try:
-                        release.set_refs(refs, request.user, fetch=fetch_commits)
+                        release.set_refs(refs, request.user.id, fetch=fetch_commits)
                     except InvalidRepository as e:
                         scope.set_tag("failure_reason", "InvalidRepository")
                         return Response({"refs": [str(e)]}, status=400)
@@ -552,6 +571,7 @@ class OrganizationReleasesEndpoint(
             return Response(serializer.errors, status=400)
 
 
+@region_silo_endpoint
 class OrganizationReleasesStatsEndpoint(OrganizationReleasesBaseEndpoint, EnvironmentMixin):
     def get(self, request: Request, organization) -> Response:
         """

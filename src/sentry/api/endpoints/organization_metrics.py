@@ -3,10 +3,12 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.paginator import GenericOffsetPaginator
 from sentry.api.utils import InvalidParams
+from sentry.sentry_metrics.configuration import UseCaseKey
 from sentry.snuba.metrics import (
     QueryDefinition,
     get_metrics,
@@ -20,6 +22,23 @@ from sentry.snuba.sessions_v2 import InvalidField
 from sentry.utils.cursors import Cursor, CursorResult
 
 
+def get_use_case_id(use_case: str) -> UseCaseKey:
+    """
+    Get use_case from str and validate it against UseCaseKey enum type
+    if use_case parameter has wrong value just raise an ParseError.
+    """
+    try:
+        if use_case == "releaseHealth":
+            use_case = "release-health"
+
+        return UseCaseKey(use_case)
+    except ValueError:
+        raise ParseError(
+            detail=f"Invalid useCase parameter. Please use one of: {', '.join(use_case.value for use_case in UseCaseKey)}"
+        )
+
+
+@region_silo_endpoint
 class OrganizationMetricsEndpoint(OrganizationEndpoint):
     """Get metric name, available operations and the metric unit"""
 
@@ -28,10 +47,18 @@ class OrganizationMetricsEndpoint(OrganizationEndpoint):
             return Response(status=404)
 
         projects = self.get_projects(request, organization)
-        metrics = get_metrics(projects)
+        metrics = get_metrics(
+            projects, use_case_id=get_use_case_id(request.GET.get("useCase", "release-health"))
+        )
+        # TODO: replace this with a serializer so that if the structure of MetricMeta changes the response of this
+        # endpoint does not
+        for metric in metrics:
+            del metric["metric_id"]
+            del metric["mri_string"]
         return Response(metrics, status=200)
 
 
+@region_silo_endpoint
 class OrganizationMetricDetailsEndpoint(OrganizationEndpoint):
     """Get metric name, available operations, metric unit and available tags"""
 
@@ -41,7 +68,11 @@ class OrganizationMetricDetailsEndpoint(OrganizationEndpoint):
 
         projects = self.get_projects(request, organization)
         try:
-            metric = get_single_metric_info(projects, metric_name)
+            metric = get_single_metric_info(
+                projects,
+                metric_name,
+                use_case_id=get_use_case_id(request.GET.get("useCase", "release-health")),
+            )
         except InvalidParams as e:
             raise ResourceDoesNotExist(e)
         except (InvalidField, DerivedMetricParseException) as exc:
@@ -50,6 +81,7 @@ class OrganizationMetricDetailsEndpoint(OrganizationEndpoint):
         return Response(metric, status=200)
 
 
+@region_silo_endpoint
 class OrganizationMetricsTagsEndpoint(OrganizationEndpoint):
     """Get list of tag names for this project
 
@@ -69,13 +101,18 @@ class OrganizationMetricsTagsEndpoint(OrganizationEndpoint):
         metric_names = request.GET.getlist("metric") or None
         projects = self.get_projects(request, organization)
         try:
-            tags = get_tags(projects, metric_names)
-        except (InvalidField, InvalidParams, DerivedMetricParseException) as exc:
+            tags = get_tags(
+                projects,
+                metric_names,
+                use_case_id=get_use_case_id(request.GET.get("useCase", "release-health")),
+            )
+        except (InvalidParams, DerivedMetricParseException) as exc:
             raise (ParseError(detail=str(exc)))
 
         return Response(tags, status=200)
 
 
+@region_silo_endpoint
 class OrganizationMetricsTagDetailsEndpoint(OrganizationEndpoint):
     """Get all existing tag values for a metric"""
 
@@ -88,8 +125,13 @@ class OrganizationMetricsTagDetailsEndpoint(OrganizationEndpoint):
 
         projects = self.get_projects(request, organization)
         try:
-            tag_values = get_tag_values(projects, tag_name, metric_names)
-        except (InvalidField, InvalidParams, DerivedMetricParseException) as exc:
+            tag_values = get_tag_values(
+                projects,
+                tag_name,
+                metric_names,
+                use_case_id=get_use_case_id(request.GET.get("useCase", "release-health")),
+            )
+        except (InvalidParams, DerivedMetricParseException) as exc:
             msg = str(exc)
             # TODO: Use separate error type once we have real data
             if "Unknown tag" in msg:
@@ -100,6 +142,7 @@ class OrganizationMetricsTagDetailsEndpoint(OrganizationEndpoint):
         return Response(tag_values, status=200)
 
 
+@region_silo_endpoint
 class OrganizationMetricsDataEndpoint(OrganizationEndpoint):
     """Get the time series data for one or more metrics.
 
@@ -110,19 +153,21 @@ class OrganizationMetricsDataEndpoint(OrganizationEndpoint):
     default_per_page = 50
 
     def get(self, request: Request, organization) -> Response:
-        if not features.has("organizations:metrics", organization, actor=request.user):
-            return Response(status=404)
-
         projects = self.get_projects(request, organization)
 
         def data_fn(offset: int, limit: int):
             try:
                 query = QueryDefinition(
-                    request.GET, paginator_kwargs={"limit": limit, "offset": offset}
+                    projects, request.GET, paginator_kwargs={"limit": limit, "offset": offset}
                 )
-                data = get_series(projects, query)
+                data = get_series(
+                    projects,
+                    query.to_metrics_query(),
+                    use_case_id=get_use_case_id(request.GET.get("useCase", "release-health")),
+                    tenant_ids={"organization_id": organization.id},
+                )
+                data["query"] = query.query
             except (
-                InvalidField,
                 InvalidParams,
                 DerivedMetricException,
             ) as exc:

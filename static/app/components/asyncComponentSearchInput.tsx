@@ -1,12 +1,14 @@
-import * as React from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
+import {Component} from 'react';
+import {WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 import debounce from 'lodash/debounce';
 
 import {Client, ResponseMeta} from 'sentry/api';
-import Input from 'sentry/components/forms/controls/input';
+import Input from 'sentry/components/input';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {t} from 'sentry/locale';
+// eslint-disable-next-line no-restricted-imports
+import withSentryRouter from 'sentry/utils/withSentryRouter';
 
 type RenderProps = {
   busy: boolean;
@@ -59,7 +61,7 @@ type State = {
  *
  * It probably doesn't make too much sense outside of an AsyncComponent atm.
  */
-class AsyncComponentSearchInput extends React.Component<Props, State> {
+class AsyncComponentSearchInput extends Component<Props, State> {
   static defaultProps: DefaultProps = {
     placeholder: t('Search...'),
     debounceWait: 200,
@@ -158,4 +160,4 @@ const Form = styled('form')`
   position: relative;
 `;
 
-export default withRouter(AsyncComponentSearchInput);
+export default withSentryRouter(AsyncComponentSearchInput);

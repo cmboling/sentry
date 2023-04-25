@@ -3,8 +3,10 @@ from datetime import datetime
 from django.utils import timezone
 
 from sentry.testutils import AcceptanceTestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test(stable=True)
 class OrganizationReleasesTest(AcceptanceTestCase):
     release_date = datetime(2020, 5, 18, 15, 13, 58, 132928, tzinfo=timezone.utc)
 
@@ -38,6 +40,7 @@ class OrganizationReleasesTest(AcceptanceTestCase):
         self.browser.get(self.path + release.version)
         self.browser.wait_until_not(".loading")
         self.browser.wait_until_test_id("release-wrapper")
+        self.browser.wait_until_not('[data-test-id="loading-placeholder"]')
         self.browser.snapshot("organization releases - detail")
         # TODO(releases): add health data
 
@@ -61,5 +64,6 @@ class OrganizationReleasesTest(AcceptanceTestCase):
             self.browser.get(self.path + release.version)
             self.browser.wait_until_not(".loading")
             self.browser.wait_until_test_id("release-wrapper")
+            self.browser.wait_until_not('[data-test-id="loading-placeholder"]')
             self.browser.snapshot("organization releases - detail with discover and performance")
             # TODO(releases): add health data

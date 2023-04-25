@@ -43,10 +43,9 @@ def _upgrade(interactive, traceback, verbosity, repair, with_nodestore):
     _check_history()
 
     for db_conn in settings.DATABASES.keys():
-        # Always run migrations for the default connection.
-        # Also run migrations on connections that have migrations explicitly enabled.
+        # Run migrations on all non-read replica connections.
         # This is used for sentry.io as our production database runs on multiple hosts.
-        if db_conn == "default" or settings.DATABASES[db_conn].get("RUN_MIGRATIONS", False):
+        if not settings.DATABASES[db_conn].get("REPLICA_OF", False):
             click.echo(f"Running migrations for {db_conn}")
             dj_call_command(
                 "migrate",
@@ -87,10 +86,10 @@ def upgrade(ctx, verbosity, traceback, noinput, lock, no_repair, with_nodestore)
     "Perform any pending database migrations and upgrades."
 
     if lock:
-        from sentry.app import locks
+        from sentry.locks import locks
         from sentry.utils.locking import UnableToAcquireLock
 
-        lock = locks.get("upgrade", duration=0)
+        lock = locks.get("upgrade", duration=0, name="command_upgrade")
         try:
             with lock.acquire():
                 _upgrade(not noinput, traceback, verbosity, not no_repair, with_nodestore)

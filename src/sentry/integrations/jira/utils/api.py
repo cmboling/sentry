@@ -7,9 +7,11 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from sentry.integrations.utils import sync_group_assignee_inbound
+from sentry.services.hybrid_cloud.integration import integration_service
 from sentry.shared_integrations.exceptions import ApiError
 
-from ..client import JiraApiClient, JiraCloud
+from ...mixins import IssueSyncMixin
+from ..client import JiraCloudClient
 
 if TYPE_CHECKING:
     from sentry.models import Integration
@@ -18,10 +20,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _get_client(integration: Integration) -> JiraApiClient:
-    return JiraApiClient(
+def _get_client(integration: Integration) -> JiraCloudClient:
+    return JiraCloudClient(
         integration.metadata["base_url"],
-        JiraCloud(integration.metadata["shared_secret"]),
+        integration.metadata["shared_secret"],
         verify_ssl=True,
     )
 
@@ -67,7 +69,6 @@ def handle_assignee_change(
         return
 
     email = get_assignee_email(integration, assignee, use_email_scope)
-    # TODO(steve) check display name
     if not email:
         logger.info(
             "missing-assignee-email",
@@ -94,12 +95,15 @@ def handle_status_change(integration, data):
         )
         return
 
-    for org_id in integration.organizations.values_list("id", flat=True):
-        installation = integration.get_installation(org_id)
-
-        installation.sync_status_inbound(
-            issue_key, {"changelog": changelog, "issue": data["issue"]}
+    _, org_integrations = integration_service.get_organization_contexts(
+        integration_id=integration.id
+    )
+    for oi in org_integrations:
+        install = integration_service.get_installation(
+            integration=integration, organization_id=oi.organization_id
         )
+        if isinstance(install, IssueSyncMixin):
+            install.sync_status_inbound(issue_key, {"changelog": changelog, "issue": data["issue"]})
 
 
 def handle_jira_api_error(error: ApiError, message: str = "") -> Mapping[str, str] | None:

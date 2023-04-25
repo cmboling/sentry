@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse
 
 from django import forms
@@ -18,6 +20,7 @@ from sentry.integrations import (
     IntegrationProvider,
 )
 from sentry.integrations.mixins import RepositoryMixin
+from sentry.integrations.mixins.commit_context import CommitContextMixin
 from sentry.models import Repository
 from sentry.pipeline import NestedPipelineView, PipelineView
 from sentry.shared_integrations.exceptions import ApiError, IntegrationError
@@ -67,6 +70,12 @@ FEATURES = [
         """,
         IntegrationFeatures.STACKTRACE_LINK,
     ),
+    FeatureDescription(
+        """
+        Import your GitLab [CODEOWNERS file](https://docs.sentry.io/product/integrations/source-code-mgmt/gitlab/#code-owners) and use it alongside your ownership rules to assign Sentry issues.
+        """,
+        IntegrationFeatures.CODEOWNERS,
+    ),
 ]
 
 metadata = IntegrationMetadata(
@@ -80,7 +89,9 @@ metadata = IntegrationMetadata(
 )
 
 
-class GitlabIntegration(IntegrationInstallation, GitlabIssueBasic, RepositoryMixin):
+class GitlabIntegration(
+    IntegrationInstallation, GitlabIssueBasic, RepositoryMixin, CommitContextMixin
+):
     repo_search = True
     codeowners_locations = ["CODEOWNERS", ".gitlab/CODEOWNERS", "docs/CODEOWNERS"]
 
@@ -132,6 +143,52 @@ class GitlabIntegration(IntegrationInstallation, GitlabIssueBasic, RepositoryMix
             return data["message"]
         if "error" in data:
             return data["error"]
+
+    def get_commit_context(
+        self, repo: Repository, filepath: str, ref: str, event_frame: Mapping[str, Any]
+    ) -> Mapping[str, str] | None:
+        """
+        Returns the latest commit that altered the line from the event frame if it exists.
+        """
+        lineno = event_frame.get("lineno", 0)
+        if not lineno:
+            return None
+        try:
+            blame_range: Sequence[Mapping[str, Any]] | None = self.get_blame_for_file(
+                repo, filepath, ref, lineno
+            )
+            if blame_range is None:
+                return None
+        except ApiError as e:
+            raise e
+
+        date_format_expected = "%Y-%m-%dT%H:%M:%S.%f%z"
+        try:
+            commit = max(
+                blame_range,
+                key=lambda blame: datetime.strptime(
+                    blame.get("commit", {}).get("committed_date"), date_format_expected
+                ),
+            )
+        except (ValueError, IndexError):
+            return None
+
+        commitInfo = commit.get("commit")
+        if not commitInfo:
+            return None
+        else:
+            committed_date = "{}Z".format(
+                datetime.strptime(commitInfo.get("committed_date"), date_format_expected)
+                .astimezone(timezone.utc)
+                .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+            )
+            return {
+                "commitId": commitInfo.get("id"),
+                "committedDate": committed_date,
+                "commitMessage": commitInfo.get("message"),
+                "commitAuthorName": commitInfo.get("committer_name"),
+                "commitAuthorEmail": commitInfo.get("committer_email"),
+            }
 
 
 class InstallationForm(forms.Form):
@@ -251,7 +308,7 @@ class InstallationGuideView(PipelineView):
         return render_to_response(
             template="sentry/integrations/gitlab-config.html",
             context={
-                "next_url": f'{absolute_uri("extensions/gitlab/setup/")}?completed_installation_guide',
+                "next_url": f'{absolute_uri("/extensions/gitlab/setup/")}?completed_installation_guide',
                 "setup_values": [
                     {"label": "Name", "value": "Sentry"},
                     {"label": "Redirect URI", "value": absolute_uri("/extensions/gitlab/setup/")},

@@ -6,12 +6,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import options
-from sentry.app import locks
 from sentry.exceptions import PluginError
 from sentry.integrations import FeatureDescription, IntegrationFeatures
+from sentry.locks import locks
 from sentry.models import Integration, Organization, OrganizationOption, Repository
 from sentry.plugins.bases.issue2 import IssueGroupActionEndpoint, IssuePlugin2
 from sentry.plugins.providers import RepositoryProvider
+from sentry.services.hybrid_cloud.user import RpcUser
 from sentry.shared_integrations.constants import ERR_INTERNAL, ERR_UNAUTHORIZED
 from sentry.shared_integrations.exceptions import ApiError
 from sentry.utils.http import absolute_uri
@@ -47,7 +48,7 @@ class GitHubMixin(CorePluginMixin):
         else:
             return ERR_INTERNAL
 
-    def get_client(self, user):
+    def get_client(self, user: RpcUser):
         auth = self.get_auth(user=user)
         if auth is None:
             raise PluginError(API_ERRORS[401])
@@ -289,7 +290,9 @@ class GitHubRepositoryProvider(GitHubMixin, RepositoryProvider):
         return config
 
     def get_webhook_secret(self, organization):
-        lock = locks.get(f"github:webhook-secret:{organization.id}", duration=60)
+        lock = locks.get(
+            f"github:webhook-secret:{organization.id}", duration=60, name="github_webhook_secret"
+        )
         with lock.acquire():
             # TODO(dcramer): get_or_create would be a useful native solution
             secret = OrganizationOption.objects.get_value(

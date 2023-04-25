@@ -3,12 +3,12 @@ import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 
 import {ModalRenderProps} from 'sentry/actionCreators/modal';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import RadioGroup from 'sentry/components/forms/controls/radioGroup';
 import Link from 'sentry/components/links/link';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Project} from 'sentry/types';
 import EventView from 'sentry/utils/discover/eventView';
 
@@ -20,7 +20,7 @@ type Props = {
   projects: Project[];
 } & ModalRenderProps;
 
-const SamplingModal = (props: Props) => {
+function SamplingModal(props: Props) {
   const {Header, Body, Footer, organization, eventView, isMEPEnabled, projects} = props;
 
   const project = projects.find(p => `${eventView.project[0]}` === p.id);
@@ -40,11 +40,11 @@ const SamplingModal = (props: Props) => {
       <Body>
         <Instruction>
           {tct(
-            "The visualizations shown are based on your data without any filters or sampling. This does not contribute to your quota usage but transaction details are limited. If you'd like to improve accuracy, we recommend adding more transactions to your quota. or modifying your data set through [projectSettings: Filters & Sampling in settings].",
+            "The visualizations shown are based on your data without any filters or sampling. This does not contribute to your quota usage but transaction details are limited. If you'd like to improve accuracy, we recommend adding more transactions to your quota. or modifying your dataset through [projectSettings: Sampling in settings].",
             {
               projectSettings: (
                 <Link
-                  to={`/settings/${organization.slug}/projects/${project?.slug}/filters-and-sampling/`}
+                  to={`/settings/${organization.slug}/projects/${project?.slug}/performance/`}
                 />
               ),
             }
@@ -82,7 +82,7 @@ const SamplingModal = (props: Props) => {
       </Footer>
     </Fragment>
   );
-};
+}
 
 const Instruction = styled('div')`
   margin-bottom: ${space(4)};

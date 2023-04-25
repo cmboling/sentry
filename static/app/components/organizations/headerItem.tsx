@@ -1,14 +1,14 @@
-import * as React from 'react';
+import {forwardRef} from 'react';
 import isPropValid from '@emotion/is-prop-valid';
+import {Theme} from '@emotion/react';
 import styled from '@emotion/styled';
 import omit from 'lodash/omit';
 
 import Link from 'sentry/components/links/link';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {IconChevron, IconClose, IconInfo, IconLock, IconSettings} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {Theme} from 'sentry/utils/theme';
+import {space} from 'sentry/styles/space';
 
 type DefaultProps = {
   allowClear: boolean;
@@ -16,7 +16,7 @@ type DefaultProps = {
 
 type Props = {
   icon: React.ReactNode;
-  forwardRef?: React.Ref<HTMLDivElement>;
+  forwardedRef?: React.Ref<HTMLDivElement>;
   hasChanges?: boolean;
   hasSelected?: boolean;
   hint?: string;
@@ -39,7 +39,7 @@ function HeaderItem({
   settingsLink,
   hint,
   loading,
-  forwardRef,
+  forwardedRef,
   onClear,
   allowClear = true,
   ...props
@@ -57,7 +57,7 @@ function HeaderItem({
 
   return (
     <StyledHeaderItem
-      ref={forwardRef}
+      ref={forwardedRef}
       loading={!!loading}
       {...omit(props, 'onClear')}
       {...textColorProps}
@@ -129,6 +129,7 @@ const StyledHeaderItem = styled('div', {
 const Content = styled('div')`
   display: flex;
   flex: 1;
+  width: 0;
   white-space: nowrap;
   overflow: hidden;
   margin-right: ${space(1.5)};
@@ -176,7 +177,7 @@ const StyledChevron = styled(IconChevron, {shouldForwardProp: isPropValid})<{
   color: ${getColor};
 `;
 
-export const SettingsIconLink = styled(Link)`
+const SettingsIconLink = styled(Link)`
   color: ${p => p.theme.gray300};
   align-items: center;
   display: inline-flex;
@@ -195,6 +196,6 @@ const StyledLock = styled(IconLock)`
   stroke-width: 1.5;
 `;
 
-export default React.forwardRef<HTMLDivElement, Props>((props, ref) => (
-  <HeaderItem forwardRef={ref} {...props} />
+export default forwardRef<HTMLDivElement, Props>((props, ref) => (
+  <HeaderItem forwardedRef={ref} {...props} />
 ));

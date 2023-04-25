@@ -7,8 +7,8 @@ from unittest.mock import patch
 from django.urls import reverse
 from rest_framework.response import Response
 
+from sentry import deletions
 from sentry.constants import SentryAppStatus
-from sentry.mediators import sentry_apps
 from sentry.models import (
     ApiToken,
     Organization,
@@ -20,6 +20,7 @@ from sentry.models import (
 from sentry.models.integrations.sentry_app import MASKED_VALUE
 from sentry.testutils import APITestCase
 from sentry.testutils.helpers import Feature, with_feature
+from sentry.testutils.silo import control_silo_test
 from sentry.utils import json
 
 POPULARITY = 27
@@ -139,6 +140,7 @@ class SentryAppsTest(APITestCase):
         )
 
 
+@control_silo_test
 class SuperUserGetSentryAppsTest(SentryAppsTest):
     def setUp(self):
         super().setUp()
@@ -274,6 +276,7 @@ class GetSentryAppsTest(SentryAppsTest):
         assert internal_app.uuid not in [a["uuid"] for a in response.data]
 
 
+@control_silo_test
 class SuperUserPostSentryAppsTest(SentryAppsTest):
     method = "post"
 
@@ -365,7 +368,7 @@ class PostSentryAppsTest(SentryAppsTest):
 
     def test_non_unique_app_slug_fails(self):
         sentry_app = self.create_sentry_app(name="Foo Bar", organization=self.organization)
-        sentry_apps.Destroyer.run(sentry_app=sentry_app, user=self.user)
+        deletions.exec_sync(sentry_app)
 
         data = self.get_data(name=sentry_app.name)
         response = self.get_error_response(**data, status_code=400)

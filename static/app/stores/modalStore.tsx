@@ -1,38 +1,33 @@
-import {createStore, StoreDefinition} from 'reflux';
+import {createStore} from 'reflux';
 
 import {ModalOptions, ModalRenderProps} from 'sentry/actionCreators/modal';
-import ModalActions from 'sentry/actions/modalActions';
-import {makeSafeRefluxStore} from 'sentry/utils/makeSafeRefluxStore';
+
+import {CommonStoreDefinition} from './types';
 
 type Renderer = (renderProps: ModalRenderProps) => React.ReactNode;
 
-type ModalStoreState = {
+type State = {
   options: ModalOptions;
   renderer: Renderer | null;
 };
 
-interface ModalStoreDefinition extends StoreDefinition {
-  get(): ModalStoreState;
+interface ModalStoreDefinition extends CommonStoreDefinition<State> {
+  closeModal(): void;
+  getState(): State;
   init(): void;
-  onCloseModal(): void;
-  onOpenModal(renderer: Renderer, options: ModalOptions): void;
+  openModal(renderer: Renderer, options: ModalOptions): void;
   reset(): void;
 }
 
 const storeConfig: ModalStoreDefinition = {
-  unsubscribeListeners: [],
-
   init() {
+    // XXX: Do not use `this.listenTo` in this store. We avoid usage of reflux
+    // listeners due to their leaky nature in tests.
+
     this.reset();
-    this.unsubscribeListeners.push(
-      this.listenTo(ModalActions.closeModal, this.onCloseModal)
-    );
-    this.unsubscribeListeners.push(
-      this.listenTo(ModalActions.openModal, this.onOpenModal)
-    );
   },
 
-  get() {
+  getState() {
     return this.state;
   },
 
@@ -40,19 +35,19 @@ const storeConfig: ModalStoreDefinition = {
     this.state = {
       renderer: null,
       options: {},
-    } as ModalStoreState;
+    } as State;
   },
 
-  onCloseModal() {
+  closeModal() {
     this.reset();
     this.trigger(this.state);
   },
 
-  onOpenModal(renderer: Renderer, options: ModalOptions) {
+  openModal(renderer: Renderer, options: ModalOptions) {
     this.state = {renderer, options};
     this.trigger(this.state);
   },
 };
 
-const ModalStore = createStore(makeSafeRefluxStore(storeConfig));
+const ModalStore = createStore(storeConfig);
 export default ModalStore;

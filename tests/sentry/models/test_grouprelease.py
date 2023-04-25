@@ -4,17 +4,17 @@ from django.utils import timezone
 
 from sentry.models import Environment, GroupRelease, Release
 from sentry.testutils import TestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test(stable=True)
 class GetOrCreateTest(TestCase):
     def test_simple(self):
         project = self.create_project()
         group = self.create_group(project=project)
         release = Release.objects.create(version="abc", organization_id=project.organization_id)
         release.add_project(project)
-        env = Environment.objects.create(
-            project_id=project.id, organization_id=project.organization_id, name="prod"
-        )
+        env = Environment.objects.create(organization_id=project.organization_id, name="prod")
         datetime = timezone.now()
 
         grouprelease = GroupRelease.get_or_create(

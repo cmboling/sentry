@@ -15,7 +15,10 @@ from sentry.utils.hashlib import md5_text
 from . import backend as ratelimiter
 
 if TYPE_CHECKING:
-    from sentry.models import ApiToken, Organization, User
+    from sentry.models import Organization, User
+    from sentry.models.apitoken import ApiToken
+    from sentry.services.hybrid_cloud.auth import AuthenticatedToken
+
 # TODO(mgaeta): It's not currently possible to type a Callable's args with kwargs.
 EndpointFunction = Callable[..., Response]
 
@@ -38,15 +41,21 @@ def concurrent_limiter() -> ConcurrentRateLimiter:
     return _CONCURRENT_RATE_LIMITER
 
 
-def get_rate_limit_key(view_func: EndpointFunction, request: Request) -> str | None:
+def get_rate_limit_key(
+    view_func: EndpointFunction,
+    request: Request,
+    rate_limit_group: str,
+    rate_limit_config: RateLimitConfig | None = None,
+) -> str | None:
     """Construct a consistent global rate limit key using the arguments provided"""
+    from sentry.models.apitoken import ApiToken, is_api_token_auth
+
     if not hasattr(view_func, "view_class") or request.path_info.startswith(
         settings.ANONYMOUS_STATIC_PREFIXES
     ):
         return None
 
     view = view_func.__qualname__
-    rate_limit_config = get_rate_limit_config(view_func.view_class)  # type: ignore
     http_method = request.method
 
     # This avoids touching user session, which means we avoid
@@ -56,23 +65,29 @@ def get_rate_limit_key(view_func: EndpointFunction, request: Request) -> str | N
         return None
 
     ip_address = request.META.get("REMOTE_ADDR")
-    request_auth = getattr(request, "auth", None)
+    request_auth: (AuthenticatedToken | ApiToken | None) = getattr(request, "auth", None)
     request_user = getattr(request, "user", None)
 
     from django.contrib.auth.models import AnonymousUser
 
-    from sentry.auth.system import SystemToken
-    from sentry.models import ApiKey, ApiToken
+    from sentry.auth.system import is_system_auth
+    from sentry.models import ApiKey
 
     # Don't Rate Limit System Token Requests
-    if isinstance(request_auth, SystemToken):
+    if is_system_auth(request_auth):
         return None
 
-    if isinstance(request_auth, ApiToken):
+    if is_api_token_auth(request_auth) and request_user:
+        if isinstance(request_auth, ApiToken):
+            token_id = request_auth.id
+        elif isinstance(request_auth, AuthenticatedToken):
+            token_id = request_auth.entity_id
+        else:
+            assert False  # Can't happen as asserted by is_api_token_auth check
 
         if request_user.is_sentry_app:
             category = "org"
-            id = get_organization_id_from_token(request_auth.id)
+            id = get_organization_id_from_token(token_id)
         else:
             category = "user"
             id = request_auth.user_id
@@ -93,13 +108,13 @@ def get_rate_limit_key(view_func: EndpointFunction, request: Request) -> str | N
     # If IP address doesn't exist, skip ratelimiting for now
     else:
         return None
-    group = rate_limit_config.group if rate_limit_config else "default"
+
     if rate_limit_config and rate_limit_config.has_custom_limit():
         # if there is a custom rate limit on the endpoint, we add view to the key
         # otherwise we just use what's default for the group
-        return f"{category}:{group}:{view}:{http_method}:{id}"
+        return f"{category}:{rate_limit_group}:{view}:{http_method}:{id}"
     else:
-        return f"{category}:{group}:{http_method}:{id}"
+        return f"{category}:{rate_limit_group}:{http_method}:{id}"
 
 
 def get_organization_id_from_token(token_id: str) -> int | None:
@@ -109,28 +124,36 @@ def get_organization_id_from_token(token_id: str) -> int | None:
     return installation.organization_id if installation else None
 
 
-def get_rate_limit_config(endpoint: Type[object]) -> RateLimitConfig | None:
-    """Read the rate limit config from the view function to be used for the rate limit check.
+def get_rate_limit_config(
+    view_cls: Type[object],
+    view_args: Any = None,
+    view_kwargs: Any = None,
+) -> RateLimitConfig | None:
+    """Read the rate limit config from the view to be used for the rate limit check.
 
-    If there is no rate limit defined on the endpoint, use the rate limit defined for the group
+    If there is no rate limit defined on the view_cls, use the rate limit defined for the group
     or the default across the board
     """
-    rate_limit_config = getattr(endpoint, "rate_limits", DEFAULT_RATE_LIMIT_CONFIG)
+    rate_limit_config = getattr(view_cls, "rate_limits", DEFAULT_RATE_LIMIT_CONFIG)
+    if callable(rate_limit_config):
+        rate_limit_config = rate_limit_config(*view_args, **view_kwargs)
     return RateLimitConfig.from_rate_limit_override_dict(rate_limit_config)
 
 
 def get_rate_limit_value(
-    http_method: str, endpoint: Type[object], category: RateLimitCategory
+    http_method: str,
+    category: RateLimitCategory,
+    rate_limit_config: RateLimitConfig | None,
 ) -> RateLimit | None:
     """Read the rate limit from the view function to be used for the rate limit check."""
-    # types are hashable in python, the type checker disagrees though
-    rate_limit_config = get_rate_limit_config(endpoint)
     if not rate_limit_config:
         return None
     return rate_limit_config.get_rate_limit(http_method, category)
 
 
-def above_rate_limit_check(key: str, rate_limit: RateLimit, request_uid: str) -> RateLimitMeta:
+def above_rate_limit_check(
+    key: str, rate_limit: RateLimit, request_uid: str, group: str
+) -> RateLimitMeta:
     # TODO: This is not as performant as it could be. The roundtrip betwwen the server and redis
     # is doubled because the fixd window limit and concurrent limit are two separate things with different
     # paths. Ideally there is just one lua script that does both and just says what kind of limit was hit
@@ -159,6 +182,7 @@ def above_rate_limit_check(key: str, rate_limit: RateLimit, request_uid: str) ->
         current=current,
         limit=rate_limit.limit,
         window=rate_limit.window,
+        group=group,
         reset_time=reset_time,
         remaining=remaining,
         concurrent_limit=rate_limit.concurrent_limit,

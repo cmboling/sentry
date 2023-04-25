@@ -4,8 +4,10 @@ from django.test.utils import override_settings
 
 from sentry import newsletter
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import control_silo_test, exempt_from_silo_limits
 
 
+@control_silo_test(stable=True)
 class AuthConfigEndpointTest(APITestCase):
     path = "/api/0/auth/config/"
 
@@ -27,6 +29,7 @@ class AuthConfigEndpointTest(APITestCase):
         assert response.data["nextUri"] == "/organizations/ricks-org/issues/"
 
     @override_settings(SENTRY_SINGLE_ORGANIZATION=True)
+    @exempt_from_silo_limits()  # Single org IS monolith mode
     def test_single_org(self):
         response = self.client.get(self.path)
 
@@ -39,7 +42,7 @@ class AuthConfigEndpointTest(APITestCase):
         response = self.client.get(self.path)
 
         assert response.status_code == 200
-        assert "nextUri" not in response.data
+        assert response.data["nextUri"] == "/organizations/new/"
 
     def test_unauthenticated(self):
         response = self.client.get(self.path)

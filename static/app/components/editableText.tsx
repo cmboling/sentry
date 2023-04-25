@@ -1,12 +1,11 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import * as React from 'react';
 import styled from '@emotion/styled';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
-import Input from 'sentry/components/forms/controls/input';
+import Input from 'sentry/components/input';
 import TextOverflow from 'sentry/components/textOverflow';
 import {IconEdit} from 'sentry/icons/iconEdit';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {defined} from 'sentry/utils';
 import useKeypress from 'sentry/utils/useKeyPress';
 import useOnClickOutside from 'sentry/utils/useOnClickOutside';
@@ -16,6 +15,7 @@ type Props = {
   value: string;
   'aria-label'?: string;
   autoSelect?: boolean;
+  className?: string;
   errorMessage?: React.ReactNode;
   isDisabled?: boolean;
   maxLength?: number;
@@ -32,6 +32,7 @@ function EditableText({
   maxLength,
   isDisabled = false,
   autoSelect = false,
+  className,
   'aria-label': ariaLabel,
 }: Props) {
   const [isEditing, setIsEditing] = useState(false);
@@ -142,7 +143,7 @@ function EditableText({
   }
 
   return (
-    <Wrapper isDisabled={isDisabled} isEditing={isEditing}>
+    <Wrapper isDisabled={isDisabled} isEditing={isEditing} className={className}>
       {isEditing ? (
         <InputWrapper
           ref={innerWrapperRef}
@@ -177,7 +178,7 @@ function EditableText({
 
 export default EditableText;
 
-const Label = styled('div')<{isDisabled: boolean}>`
+export const Label = styled('div')<{isDisabled: boolean}>`
   display: grid;
   grid-auto-flow: column;
   align-items: center;
@@ -188,6 +189,7 @@ const Label = styled('div')<{isDisabled: boolean}>`
 const InnerLabel = styled(TextOverflow)`
   border-top: 1px solid transparent;
   border-bottom: 1px dotted ${p => p.theme.gray200};
+  line-height: 38px;
 `;
 
 const InputWrapper = styled('div')<{isEmpty: boolean}>`
@@ -195,6 +197,7 @@ const InputWrapper = styled('div')<{isEmpty: boolean}>`
   background: ${p => p.theme.gray100};
   border-radius: ${p => p.theme.borderRadius};
   margin: -${space(0.5)} -${space(1)};
+  padding: ${space(0.5)} ${space(1)};
   max-width: calc(100% + ${space(2)});
 `;
 
@@ -202,8 +205,9 @@ const StyledInput = styled(Input)`
   border: none !important;
   background: transparent;
   height: auto;
-  min-height: 34px;
-  padding: ${space(0.5)} ${space(1)};
+  min-height: 40px;
+  padding: 0;
+  font-size: inherit;
   &,
   &:focus,
   &:active,

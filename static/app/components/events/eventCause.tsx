@@ -1,44 +1,45 @@
-import {Component, Fragment} from 'react';
+import {Fragment, JSXElementConstructor, useState} from 'react';
 import styled from '@emotion/styled';
 import flatMap from 'lodash/flatMap';
 import uniqBy from 'lodash/uniqBy';
 
-import {Client} from 'sentry/api';
-import {CommitRow} from 'sentry/components/commitRow';
+import {CommitRowProps} from 'sentry/components/commitRow';
 import {CauseHeader, DataSection} from 'sentry/components/events/styles';
 import {Panel} from 'sentry/components/panels';
 import {IconAdd, IconSubtract} from 'sentry/icons';
-import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {AvatarProject, Committer, Group, Organization} from 'sentry/types';
-import {Event} from 'sentry/types/event';
-import withApi from 'sentry/utils/withApi';
-import withCommitters from 'sentry/utils/withCommitters';
+import {t, tn} from 'sentry/locale';
+import {space} from 'sentry/styles/space';
+import {AvatarProject, Commit, Group} from 'sentry/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import {getAnalyticsDataForGroup} from 'sentry/utils/events';
+import useRouteAnalyticsParams from 'sentry/utils/routeAnalytics/useRouteAnalyticsParams';
+import useCommitters from 'sentry/utils/useCommitters';
+import useOrganization from 'sentry/utils/useOrganization';
 
-type Props = {
-  // injected by HoC
-  api: Client;
-  event: Event;
-
-  // needed by HoC
-  organization: Organization;
+interface Props {
+  commitRow: JSXElementConstructor<CommitRowProps>;
+  eventId: string;
   project: AvatarProject;
-  committers?: Committer[];
   group?: Group;
-};
+}
 
-type State = {
-  expanded: boolean;
-};
+export function EventCause({group, eventId, project, commitRow: CommitRow}: Props) {
+  const organization = useOrganization();
+  const [isExpanded, setIsExpanded] = useState(false);
+  const {data, isLoading} = useCommitters({
+    eventId,
+    projectSlug: project.slug,
+  });
+  const committers = data?.committers ?? [];
 
-class EventCause extends Component<Props, State> {
-  state: State = {
-    expanded: false,
-  };
+  useRouteAnalyticsParams({
+    fetching: isLoading,
+    num_suspect_commits: committers.length,
+  });
 
-  getUniqueCommitsWithAuthors() {
+  function getUniqueCommitsWithAuthors() {
     // Get a list of commits with author information attached
-    const commitsWithAuthors = flatMap(this.props.committers, ({commits, author}) =>
+    const commitsWithAuthors = flatMap(committers, ({commits, author}) =>
       commits.map(commit => ({
         ...commit,
         author,
@@ -49,49 +50,72 @@ class EventCause extends Component<Props, State> {
     return uniqBy(commitsWithAuthors, commit => commit.id);
   }
 
-  render() {
-    if (!this.props.committers?.length) {
-      return null;
-    }
-
-    const commits = this.getUniqueCommitsWithAuthors();
-
-    return (
-      <DataSection>
-        <CauseHeader>
-          <h3 data-test-id="event-cause">
-            {t('Suspect Commits')} ({commits.length})
-          </h3>
-          {commits.length > 1 && (
-            <ExpandButton onClick={() => this.setState({expanded: !this.state.expanded})}>
-              {this.state.expanded ? (
-                <Fragment>
-                  {t('Show less')} <IconSubtract isCircled size="md" />
-                </Fragment>
-              ) : (
-                <Fragment>
-                  {t('Show more')} <IconAdd isCircled size="md" />
-                </Fragment>
-              )}
-            </ExpandButton>
-          )}
-        </CauseHeader>
-        <Panel>
-          {commits.slice(0, this.state.expanded ? 100 : 1).map(commit => (
-            <CommitRow key={commit.id} commit={commit} />
-          ))}
-        </Panel>
-      </DataSection>
-    );
+  if (!committers.length) {
+    return null;
   }
+
+  const handlePullRequestClick = () => {
+    trackAnalytics('issue_details.suspect_commits.pull_request_clicked', {
+      organization,
+      project_id: parseInt(project.id as string, 10),
+      ...getAnalyticsDataForGroup(group),
+    });
+  };
+
+  const handleCommitClick = (commit: Commit) => {
+    trackAnalytics('issue_details.suspect_commits.commit_clicked', {
+      organization,
+      project_id: parseInt(project.id as string, 10),
+      has_pull_request: commit.pullRequest?.id !== undefined,
+      ...getAnalyticsDataForGroup(group),
+    });
+  };
+
+  const commits = getUniqueCommitsWithAuthors();
+
+  const commitHeading = tn('Suspect Commit', 'Suspect Commits (%s)', commits.length);
+
+  return (
+    <DataSection>
+      <CauseHeader>
+        <h3 data-test-id="event-cause">{commitHeading}</h3>
+        {commits.length > 1 && (
+          <ExpandButton
+            onClick={() => setIsExpanded(!isExpanded)}
+            data-test-id="expand-commit-list"
+          >
+            {isExpanded ? (
+              <Fragment>
+                {t('Show less')} <IconSubtract isCircled size="md" />
+              </Fragment>
+            ) : (
+              <Fragment>
+                {t('Show more')} <IconAdd isCircled size="md" />
+              </Fragment>
+            )}
+          </ExpandButton>
+        )}
+      </CauseHeader>
+      <StyledPanel>
+        {commits.slice(0, isExpanded ? 100 : 1).map(commit => (
+          <CommitRow
+            key={commit.id}
+            commit={commit}
+            onCommitClick={handleCommitClick}
+            onPullRequestClick={handlePullRequestClick}
+          />
+        ))}
+      </StyledPanel>
+    </DataSection>
+  );
 }
+
+const StyledPanel = styled(Panel)`
+  margin: 0;
+`;
 
 const ExpandButton = styled('button')`
   display: flex;
   align-items: center;
-  & > svg {
-    margin-left: ${space(0.5)};
-  }
+  gap: ${space(0.5)};
 `;
-
-export default withApi(withCommitters(EventCause));

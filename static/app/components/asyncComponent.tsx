@@ -14,7 +14,7 @@ import getRouteStringFromRoutes from 'sentry/utils/getRouteStringFromRoutes';
 import PermissionDenied from 'sentry/views/permissionDenied';
 import RouteError from 'sentry/views/routeError';
 
-type AsyncComponentProps = Partial<RouteComponentProps<{}, {}>>;
+export type AsyncComponentProps = Partial<RouteComponentProps<{}, {}>>;
 
 type AsyncComponentState = {
   [key: string]: any;
@@ -77,7 +77,7 @@ class AsyncComponent<
     this._measurement = {
       hasMeasured: false,
     };
-    if (props.routes && props.routes) {
+    if (props.routes) {
       metric.mark({name: `async-component-${getRouteStringFromRoutes(props.routes)}`});
     }
   }
@@ -328,7 +328,7 @@ class AsyncComponent<
       Sentry.addBreadcrumb({
         message: error.responseText,
         category: 'xhr',
-        level: Sentry.Severity.Error,
+        level: 'error',
       });
     }
     this.setState(prevState => {

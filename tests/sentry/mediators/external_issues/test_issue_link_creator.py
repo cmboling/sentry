@@ -1,11 +1,14 @@
+import pytest
 import responses
 
 from sentry.coreapi import APIUnauthorized
 from sentry.mediators.external_issues import IssueLinkCreator
 from sentry.models import PlatformExternalIssue
 from sentry.testutils import TestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class TestIssueLinkCreator(TestCase):
     def setUp(self):
         super().setUp()
@@ -56,7 +59,7 @@ class TestIssueLinkCreator(TestCase):
         assert external_issue.display_name == "Projectname#issue-1"
 
     def test_invalid_action(self):
-        with self.assertRaises(APIUnauthorized):
+        with pytest.raises(APIUnauthorized):
             IssueLinkCreator.run(
                 install=self.install,
                 group=self.group,

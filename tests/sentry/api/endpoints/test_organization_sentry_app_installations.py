@@ -2,6 +2,7 @@ from django.urls import reverse
 
 from sentry.models import SentryAppInstallation
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import control_silo_test
 
 
 class SentryAppInstallationsTest(APITestCase):
@@ -17,16 +18,23 @@ class SentryAppInstallationsTest(APITestCase):
         self.unpublished_app = self.create_sentry_app(name="Testin", organization=self.org)
 
         self.installation = self.create_sentry_app_installation(
-            slug=self.published_app.slug, organization=self.super_org, user=self.superuser
+            slug=self.published_app.slug,
+            organization=self.super_org,
+            user=self.superuser,
+            prevent_token_exchange=True,
         )
 
         self.installation2 = self.create_sentry_app_installation(
-            slug=self.unpublished_app.slug, organization=self.org, user=self.user
+            slug=self.unpublished_app.slug,
+            organization=self.org,
+            user=self.user,
+            prevent_token_exchange=True,
         )
 
         self.url = reverse("sentry-api-0-sentry-app-installations", args=[self.org.slug])
 
 
+@control_silo_test(stable=True)
 class GetSentryAppInstallationsTest(SentryAppInstallationsTest):
     def test_superuser_sees_all_installs(self):
         self.login_as(user=self.superuser, superuser=True)
@@ -80,6 +88,7 @@ class GetSentryAppInstallationsTest(SentryAppInstallationsTest):
         assert response.status_code == 404
 
 
+@control_silo_test(stable=True)
 class PostSentryAppInstallationsTest(SentryAppInstallationsTest):
     def test_install_unpublished_app(self):
         self.login_as(user=self.user)

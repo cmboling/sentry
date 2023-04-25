@@ -1,13 +1,16 @@
 import styled from '@emotion/styled';
 import isEqual from 'lodash/isEqual';
 
-import PluginComponentBase from 'sentry/components/bases/pluginComponentBase';
-import {Form, FormState} from 'sentry/components/deprecatedforms';
+import Alert from 'sentry/components/alert';
+import {Button} from 'sentry/components/button';
+import Form from 'sentry/components/deprecatedforms/form';
+import FormState from 'sentry/components/forms/state';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {t, tct} from 'sentry/locale';
+import PluginComponentBase from 'sentry/plugins/pluginComponentBase';
 import {Organization, Plugin, Project} from 'sentry/types';
 import {parseRepo} from 'sentry/utils';
-import {IntegrationAnalyticsKey} from 'sentry/utils/analytics/integrationAnalyticsEvents';
+import {IntegrationAnalyticsKey} from 'sentry/utils/analytics/integrations';
 import {trackIntegrationAnalytics} from 'sentry/utils/integrationUtil';
 
 type Props = {
@@ -173,21 +176,21 @@ class PluginSettings<
       }
       return (
         <div className="m-b-1">
-          <div className="alert alert-warning m-b-1">{data.config_error}</div>
-          <a className="btn btn-primary" href={authUrl}>
+          <Alert type="warning">{data.config_error}</Alert>
+          <Button priority="primary" href={authUrl}>
             {t('Associate Identity')}
-          </a>
+          </Button>
         </div>
       );
     }
 
     if (this.state.state === FormState.ERROR && !this.state.fieldList) {
       return (
-        <div className="alert alert-error m-b-1">
+        <Alert type="error">
           {tct('An unknown error occurred. Need help with this? [link:Contact support]', {
             link: <a href="https://sentry.io/support/" />,
           })}
-        </div>
+        </Alert>
       );
     }
 

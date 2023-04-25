@@ -11,16 +11,21 @@ from sentry.api.event_search import (
 )
 from sentry.api.issue_search import (
     convert_actor_or_none_value,
+    convert_category_value,
+    convert_device_class_value,
     convert_first_release_value,
     convert_query_values,
     convert_release_value,
+    convert_type_value,
     convert_user_value,
     parse_search_query,
     value_converters,
 )
 from sentry.exceptions import InvalidSearchQuery
+from sentry.issues.grouptype import GroupCategory, get_group_types_by_category
 from sentry.models.group import STATUS_QUERY_CHOICES
 from sentry.testutils import TestCase
+from sentry.testutils.silo import region_silo_test
 
 
 class ParseSearchQueryTest(unittest.TestCase):
@@ -87,10 +92,10 @@ class ParseSearchQueryTest(unittest.TestCase):
             ]
 
     def test_is_query_invalid(self):
-        with self.assertRaises(InvalidSearchQuery) as cm:
+        with pytest.raises(InvalidSearchQuery) as excinfo:
             parse_search_query("is:wrong")
 
-        assert str(cm.exception).startswith('Invalid value for "is" search, valid values are')
+        assert str(excinfo.value).startswith('Invalid value for "is" search, valid values are')
 
     def test_is_query_inbox(self):
         assert parse_search_query("is:for_review") == [
@@ -154,6 +159,24 @@ class ParseSearchQueryTest(unittest.TestCase):
         ]
 
 
+@region_silo_test(stable=True)
+class ConvertJavaScriptConsoleTagTest(TestCase):
+    def test_valid(self):
+        filters = [SearchFilter(SearchKey("empty_stacktrace.js_console"), "=", SearchValue(True))]
+        with self.feature("organizations:javascript-console-error-tag"):
+            result = convert_query_values(filters, [self.project], self.user, None)
+            assert result[0].value.raw_value is True
+
+    def test_invalid(self):
+        filters = [SearchFilter(SearchKey("empty_stacktrace.js_console"), "=", SearchValue(True))]
+        with self.feature({"organizations:javascript-console-error-tag": False}) and pytest.raises(
+            InvalidSearchQuery,
+            match="The empty_stacktrace.js_console filter is not supported for this organization",
+        ):
+            convert_query_values(filters, [self.project], self.user, None)
+
+
+@region_silo_test(stable=True)
 class ConvertQueryValuesTest(TestCase):
     def test_valid_converter(self):
         filters = [SearchFilter(SearchKey("assigned_to"), "=", SearchValue("me"))]
@@ -170,6 +193,7 @@ class ConvertQueryValuesTest(TestCase):
         assert filters[0].value.raw_value == search_val.raw_value
 
 
+@region_silo_test(stable=True)
 class ConvertStatusValueTest(TestCase):
     def test_valid(self):
         for status_string, status_val in STATUS_QUERY_CHOICES.items():
@@ -194,6 +218,7 @@ class ConvertStatusValueTest(TestCase):
             convert_query_values(filters, [self.project], self.user, None)
 
 
+@region_silo_test(stable=True)
 class ConvertActorOrNoneValueTest(TestCase):
     def test_user(self):
         assert convert_actor_or_none_value(
@@ -215,6 +240,7 @@ class ConvertActorOrNoneValueTest(TestCase):
         )
 
 
+@region_silo_test
 class ConvertUserValueTest(TestCase):
     def test_me(self):
         assert convert_user_value(["me"], [self.project], self.user, None) == [self.user]
@@ -227,6 +253,7 @@ class ConvertUserValueTest(TestCase):
         assert convert_user_value(["fake-user"], [], None, None)[0].id == 0
 
 
+@region_silo_test(stable=True)
 class ConvertReleaseValueTest(TestCase):
     def test(self):
         assert convert_release_value(["123"], [self.project], self.user, None) == "123"
@@ -237,6 +264,7 @@ class ConvertReleaseValueTest(TestCase):
         assert convert_release_value(["14.*"], [self.project], self.user, None) == "14.*"
 
 
+@region_silo_test(stable=True)
 class ConvertFirstReleaseValueTest(TestCase):
     def test(self):
         assert convert_first_release_value(["123"], [self.project], self.user, None) == ["123"]
@@ -247,3 +275,58 @@ class ConvertFirstReleaseValueTest(TestCase):
             release.version
         ]
         assert convert_first_release_value(["14.*"], [self.project], self.user, None) == ["14.*"]
+
+
+@region_silo_test(stable=True)
+class ConvertCategoryValueTest(TestCase):
+    def test(self):
+        error_group_types = get_group_types_by_category(GroupCategory.ERROR.value)
+        perf_group_types = get_group_types_by_category(GroupCategory.PERFORMANCE.value)
+        assert (
+            set(convert_category_value(["error"], [self.project], self.user, None))
+            == error_group_types
+        )
+        assert (
+            set(convert_category_value(["performance"], [self.project], self.user, None))
+            == perf_group_types
+        )
+        assert (
+            set(convert_category_value(["error", "performance"], [self.project], self.user, None))
+            == error_group_types | perf_group_types
+        )
+        with pytest.raises(InvalidSearchQuery):
+            convert_category_value(["hellboy"], [self.project], self.user, None)
+
+
+@region_silo_test(stable=True)
+class ConvertTypeValueTest(TestCase):
+    def test(self):
+        assert convert_type_value(["error"], [self.project], self.user, None) == [1]
+        assert convert_type_value(
+            ["performance_n_plus_one_db_queries"], [self.project], self.user, None
+        ) == [1006]
+        assert convert_type_value(
+            ["performance_slow_db_query"], [self.project], self.user, None
+        ) == [1001]
+        assert convert_type_value(
+            ["error", "performance_n_plus_one_db_queries"], [self.project], self.user, None
+        ) == [1, 1006]
+        with pytest.raises(InvalidSearchQuery):
+            convert_type_value(["hellboy"], [self.project], self.user, None)
+
+
+@region_silo_test(stable=True)
+class DeviceClassValueTest(TestCase):
+    def test(self):
+        assert convert_device_class_value(["high"], [self.project], self.user, None) == ["3"]
+        assert convert_device_class_value(["medium"], [self.project], self.user, None) == ["2"]
+        assert convert_device_class_value(["low"], [self.project], self.user, None) == ["1"]
+        assert sorted(
+            convert_device_class_value(["medium", "high"], [self.project], self.user, None)
+        ) == [
+            "2",
+            "3",
+        ]
+        assert sorted(
+            convert_device_class_value(["low", "medium", "high"], [self.project], self.user, None)
+        ) == ["1", "2", "3"]

@@ -1,25 +1,26 @@
-import * as React from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
+import {PureComponent} from 'react';
+// eslint-disable-next-line no-restricted-imports
+import {WithRouterProps} from 'react-router';
 import {ClassNames} from '@emotion/react';
 import styled from '@emotion/styled';
 
+import {GetActorPropsFn} from 'sentry/components/deprecatedDropdownMenu';
 import DropdownAutoComplete from 'sentry/components/dropdownAutoComplete';
+import autoCompleteFilter from 'sentry/components/dropdownAutoComplete/autoCompleteFilter';
 import {Item} from 'sentry/components/dropdownAutoComplete/types';
-import {GetActorPropsFn} from 'sentry/components/dropdownMenu';
 import HookOrDefault from 'sentry/components/hookOrDefault';
 import HeaderItem from 'sentry/components/organizations/headerItem';
 import MultipleSelectorSubmitRow from 'sentry/components/organizations/multipleSelectorSubmitRow';
 import PageFilterPinButton from 'sentry/components/organizations/pageFilters/pageFilterPinButton';
 import DateRange from 'sentry/components/organizations/timeRangeSelector/dateRange';
 import DateSummary from 'sentry/components/organizations/timeRangeSelector/dateSummary';
-import {getRelativeSummary} from 'sentry/components/organizations/timeRangeSelector/utils';
 import {DEFAULT_STATS_PERIOD} from 'sentry/constants';
 import {IconCalendar} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {DateString, Organization} from 'sentry/types';
 import {defined} from 'sentry/utils';
-import {analytics} from 'sentry/utils/analytics';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import {
   getDateWithTimezoneInUtc,
   getInternalDate,
@@ -31,8 +32,11 @@ import {
 } from 'sentry/utils/dates';
 import getDynamicText from 'sentry/utils/getDynamicText';
 import getRouteStringFromRoutes from 'sentry/utils/getRouteStringFromRoutes';
+// eslint-disable-next-line no-restricted-imports
+import withSentryRouter from 'sentry/utils/withSentryRouter';
 
 import SelectorItems from './selectorItems';
+import {getRelativeSummary, timeRangeAutoCompleteFilter} from './utils';
 
 const DateRangeHook = HookOrDefault({
   hookName: 'component:header-date-range',
@@ -69,6 +73,10 @@ const defaultProps = {
    * makes the selector unclearable.
    */
   defaultPeriod: DEFAULT_STATS_PERIOD,
+  /**
+   * This matches Sentry's retention limit of 90 days
+   */
+  maxPickableDays: 90,
   /**
    * Callback when value changes
    */
@@ -131,6 +139,16 @@ type Props = WithRouterProps & {
   detached?: boolean;
 
   /**
+   * Disable the dropdown
+   */
+  disabled?: boolean;
+
+  /**
+   * Forces the user to select from the set of defined relative options
+   */
+  disallowArbitraryRelativeRanges?: boolean;
+
+  /**
    * Small info icon with tooltip hint text
    */
   hint?: string;
@@ -164,6 +182,7 @@ type Props = WithRouterProps & {
 type State = {
   hasChanges: boolean;
   hasDateRangeErrors: boolean;
+  inputValue: string;
   isOpen: boolean;
   relative: string | null;
   end?: Date;
@@ -171,7 +190,7 @@ type State = {
   utc?: boolean | null;
 };
 
-class TimeRangeSelector extends React.PureComponent<Props, State> {
+class TimeRangeSelector extends PureComponent<Props, State> {
   static defaultProps = defaultProps;
 
   constructor(props: Props) {
@@ -189,6 +208,7 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
       // if utc is not null and not undefined, then use value of `props.utc` (it can be false)
       // otherwise if no value is supplied, the default should be the user's timezone preference
       utc: defined(props.utc) ? props.utc : getUserTimezone() === 'UTC',
+      inputValue: '',
       isOpen: false,
       hasChanges: false,
       hasDateRangeErrors: false,
@@ -232,7 +252,7 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
       // Only call update if we close when absolute date is selected
       this.handleUpdate({relative, start, end, utc});
     } else {
-      this.setState({isOpen: false});
+      this.setState({isOpen: false, inputValue: ''});
     }
   };
 
@@ -242,6 +262,7 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
     this.setState(
       {
         isOpen: false,
+        inputValue: '',
         hasChanges: false,
       },
       () => {
@@ -259,7 +280,12 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
   };
 
   handleAbsoluteClick = () => {
-    const {relative, onChange, defaultPeriod, defaultAbsolute} = this.props;
+    const {relative, onChange, defaultPeriod, defaultAbsolute, start, end} = this.props;
+
+    // If we already have a start/end we don't have to set a default
+    if (start && end) {
+      return;
+    }
 
     // Set default range to equivalent of last relative period,
     // or use default stats period
@@ -340,7 +366,7 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
   };
 
   handleUseUtc = () => {
-    const {onChange, router} = this.props;
+    const {onChange, router, organization} = this.props;
     let {start, end} = this.props;
 
     this.setState(state => {
@@ -353,11 +379,10 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
       if (!end) {
         end = getDateWithTimezoneInUtc(state.end, state.utc);
       }
-
-      analytics('dateselector.utc_changed', {
-        utc,
+      trackAnalytics('dateselector.utc_changed', {
+        organization,
         path: getRouteStringFromRoutes(router.routes),
-        org_id: parseInt(this.props.organization.id, 10),
+        utc,
       });
 
       const newDateTime = {
@@ -376,9 +401,26 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
   };
 
   handleOpen = () => {
+    if (this.props.disabled) {
+      return;
+    }
     this.setState({isOpen: true});
     // Start loading react-date-picker
     import('../timeRangeSelector/dateRange/index');
+  };
+
+  onInputValueChange = inputValue => {
+    this.setState({inputValue});
+  };
+
+  autoCompleteFilter: typeof autoCompleteFilter = (...args) => {
+    if (this.props.disallowArbitraryRelativeRanges) {
+      return autoCompleteFilter(...args);
+    }
+
+    return timeRangeAutoCompleteFilter(...args, {
+      maxDays: this.props.maxPickableDays,
+    });
   };
 
   render() {
@@ -393,6 +435,7 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
       maxPickableDays,
       customDropdownButton,
       detached,
+      disabled,
       alignDropdown,
       showPin,
     } = this.props;
@@ -424,8 +467,11 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
             {({css}) => (
               <StyledDropdownAutoComplete
                 allowActorToggle
+                autoCompleteFilter={this.autoCompleteFilter}
                 alignMenu={alignDropdown ?? (isAbsoluteSelected ? 'right' : 'left')}
                 isOpen={this.state.isOpen}
+                inputValue={this.state.inputValue}
+                onInputValueChange={this.onInputValueChange}
                 onOpen={this.handleOpen}
                 onClose={this.handleCloseMenu}
                 hideInput={!shouldShowRelative}
@@ -433,8 +479,9 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
                 blendCorner={false}
                 maxHeight={400}
                 detached={detached}
+                disabled={disabled}
                 items={items}
-                searchPlaceholder={t('Filter time range')}
+                searchPlaceholder={t('Provide a time range')}
                 rootClassName={css`
                   position: relative;
                   display: flex;
@@ -442,13 +489,17 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
                 `}
                 inputActions={
                   showPin ? (
-                    <StyledPinButton size="xsmall" filter="datetime" />
+                    <StyledPinButton
+                      organization={organization}
+                      filter="datetime"
+                      size="xs"
+                    />
                   ) : undefined
                 }
                 onSelect={this.handleSelect}
                 subPanel={
                   isAbsoluteSelected && (
-                    <div>
+                    <AbsoluteRangeWrap>
                       <DateRangeHook
                         start={start ?? null}
                         end={end ?? null}
@@ -467,7 +518,7 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
                           }
                         />
                       </SubmitRow>
-                    </div>
+                    </AbsoluteRangeWrap>
                   )
                 }
               >
@@ -476,7 +527,7 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
                     customDropdownButton({getActorProps, isOpen})
                   ) : (
                     <StyledHeaderItem
-                      data-test-id="global-header-timerange-selector"
+                      data-test-id="page-filter-timerange-selector"
                       icon={label ?? <IconCalendar />}
                       isOpen={isOpen}
                       hasSelected={
@@ -506,10 +557,6 @@ class TimeRangeSelector extends React.PureComponent<Props, State> {
   }
 }
 
-const TimeRangeRoot = styled('div')`
-  position: relative;
-`;
-
 const StyledDropdownAutoComplete = styled(DropdownAutoComplete)`
   font-size: ${p => p.theme.fontSizeMedium};
   position: absolute;
@@ -527,6 +574,11 @@ const StyledHeaderItem = styled(HeaderItem)`
   height: 100%;
 `;
 
+const AbsoluteRangeWrap = styled('div')`
+  display: flex;
+  flex-direction: column;
+`;
+
 const SubmitRow = styled('div')`
   height: 100%;
   padding: ${space(0.5)} ${space(1)};
@@ -538,6 +590,4 @@ const StyledPinButton = styled(PageFilterPinButton)`
   margin: 0 ${space(1)};
 `;
 
-export default withRouter(TimeRangeSelector);
-
-export {TimeRangeRoot};
+export default withSentryRouter(TimeRangeSelector);

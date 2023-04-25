@@ -1,5 +1,5 @@
 import {Fragment} from 'react';
-import {css} from '@emotion/react';
+import {css, Theme} from '@emotion/react';
 import styled from '@emotion/styled';
 
 import OnboardingSidebar from 'sentry/components/onboardingWizard/sidebar';
@@ -9,12 +9,15 @@ import ProgressRing, {
   RingBar,
   RingText,
 } from 'sentry/components/progressRing';
+import {isDone} from 'sentry/components/sidebar/utils';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
-import {OnboardingTaskStatus, Organization, Project} from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
-import theme, {Theme} from 'sentry/utils/theme';
+import {space} from 'sentry/styles/space';
+import {Organization, Project} from 'sentry/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import {isDemoWalkthrough} from 'sentry/utils/demoMode';
+import theme from 'sentry/utils/theme';
 import withProjects from 'sentry/utils/withProjects';
+import {usePersistedOnboardingState} from 'sentry/views/onboarding/utils';
 
 import {CommonSidebarProps, SidebarPanelKey} from './types';
 
@@ -22,9 +25,6 @@ type Props = CommonSidebarProps & {
   org: Organization;
   projects: Project[];
 };
-
-const isDone = (task: OnboardingTaskStatus) =>
-  task.status === 'complete' || task.status === 'skipped';
 
 const progressTextCss = () => css`
   font-size: ${theme.fontSizeMedium};
@@ -41,21 +41,24 @@ function OnboardingStatus({
   onShowPanel,
 }: Props) {
   const handleShowPanel = () => {
-    trackAnalyticsEvent({
-      eventKey: 'onboarding.wizard_opened',
-      eventName: 'Onboarding Wizard Opened',
-      organization_id: org.id,
-    });
+    trackAnalytics('onboarding.wizard_opened', {organization: org});
     onShowPanel();
   };
+  const [onboardingState] = usePersistedOnboardingState();
 
   if (!org.features?.includes('onboarding')) {
     return null;
   }
 
-  const tasks = getMergedTasks({organization: org, projects});
+  const tasks = getMergedTasks({
+    organization: org,
+    projects,
+    onboardingState: onboardingState || undefined,
+  });
 
-  const allDisplayedTasks = tasks.filter(task => task.display);
+  const allDisplayedTasks = tasks
+    .filter(task => task.display)
+    .filter(task => !task.renderCard);
   const doneTasks = allDisplayedTasks.filter(isDone);
   const numberRemaining = allDisplayedTasks.length - doneTasks.length;
 
@@ -72,7 +75,9 @@ function OnboardingStatus({
     return null;
   }
 
-  const label = t('Quick Start');
+  const walkthrough = isDemoWalkthrough();
+  const label = walkthrough ? t('Guided Tours') : t('Quick Start');
+  const task = walkthrough ? 'tours' : 'tasks';
 
   return (
     <Fragment>
@@ -96,7 +101,7 @@ function OnboardingStatus({
           <div>
             <Heading>{label}</Heading>
             <Remaining>
-              {tct('[numberRemaining] Remaining tasks', {numberRemaining})}
+              {tct('[numberRemaining] Remaining [task]', {numberRemaining, task})}
               {pendingCompletionSeen && <PendingSeenIndicator />}
             </Remaining>
           </div>
@@ -115,7 +120,7 @@ function OnboardingStatus({
 
 const Heading = styled('div')`
   transition: color 100ms;
-  font-size: ${p => p.theme.backgroundSecondary};
+  font-size: ${p => p.theme.fontSizeLarge};
   color: ${p => p.theme.white};
   margin-bottom: ${space(0.25)};
 `;

@@ -18,6 +18,7 @@ from sentry.models import (
 from sentry.notifications.types import NotificationScopeType
 from sentry.testutils import TestCase
 from sentry.testutils.helpers import add_identity, get_response_text, install_slack, link_team
+from sentry.testutils.silo import exempt_from_silo_limits, region_silo_test
 from sentry.types.integrations import ExternalProviders
 from sentry.utils import json
 
@@ -83,7 +84,14 @@ class SlackIntegrationLinkTeamTestBase(TestCase):
             external_id=self.channel_id,
         )
 
+    def _create_user_with_valid_role_through_team(self):
+        user = self.create_user(email="foo@example.com")
+        admin_team = self.create_team(org_role="admin")
+        self.create_member(organization=self.organization, user=user, teams=[admin_team])
+        self.login_as(user)
 
+
+@region_silo_test(stable=True)
 class SlackIntegrationLinkTeamTest(SlackIntegrationLinkTeamTestBase):
     def setUp(self):
         super().setUp()
@@ -115,10 +123,18 @@ class SlackIntegrationLinkTeamTest(SlackIntegrationLinkTeamTestBase):
             in get_response_text(data)
         )
 
-        team_settings = NotificationSetting.objects.filter(
-            scope_type=NotificationScopeType.TEAM.value, target=self.team.actor.id
-        )
-        assert len(team_settings) == 1
+        with exempt_from_silo_limits():
+            team_settings = NotificationSetting.objects.filter(
+                scope_type=NotificationScopeType.TEAM.value, target=self.team.actor.id
+            )
+            assert len(team_settings) == 1
+
+    @responses.activate
+    def test_link_team_with_valid_role_through_team(self):
+        """Test that we successfully link a team to a Slack channel with a valid role through a team"""
+        self._create_user_with_valid_role_through_team()
+
+        self.test_link_team()
 
     @responses.activate
     def test_link_team_already_linked(self):
@@ -145,9 +161,10 @@ class SlackIntegrationLinkTeamTest(SlackIntegrationLinkTeamTestBase):
         # Create another organization and team for this user that is linked through `self.integration`.
         organization2 = self.create_organization(owner=self.user)
         team2 = self.create_team(organization=organization2, members=[self.user])
-        OrganizationIntegration.objects.create(
-            organization=organization2, integration=self.integration
-        )
+        with exempt_from_silo_limits():
+            OrganizationIntegration.objects.create(
+                organization_id=organization2.id, integration=self.integration
+            )
 
         # Team order should not matter.
         for team in (self.team, team2):
@@ -160,6 +177,7 @@ class SlackIntegrationLinkTeamTest(SlackIntegrationLinkTeamTestBase):
             assert len(external_actors) == 1
 
 
+@region_silo_test(stable=True)
 class SlackIntegrationUnlinkTeamTest(SlackIntegrationLinkTeamTestBase):
     def setUp(self):
         super().setUp()
@@ -193,10 +211,18 @@ class SlackIntegrationUnlinkTeamTest(SlackIntegrationLinkTeamTestBase):
             in get_response_text(data)
         )
 
-        team_settings = NotificationSetting.objects.filter(
-            scope_type=NotificationScopeType.TEAM.value, target=self.team.actor.id
-        )
+        with exempt_from_silo_limits():
+            team_settings = NotificationSetting.objects.filter(
+                scope_type=NotificationScopeType.TEAM.value, target=self.team.actor.id
+            )
         assert len(team_settings) == 0
+
+    @responses.activate
+    def test_unlink_team_with_valid_role_through_team(self):
+        """Test that a team can be unlinked from a Slack channel with a valid role through a team"""
+        self._create_user_with_valid_role_through_team()
+
+        self.test_unlink_team()
 
     @responses.activate
     def test_unlink_multiple_teams(self):
@@ -228,9 +254,10 @@ class SlackIntegrationUnlinkTeamTest(SlackIntegrationLinkTeamTestBase):
             in get_response_text(data)
         )
 
-        team_settings = NotificationSetting.objects.filter(
-            scope_type=NotificationScopeType.TEAM.value, target=self.team.actor.id
-        )
+        with exempt_from_silo_limits():
+            team_settings = NotificationSetting.objects.filter(
+                scope_type=NotificationScopeType.TEAM.value, target=self.team.actor.id
+            )
         assert len(team_settings) == 0
 
     @responses.activate
@@ -238,9 +265,10 @@ class SlackIntegrationUnlinkTeamTest(SlackIntegrationLinkTeamTestBase):
         # Create another organization and team for this user that is linked through `self.integration`.
         organization2 = self.create_organization(owner=self.user)
         team2 = self.create_team(organization=organization2, members=[self.user])
-        OrganizationIntegration.objects.create(
-            organization=organization2, integration=self.integration
-        )
+        with exempt_from_silo_limits():
+            OrganizationIntegration.objects.create(
+                organization_id=organization2.id, integration=self.integration
+            )
         self.link_team(team2)
 
         # Team order should not matter.

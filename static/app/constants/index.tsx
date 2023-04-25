@@ -1,7 +1,14 @@
 /* global process */
 
 import {t} from 'sentry/locale';
-import {DataCategory, PermissionResource, Scope} from 'sentry/types';
+import {
+  DataCategory,
+  DataCategoryExact,
+  DataCategoryInfo,
+  OrgRole,
+  PermissionResource,
+  Scope,
+} from 'sentry/types';
 
 /**
  * Common constants here
@@ -10,11 +17,21 @@ import {DataCategory, PermissionResource, Scope} from 'sentry/types';
 // This is the element id where we render our React application to
 export const ROOT_ELEMENT = 'blk_router';
 
+export const usingCustomerDomain =
+  typeof window !== 'undefined' ? Boolean(window?.__initialData?.customerDomain) : false;
+
+export const customerDomain =
+  typeof window !== 'undefined'
+    ? window?.__initialData?.customerDomain?.subdomain
+    : undefined;
+
 // This is considered the "default" route/view that users should be taken
 // to when the application does not have any further context
 //
 // e.g. loading app root or switching organization
-export const DEFAULT_APP_ROUTE = '/organizations/:orgSlug/issues/';
+export const DEFAULT_APP_ROUTE = usingCustomerDomain
+  ? '/issues/'
+  : '/organizations/:orgSlug/issues/';
 
 export const API_ACCESS_SCOPES = [
   'project:read',
@@ -52,30 +69,34 @@ export const DEFAULT_API_ACCESS_SCOPES = [
 // These should only be used in the case where we cannot obtain roles through
 // the members endpoint (primarily in cases where a user is admining a
 // different organization they are not a OrganizationMember of ).
-export const MEMBER_ROLES = [
+export const ORG_ROLES: OrgRole[] = [
   {
     id: 'member',
     name: 'Member',
     allowed: true,
     desc: 'Members can view and act on events, as well as view most other data within the organization.',
+    minimumTeamRole: 'contributor',
   },
   {
     id: 'admin',
     name: 'Admin',
     allowed: true,
     desc: "Admin privileges on any teams of which they're a member. They can create new teams and projects, as well as remove teams and projects on which they already hold membership (or all teams, if open membership is enabled). Additionally, they can manage memberships of teams that they are members of. They cannot invite members to the organization.",
+    minimumTeamRole: 'admin',
   },
   {
     id: 'manager',
     name: 'Manager',
     allowed: true,
     desc: 'Gains admin access on all teams as well as the ability to add and remove members.',
+    minimumTeamRole: 'admin',
   },
   {
     id: 'owner',
     name: 'Organization Owner',
     allowed: true,
     desc: 'Unrestricted access to the organization, its data, and its settings. Can add, modify, and delete projects and members, as well as make billing and plan changes.',
+    minimumTeamRole: 'admin',
   },
 ];
 
@@ -181,6 +202,8 @@ export const AVATAR_URL_MAP = {
 
 export const MENU_CLOSE_DELAY = 200;
 
+export const SLOW_TOOLTIP_DELAY = 1000;
+
 export const MAX_PICKABLE_DAYS = 90;
 
 export const DEFAULT_STATS_PERIOD = '14d';
@@ -210,6 +233,68 @@ export const DATA_CATEGORY_NAMES = {
   [DataCategory.ERRORS]: t('Errors'),
   [DataCategory.TRANSACTIONS]: t('Transactions'),
   [DataCategory.ATTACHMENTS]: t('Attachments'),
+  [DataCategory.PROFILES]: t('Profiles'),
+  [DataCategory.REPLAYS]: t('Session Replays'),
+};
+
+// https://github.com/getsentry/relay/blob/master/relay-common/src/constants.rs
+export const DATA_CATEGORY_INFO: Record<DataCategoryExact, DataCategoryInfo> = {
+  [DataCategoryExact.ERROR]: {
+    name: DataCategoryExact.ERROR,
+    apiName: 'error',
+    plural: 'errors',
+    displayName: 'error',
+    titleName: t('Errors'),
+    uid: 1,
+  },
+  [DataCategoryExact.TRANSACTION]: {
+    name: DataCategoryExact.TRANSACTION,
+    apiName: 'transaction',
+    plural: 'transactions',
+    displayName: 'transaction',
+    titleName: t('Transactions'),
+    uid: 2,
+  },
+  [DataCategoryExact.ATTACHMENT]: {
+    name: DataCategoryExact.ATTACHMENT,
+    apiName: 'attachment',
+    plural: 'attachments',
+    displayName: 'attachment',
+    titleName: t('Attachments'),
+    uid: 4,
+  },
+  [DataCategoryExact.PROFILE]: {
+    name: DataCategoryExact.PROFILE,
+    apiName: 'profile',
+    plural: 'profiles',
+    displayName: 'profile',
+    titleName: t('Profiles'),
+    uid: 6,
+  },
+  [DataCategoryExact.REPLAY]: {
+    name: DataCategoryExact.REPLAY,
+    apiName: 'replay',
+    plural: 'replays',
+    displayName: 'replay',
+    titleName: t('Session Replays'),
+    uid: 7,
+  },
+  [DataCategoryExact.TRANSACTION_PROCESSED]: {
+    name: DataCategoryExact.TRANSACTION_PROCESSED,
+    apiName: 'transactions',
+    plural: 'transactions',
+    displayName: 'transaction',
+    titleName: t('Transactions'),
+    uid: 8,
+  },
+  [DataCategoryExact.TRANSACTION_INDEXED]: {
+    name: DataCategoryExact.TRANSACTION_INDEXED,
+    apiName: 'transactionIndexed',
+    plural: 'indexed transactions',
+    displayName: 'indexed transaction',
+    titleName: t('Indexed Transactions'),
+    uid: 9,
+  },
 };
 
 // Special Search characters
@@ -257,9 +342,9 @@ export const DISCOVER2_DOCS_URL = 'https://docs.sentry.io/product/discover-queri
 
 export const IS_ACCEPTANCE_TEST = !!process.env.IS_ACCEPTANCE_TEST;
 export const NODE_ENV = process.env.NODE_ENV;
-export const DISABLE_RR_WEB = !!process.env.DISABLE_RR_WEB;
 export const SPA_DSN = process.env.SPA_DSN;
 export const SENTRY_RELEASE_VERSION = process.env.SENTRY_RELEASE_VERSION;
+export const UI_DEV_ENABLE_PROFILING = process.env.UI_DEV_ENABLE_PROFILING;
 
 export const DEFAULT_ERROR_JSON = {
   detail: t('Unknown error. Please try again.'),

@@ -16,14 +16,15 @@ from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.core.signing import BadSignature
-from django.http import RawPostDataException
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare, get_random_string
-from rest_framework import serializers
+from rest_framework import serializers, status
 
+from sentry.api.exceptions import SentryAPIException
 from sentry.auth.system import is_system_auth
-from sentry.utils import json
+from sentry.utils import json, metrics
 from sentry.utils.auth import has_completed_sso
+from sentry.utils.settings import is_self_hosted
 
 logger = logging.getLogger("sentry.superuser")
 
@@ -60,6 +61,12 @@ SUPERUSER_ACCESS_CATEGORIES = getattr(settings, "SUPERUSER_ACCESS_CATEGORIES", [
 
 UNSET = object()
 
+ENABLE_SU_UPON_LOGIN_FOR_LOCAL_DEV = getattr(settings, "ENABLE_SU_UPON_LOGIN_FOR_LOCAL_DEV", False)
+
+DISABLE_SSO_CHECK_SU_FORM_FOR_LOCAL_DEV = getattr(
+    settings, "DISABLE_SSO_CHECK_SU_FORM_FOR_LOCAL_DEV", False
+)
+
 
 def is_active_superuser(request):
     if is_system_auth(getattr(request, "auth", None)):
@@ -71,6 +78,18 @@ def is_active_superuser(request):
 class SuperuserAccessSerializer(serializers.Serializer):
     superuserAccessCategory = serializers.ChoiceField(choices=SUPERUSER_ACCESS_CATEGORIES)
     superuserReason = serializers.CharField(min_length=4, max_length=128)
+
+
+class SuperuserAccessFormInvalidJson(SentryAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    code = "invalid-superuser-access-json"
+    message = "The request contains invalid json"
+
+
+class EmptySuperuserAccessForm(SentryAPIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    code = "empty-superuser-access-form"
+    message = "The request contains an empty superuser access form data"
 
 
 class Superuser:
@@ -103,6 +122,8 @@ class Superuser:
 
     @staticmethod
     def _needs_validation():
+        if is_self_hosted() or ENABLE_SU_UPON_LOGIN_FOR_LOCAL_DEV:
+            return False
         return settings.VALIDATE_SUPERUSER_ACCESS_CATEGORY_AND_REASON
 
     @property
@@ -129,7 +150,8 @@ class Superuser:
         # if we've bound superuser to an organization they must
         # have completed SSO to gain status
         if self.org_id and not has_completed_sso(self.request, self.org_id):
-            return False, "incomplete-sso"
+            if not DISABLE_SSO_CHECK_SU_FORM_FOR_LOCAL_DEV:
+                return False, "incomplete-sso"
         # if there's no IPs configured, we allow assume its the same as *
         if not allowed_ips:
             return True, None
@@ -303,7 +325,7 @@ class Superuser:
         self.is_valid = False
         self.request.session.pop(SESSION_KEY, None)
 
-    def set_logged_in(self, user, current_datetime=None):
+    def set_logged_in(self, user, prefilled_su_modal=None, current_datetime=None):
         """
         Mark a session as superuser-enabled.
         """
@@ -321,6 +343,11 @@ class Superuser:
                 current_datetime=current_datetime,
             )
 
+            metrics.incr(
+                "superuser.success",
+                sample_rate=1.0,
+            )
+
             logger.info(
                 "superuser.logged-in",
                 extra={"ip_address": request.META["REMOTE_ADDR"], "user_id": user.id},
@@ -330,19 +357,33 @@ class Superuser:
             enable_and_log_superuser_access()
             return
 
+        if prefilled_su_modal:
+            su_access_json = prefilled_su_modal
+        else:
+            try:
+                # need to use json loads as the data is no longer in request.data
+                su_access_json = json.loads(request.body)
+            except json.JSONDecodeError:
+                metrics.incr(
+                    "superuser.failure",
+                    sample_rate=1.0,
+                    tags={"reason": SuperuserAccessFormInvalidJson.code},
+                )
+                raise SuperuserAccessFormInvalidJson()
+            except AttributeError:
+                metrics.incr(
+                    "superuser.failure",
+                    sample_rate=1.0,
+                    tags={"reason": EmptySuperuserAccessForm.code},
+                )
+                raise EmptySuperuserAccessForm()
+
+        su_access_info = SuperuserAccessSerializer(data=su_access_json)
+
+        if not su_access_info.is_valid():
+            raise serializers.ValidationError(su_access_info.errors)
+
         try:
-            # need to use json loads as the data is no longer in request.data
-            su_access_json = json.loads(request.body)
-        except (AttributeError, json.JSONDecodeError, RawPostDataException):
-            su_access_json = {}
-
-        if su_access_json.get("isSuperuserModal"):
-
-            su_access_info = SuperuserAccessSerializer(data=su_access_json)
-
-            if not su_access_info.is_valid():
-                raise serializers.ValidationError(su_access_info.errors)
-
             logger.info(
                 "superuser.superuser_access",
                 extra={
@@ -353,8 +394,10 @@ class Superuser:
                     "reason_for_su": su_access_info.validated_data["superuserReason"],
                 },
             )
-
-        enable_and_log_superuser_access()
+            enable_and_log_superuser_access()
+        except AttributeError:
+            metrics.incr("superuser.failure", sample_rate=1.0, tags={"reason": "missing-user-info"})
+            logger.error("superuser.superuser_access.missing_user_info")
 
     def set_logged_out(self):
         """
@@ -369,9 +412,6 @@ class Superuser:
 
     def on_response(self, response, current_datetime=None):
         request = self.request
-
-        if current_datetime is None:
-            current_datetime = timezone.now()
 
         # always re-bind the cookie to update the idle expiration window
         if self.is_active:

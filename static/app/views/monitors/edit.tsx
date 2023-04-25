@@ -1,55 +1,92 @@
-import {Fragment} from 'react';
-import {browserHistory, RouteComponentProps} from 'react-router';
+import {browserHistory} from 'react-router';
 
-import AsyncView from 'sentry/views/asyncView';
+import Breadcrumbs from 'sentry/components/breadcrumbs';
+import * as Layout from 'sentry/components/layouts/thirds';
+import LoadingError from 'sentry/components/loadingError';
+import LoadingIndicator from 'sentry/components/loadingIndicator';
+import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {t} from 'sentry/locale';
+import {setApiQueryData, useApiQuery, useQueryClient} from 'sentry/utils/queryClient';
+import useOrganization from 'sentry/utils/useOrganization';
+import usePageFilters from 'sentry/utils/usePageFilters';
+import {useParams} from 'sentry/utils/useParams';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 
-import MonitorForm from './monitorForm';
+import MonitorForm from './components/monitorForm';
 import {Monitor} from './types';
 
-type Props = AsyncView['props'] &
-  RouteComponentProps<{monitorId: string; orgId: string}, {}>;
+export default function EditMonitor() {
+  const {monitorSlug} = useParams();
+  const {selection} = usePageFilters();
+  const organization = useOrganization();
+  const queryClient = useQueryClient();
 
-type State = AsyncView['state'] & {
-  monitor: Monitor | null;
-};
+  const queryKeyUrl = `/organizations/${organization.slug}/monitors/${monitorSlug}/`;
 
-export default class EditMonitor extends AsyncView<Props, State> {
-  getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
-    const {params} = this.props;
-    return [['monitor', `/monitors/${params.monitorId}/`]];
-  }
+  const {
+    isLoading,
+    isError,
+    data: monitor,
+    refetch,
+  } = useApiQuery<Monitor>([queryKeyUrl], {
+    staleTime: 0,
+  });
 
-  onUpdate = (data: Monitor) =>
-    this.setState(state => ({monitor: {...state.monitor, ...data}}));
-
-  onSubmitSuccess = (data: Monitor) =>
-    browserHistory.push(`/organizations/${this.props.params.orgId}/monitors/${data.id}/`);
-
-  getTitle() {
-    if (this.state.monitor) {
-      return `${this.state.monitor.name} - Monitors - ${this.props.params.orgId}`;
-    }
-    return `Monitors - ${this.props.params.orgId}`;
-  }
-
-  renderBody() {
-    const {monitor} = this.state;
-
-    if (monitor === null) {
-      return null;
-    }
-
-    return (
-      <Fragment>
-        <h1>Edit Monitor</h1>
-
-        <MonitorForm
-          monitor={monitor}
-          apiMethod="PUT"
-          apiEndpoint={`/monitors/${monitor.id}/`}
-          onSubmitSuccess={this.onSubmitSuccess}
-        />
-      </Fragment>
+  function onSubmitSuccess(data: Monitor) {
+    setApiQueryData(queryClient, [queryKeyUrl], data);
+    browserHistory.push(
+      normalizeUrl({
+        pathname: `/organizations/${organization.slug}/crons/${data.slug}/`,
+        query: {environment: selection.environments},
+      })
     );
   }
+
+  function getTitle() {
+    if (monitor) {
+      return `${monitor.name} - Crons - ${organization.slug}`;
+    }
+    return `Crons - ${organization.slug}`;
+  }
+
+  if (isLoading) {
+    return <LoadingIndicator />;
+  }
+
+  if (isError) {
+    return <LoadingError onRetry={refetch} message="Failed to load monitor." />;
+  }
+
+  return (
+    <SentryDocumentTitle title={getTitle()}>
+      <Layout.Page>
+        <Layout.Header>
+          <Layout.HeaderContent>
+            <Breadcrumbs
+              crumbs={[
+                {
+                  label: t('Crons'),
+                  to: `/organizations/${organization.slug}/crons/`,
+                },
+                {
+                  label: t('Editing %s', monitor.name),
+                },
+              ]}
+            />
+            <Layout.Title>{t('Edit Monitor')}</Layout.Title>
+          </Layout.HeaderContent>
+        </Layout.Header>
+        <Layout.Body>
+          <Layout.Main fullWidth>
+            <MonitorForm
+              monitor={monitor}
+              apiMethod="PUT"
+              apiEndpoint={`/organizations/${organization.slug}/monitors/${monitor.slug}/`}
+              onSubmitSuccess={onSubmitSuccess}
+            />
+          </Layout.Main>
+        </Layout.Body>
+      </Layout.Page>
+    </SentryDocumentTitle>
+  );
 }

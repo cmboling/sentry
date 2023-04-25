@@ -1,9 +1,7 @@
 import {createStore} from 'reflux';
 
-import EnvironmentActions from 'sentry/actions/environmentActions';
 import {Environment} from 'sentry/types';
 import {getDisplayName, getUrlRoutingName} from 'sentry/utils/environment';
-import {makeSafeRefluxStore} from 'sentry/utils/makeSafeRefluxStore';
 
 import {CommonStoreDefinition} from './types';
 
@@ -26,31 +24,16 @@ interface OrganizationEnvironmentsStoreDefinition extends CommonStoreDefinition<
 }
 
 const storeConfig: OrganizationEnvironmentsStoreDefinition = {
-  unsubscribeListeners: [],
-
   state: {
     environments: null,
     error: null,
   },
 
   init() {
-    this.state = {environments: null, error: null};
+    // XXX: Do not use `this.listenTo` in this store. We avoid usage of reflux
+    // listeners due to their leaky nature in tests.
 
-    this.unsubscribeListeners.push(
-      this.listenTo(EnvironmentActions.fetchEnvironments, this.onFetchEnvironments)
-    );
-    this.unsubscribeListeners.push(
-      this.listenTo(
-        EnvironmentActions.fetchEnvironmentsSuccess,
-        this.onFetchEnvironmentsSuccess
-      )
-    );
-    this.unsubscribeListeners.push(
-      this.listenTo(
-        EnvironmentActions.fetchEnvironmentsError,
-        this.onFetchEnvironmentsError
-      )
-    );
+    this.state = {environments: null, error: null};
   },
 
   makeEnvironment(item: Environment): EnhancedEnvironment {
@@ -86,6 +69,5 @@ const storeConfig: OrganizationEnvironmentsStoreDefinition = {
   },
 };
 
-const OrganizationEnvironmentsStore = createStore(makeSafeRefluxStore(storeConfig));
-
+const OrganizationEnvironmentsStore = createStore(storeConfig);
 export default OrganizationEnvironmentsStore;

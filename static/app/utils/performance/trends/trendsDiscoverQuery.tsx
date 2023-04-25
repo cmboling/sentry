@@ -1,11 +1,8 @@
-import * as React from 'react';
-
 import {Project} from 'sentry/types';
 import GenericDiscoverQuery, {
   DiscoverQueryProps,
   GenericChildrenProps,
 } from 'sentry/utils/discover/genericDiscoverQuery';
-import withApi from 'sentry/utils/withApi';
 import withProjects from 'sentry/utils/withProjects';
 import {
   TrendChangeType,
@@ -26,6 +23,7 @@ export type TrendsRequest = {
   projects: Project[];
   trendChangeType?: TrendChangeType;
   trendFunctionField?: TrendFunctionField;
+  withBreakpoint?: boolean;
 };
 
 type RequestProps = DiscoverQueryProps & TrendsRequest;
@@ -69,10 +67,11 @@ export function getTrendsRequestPayload(props: RequestProps) {
 }
 
 function TrendsDiscoverQuery(props: Props) {
+  const route = props.withBreakpoint ? 'new-events-trends-stats' : 'events-trends-stats';
   return (
     <GenericDiscoverQuery<TrendsData, TrendsRequest>
       {...props}
-      route="events-trends-stats"
+      route={route}
       getRequestPayload={getTrendsRequestPayload}
     >
       {({tableData, ...rest}) => {
@@ -96,6 +95,6 @@ function EventsDiscoverQuery(props: EventProps) {
   );
 }
 
-export const TrendsEventsDiscoverQuery = withApi(withProjects(EventsDiscoverQuery));
+export const TrendsEventsDiscoverQuery = withProjects(EventsDiscoverQuery);
 
-export default withApi(withProjects(TrendsDiscoverQuery));
+export default withProjects(TrendsDiscoverQuery);

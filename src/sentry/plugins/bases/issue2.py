@@ -5,6 +5,7 @@ from django.utils.html import format_html
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import region_silo_endpoint
 from sentry.api.serializers.models.plugin import PluginSerializer
 
 # api compat
@@ -14,6 +15,7 @@ from sentry.plugins.base.configuration import react_plugin_config
 from sentry.plugins.base.v1 import Plugin
 from sentry.plugins.endpoints import PluginGroupEndpoint
 from sentry.signals import issue_tracker_used
+from sentry.types.activity import ActivityType
 from sentry.utils.auth import get_auth_providers
 from sentry.utils.http import absolute_uri
 from sentry.utils.safe import safe_execute
@@ -21,6 +23,7 @@ from social_auth.models import UserSocialAuth
 
 
 # TODO(dcramer): remove this in favor of GroupEndpoint
+@region_silo_endpoint
 class IssueGroupActionEndpoint(PluginGroupEndpoint):
     view_method_name = None
     plugin = None
@@ -269,8 +272,8 @@ class IssueTrackingPlugin2(Plugin):
         Activity.objects.create(
             project=group.project,
             group=group,
-            type=Activity.CREATE_ISSUE,
-            user=request.user,
+            type=ActivityType.CREATE_ISSUE.value,
+            user_id=request.user.id,
             data=issue_information,
         )
 
@@ -336,8 +339,8 @@ class IssueTrackingPlugin2(Plugin):
         Activity.objects.create(
             project=group.project,
             group=group,
-            type=Activity.CREATE_ISSUE,
-            user=request.user,
+            type=ActivityType.CREATE_ISSUE.value,
+            user_id=request.user.id,
             data=issue_information,
         )
         return Response(
@@ -405,7 +408,9 @@ class IssueTrackingPlugin2(Plugin):
         if self.needs_auth(project=group.project, request=request):
             return {
                 "error_type": "auth",
-                "auth_url": reverse("socialauth_associate", args=[self.auth_provider]),
+                "auth_url": absolute_uri(
+                    reverse("socialauth_associate", args=[self.auth_provider])
+                ),
             }
 
     # TODO: should we get rid of this (move it to react?)

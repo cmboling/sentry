@@ -2,9 +2,11 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test.client import RequestFactory
 from django.urls import reverse
 
-from tests.apidocs.util import APIDocsTestCase
+from fixtures.apidocs_test_case import APIDocsTestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class ProjectReleaseFilesListDocsTest(APIDocsTestCase):
     def setUp(self):
         project = self.create_project(name="foo")

@@ -4,7 +4,7 @@ import omit from 'lodash/omit';
 
 import {t} from 'sentry/locale';
 import {Organization, Project} from 'sentry/types';
-import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import EventView from 'sentry/utils/discover/eventView';
 import {
   formatAbbreviatedNumber,
@@ -38,23 +38,23 @@ export enum LandingDisplayField {
 
 export const LANDING_DISPLAYS = [
   {
-    label: 'All Transactions',
+    label: t('All Transactions'),
     field: LandingDisplayField.ALL,
   },
   {
-    label: 'Web Vitals',
+    label: t('Web Vitals'),
     field: LandingDisplayField.FRONTEND_PAGELOAD,
   },
   {
-    label: 'Frontend',
+    label: t('Frontend'),
     field: LandingDisplayField.FRONTEND_OTHER,
   },
   {
-    label: 'Backend',
+    label: t('Backend'),
     field: LandingDisplayField.BACKEND,
   },
   {
-    label: 'Mobile',
+    label: t('Mobile'),
     field: LandingDisplayField.MOBILE,
   },
 ];
@@ -135,7 +135,7 @@ export function handleLandingDisplayChange(
       ? {...queryWithConditions}
       : {...queryWithConditions, landingDisplay: field};
 
-  trackAdvancedAnalyticsEvent('performance_views.landingv3.display_change', {
+  trackAnalytics('performance_views.landingv3.display_change', {
     organization,
     change_to_display: field,
     default_display: defaultDisplay,

@@ -11,37 +11,13 @@ export default function getGuidesContent(orgSlug: string | null): GuidesContent 
   return [
     {
       guide: 'issue',
-      requiredTargets: ['issue_title', 'exception'],
+      requiredTargets: ['issue_number', 'exception'],
       steps: [
-        {
-          title: t("Let's Get This Over With"),
-          target: 'issue_title',
-          description: t(
-            `No one likes a product tour. But stick with us, and you'll find it a
-              whole lot easier to use Sentry's Issue details page.`
-          ),
-        },
-        {
-          title: t('Resolve Your Issues'),
-          target: 'resolve',
-          description: t(
-            'So you fixed your problem? Congrats. Hit resolve to make it all go away.'
-          ),
-        },
-        {
-          title: t('Deal With It Later, Or Never'),
-          target: 'ignore_delete_discard',
-          description: t(
-            `Just can't deal with this Issue right now? Ignore it. Saving it for later?
-                Star it. Want it gone and out of your life forever?
-                Delete that sh*t.`
-          ),
-        },
         {
           title: t('Identify Your Issues'),
           target: 'issue_number',
           description: tct(
-            `You've got a lot of Issues. That's fine. Use the Issue number in your commit message,
+            `You have Issues. That's fine. Use the Issue number in your commit message,
                 and we'll automatically resolve the Issue when your code is deployed. [link:Learn more]`,
             {link: <ExternalLink href="https://docs.sentry.io/product/releases/" />}
           ),
@@ -58,14 +34,6 @@ export default function getGuidesContent(orgSlug: string | null): GuidesContent 
                 <ExternalLink href="https://docs.sentry.io/product/error-monitoring/issue-owners/" />
               ),
             }
-          ),
-        },
-        {
-          title: t('Find Information You Can Use'),
-          target: 'tags',
-          description: t(
-            `So many bugs, so little time. When you've got bugs as far as the mouse can scroll,
-                search and filter Events with tags or visualize Issues with a heat map.`
           ),
         },
         {
@@ -117,7 +85,7 @@ export default function getGuidesContent(orgSlug: string | null): GuidesContent 
               link: <Link to={orgSlug ? `/settings/${orgSlug}` : `/settings`} />,
             }
           ),
-          nextText: t(`Allow`),
+          nextText: t('Allow'),
           hasNextGuide: true,
         },
       ],
@@ -137,37 +105,25 @@ export default function getGuidesContent(orgSlug: string | null): GuidesContent 
           title: t('Transactions'),
           target: 'trace_view_guide_row',
           description: t(
-            `Get an overview of every transaction. You can quickly see all the transactions in a trace alongside the project, transaction duration, and any related errors.`
+            `You can quickly see all the transactions in a trace alongside the project, transaction duration, and any related errors.`
           ),
         },
         {
           title: t('Transactions Details'),
           target: 'trace_view_guide_row_details',
-          description: t(`Click on any transaction to see more details.`),
+          description: t('Click on any transaction to see more details.'),
         },
       ],
     },
     {
       guide: 'span_op_breakdowns_and_tag_explorer',
-      requiredTargets: ['span_op_breakdowns_filter', 'span_op_relative_breakdowns'],
+      requiredTargets: ['span_op_breakdowns_filter'],
       steps: [
         {
           title: t('Filter by Span Operation'),
           target: 'span_op_breakdowns_filter',
           description: t(
             'You can now filter these transaction events based on http, db, browser or resource operation.'
-          ),
-        },
-        {
-          title: t('Span Operation Breakdown'),
-          target: 'span_op_relative_breakdowns',
-          description: tct(
-            'By default, you can now see how each transaction is broken down by operation. Click the spans to filter. [link:Learn more]',
-            {
-              link: (
-                <ExternalLink href="https://docs.sentry.io/product/performance/event-detail/#operations-breakdown" />
-              ),
-            }
           ),
         },
         {
@@ -181,28 +137,6 @@ export default function getGuidesContent(orgSlug: string | null): GuidesContent 
               ),
             }
           ),
-        },
-      ],
-    },
-    {
-      guide: 'team_key_transactions',
-      requiredTargets: ['team_key_transaction_header'],
-      steps: [
-        {
-          title: t('Key Transactions'),
-          target: 'team_key_transaction_header',
-          description: t(
-            'Software development is a team sport. Key Transactions allow you to mark important transactions and share them with your team.'
-          ),
-          nextText: t('Great'),
-        },
-        {
-          title: t('Migrating Key Transactions'),
-          target: 'team_key_transaction_existing',
-          description: t(
-            'To migrate your previous key transactions, you will have to mark them as a key transaction again for your team. Sorry about that.'
-          ),
-          nextText: t('Fine'),
         },
       ],
     },
@@ -254,39 +188,18 @@ export default function getGuidesContent(orgSlug: string | null): GuidesContent 
       ],
     },
     {
-      guide: 'release_stages',
-      requiredTargets: ['release_stages'],
-      dateThreshold: new Date('2021-05-01'),
-      steps: [
-        {
-          title: t('Adoption Filter'),
-          target: 'release_stages',
-          description: tct(
-            'Select an environment and search for `release.stage:adopted` to filter out releases with low adoption. [br] [link:Learn more]',
-            {
-              br: <br />,
-              link: (
-                <ExternalLink href="https://docs.sentry.io/product/releases/usage/sorting-filtering/#filtering-releases" />
-              ),
-            }
-          ),
-          nextText: t('Got it'),
-        },
-      ],
-    },
-    {
       guide: 'new_page_filters',
       requiredTargets: ['new_page_filter_button'],
       expectedTargets: ['new_page_filter_pin'],
       dateThreshold: new Date('2022-04-05'),
       steps: [
         {
-          title: t('Selection filters here now!'),
+          title: t('Selection filters here now'),
           target: 'new_page_filter_button',
           description: t(
             "Selection filters were at the top of the page. Now they're here. Because this is what's getting filtered. Obvi."
           ),
-          nextText: t('Sounds Good'),
+          nextText: t('Sounds good'),
         },
         {
           title: t('Pin your filters'),
@@ -294,7 +207,54 @@ export default function getGuidesContent(orgSlug: string | null): GuidesContent 
           description: t(
             "Want to keep the same filters between searches and sessions? Click this button. Don't want to? Don't click this button."
           ),
-          nextText: t('Got It'),
+          nextText: t('Got it'),
+        },
+      ],
+    },
+    {
+      guide: 'releases_widget',
+      requiredTargets: ['releases_widget'],
+      dateThreshold: new Date('2022-06-22'),
+      steps: [
+        {
+          title: t('Releases are here'),
+          target: 'releases_widget',
+          description: t(
+            'Want to know how your latest release is doing? Monitor release health and crash rates in Dashboards.'
+          ),
+          nextText: t('Sounds good'),
+        },
+      ],
+    },
+    {
+      guide: 'activate_sampling_rule',
+      requiredTargets: ['sampling_rule_toggle'],
+      dateThreshold: new Date('2022-07-05'),
+      steps: [
+        {
+          title: t('Activate your first rule'),
+          target: 'sampling_rule_toggle',
+          description: t(
+            'Activating a rule will take immediate effect, as well as any changes given to an active rule.'
+          ),
+          nextText: t('Activate Rule'),
+          dismissText: t('Later'),
+          hasNextGuide: true,
+        },
+      ],
+    },
+    {
+      guide: 'create_conditional_rule',
+      requiredTargets: ['add_conditional_rule'],
+      dateThreshold: new Date('2022-07-05'),
+      steps: [
+        {
+          title: t('Create a new sample rule'),
+          target: 'add_conditional_rule',
+          description: t(
+            'Sample transactions under specific conditions, keeping what you need and dropping what you don’t.'
+          ),
+          dismissText: t('Enough already'),
         },
       ],
     },
@@ -304,9 +264,9 @@ export default function getGuidesContent(orgSlug: string | null): GuidesContent 
 function getDemoModeGuides(): GuidesContent {
   return [
     {
-      guide: 'sidebar',
-      requiredTargets: ['projects', 'issues'],
-      priority: 1, // lower number means higher priority
+      guide: 'sidebar_v2',
+      requiredTargets: ['projects'],
+      priority: 1,
       markOthersAsSeen: true,
       steps: [
         {
@@ -320,14 +280,14 @@ function getDemoModeGuides(): GuidesContent {
           title: t('Issues'),
           target: 'issues',
           description: t(
-            `Here's a list of what's broken with your application. And everything you need to know to fix it.`
+            `Here's a list of what's broken and slow. Sentry automatically groups similar events together into an issue.`
           ),
         },
         {
           title: t('Performance'),
           target: 'performance',
           description: t(
-            `See slow faster. Trace slow-loading pages back to their API calls as well as surface all related errors.`
+            `Keep a pulse on crash rates, throughput, and latency issues across projects.`
           ),
         },
         {
@@ -343,147 +303,137 @@ function getDemoModeGuides(): GuidesContent {
           description: t(
             `Query and unlock insights into the health of your entire system and get answers to critical business questions all in one place.`
           ),
-          nextText: t(`Got it`),
+          nextText: t('Got it'),
         },
       ],
     },
     {
-      guide: 'issue_stream_v2',
-      requiredTargets: ['issue_stream_title'],
+      guide: 'issue_stream_v3',
+      requiredTargets: ['issue_stream'],
       steps: [
         {
-          title: t('Issue'),
-          target: 'issue_stream_title',
+          title: t('Issues'),
+          target: 'issue_stream',
           description: t(
-            `Click here to get a full error report down to the line of code that caused the error.`
+            `Sentry automatically groups similar events together into an issue. Similarity is
+            determined by stack trace and other factors. Click on an issue to learn more.`
           ),
         },
       ],
     },
     {
-      guide: 'issue_v2',
-      requiredTargets: ['issue_details', 'exception'],
+      guide: 'issues_v3',
+      requiredTargets: ['tags'],
       steps: [
         {
-          title: t('Details'),
-          target: 'issue_details',
-          description: t(`See the who, what, and where of every error right at the top`),
-        },
-        {
-          title: t('Exception'),
-          target: 'exception',
-          description: t(
-            `Source code right in the stack trace, so you don’t need to find it yourself.`
-          ),
-        },
-        {
-          title: t('Tags'),
+          title: t('Metadata and metrics'),
           target: 'tags',
           description: t(
-            `Tags help you quickly access related events and view the tag distribution for a set of events.`
+            `See tags like specific users affected by the event, device, OS, and browser type.
+            On the right side of the page you can view the number of affected users and exception frequency overtime.`
           ),
         },
         {
-          title: t('Breadcrumbs'),
+          title: t('Find your broken code'),
+          target: 'stack_trace',
+          description: t(
+            `View the stack trace to see the exact sequence of function calls leading to the error in question.`
+          ),
+        },
+        {
+          title: t('Retrace your steps'),
           target: 'breadcrumbs',
           description: t(
-            `Check out the play by play of what your user experienced till they encountered the exception.`
+            `Sentry automatically captures breadcrumbs for events so you can see the sequence of events leading up to the error.`
           ),
+          nextText: t('Got it'),
         },
+      ],
+    },
+    {
+      guide: 'releases_v2',
+      requiredTargets: ['release_projects'],
+      priority: 1,
+      steps: [
         {
-          title: t('Discover'),
-          target: 'open_in_discover',
+          title: t('Compare releases'),
+          target: 'release_projects',
           description: t(
-            `Uncover trends with Discover — analyze errors by URL, geography, device, browser, etc.`
+            `Click here and select the "react-native" project to see how the release is trending compaed to previous releases.`
           ),
         },
       ],
     },
     {
-      guide: 'releases',
+      guide: 'react-native-release',
       requiredTargets: ['release_version'],
       steps: [
         {
-          title: t('Release'),
+          title: t('Release-specfic trends'),
           target: 'release_version',
           description: t(
-            `Click here to easily identify new issues, regressions, and track the health of every release.`
+            `Select the latest release to review new and regressed issues, and business critical metrics like crash rate, and user adoption.`
           ),
         },
       ],
     },
     {
-      guide: 'release_details',
-      requiredTargets: ['release_chart'],
+      guide: 'release-details_v2',
+      requiredTargets: ['release_states'],
       steps: [
         {
-          title: t('Chart'),
-          target: 'release_chart',
-          description: t(`Click and drag to zoom in on a specific section of the chart.`),
-        },
-        {
-          title: t('Discover'),
-          target: 'release_issues_open_in_discover',
-          description: t(`Analyze these errors by URL, geography, device, browser, etc.`),
-        },
-        {
-          title: t('Discover'),
-          target: 'release_transactions_open_in_discover',
+          title: t('New and regressed issues'),
+          target: 'release_states',
           description: t(
-            `Analyze these performance issues by URL, geography, device, browser, etc.`
+            `Along with reviewing how your release is trending over time compared to previous releases, you can view new and regressed issues here.`
           ),
         },
       ],
     },
     {
-      guide: 'discover_landing',
-      requiredTargets: ['discover_landing_header'],
+      guide: 'performance',
+      requiredTargets: ['performance_table'],
       steps: [
         {
-          title: t('Discover'),
-          target: 'discover_landing_header',
+          title: t('See slow transactions'),
+          target: 'performance_table',
           description: t(
-            `Click into any of the queries below to identify trends in event data.`
+            `Trace slow-loading pages back to their API calls, as well as, related errors and users impacted across projects. Select a transaction to see more details.`
           ),
         },
       ],
     },
     {
-      guide: 'discover_event_view',
-      requiredTargets: ['create_alert_from_discover'],
+      guide: 'transaction_summary',
+      requiredTargets: ['user_misery', 'transactions_table'],
       steps: [
         {
-          title: t('Create Alert'),
-          target: 'create_alert_from_discover',
+          title: t('Identify the root cause'),
+          target: 'user_misery',
           description: t(
-            `Create an alert based on this query to get notified when an event exceeds user-defined thresholds.`
+            'Dive into the details behind a slow transaction. See User Misery, Apdex, and more metrics, along with related events and suspect spans.'
           ),
         },
         {
-          title: t('Columns'),
-          target: 'columns_header_button',
+          title: t('Breakdown event spans'),
+          target: 'transactions_table',
           description: t(
-            `There's a whole lot more to... _discover_. View all the query conditions.`
+            'Select an Event ID from a list of slow transactions to uncover slow spans.'
           ),
+          nextText: t('Got it'),
         },
       ],
     },
     {
-      guide: 'transaction_details',
+      guide: 'transaction_details_v2',
       requiredTargets: ['span_tree'],
       steps: [
         {
-          title: t('Span Tree'),
+          title: t('See slow fast'),
           target: 'span_tree',
           description: t(
-            `Expand the spans to see span details from start date, end date to the operation.`
-          ),
-        },
-        {
-          title: t('Breadcrumbs'),
-          target: 'breadcrumbs',
-          description: t(
-            `Check out the play by play of what your user experienced till they encountered the performance issue.`
+            `Expand the spans to see span details from start date, end date to the operation. Below you can view breadcrumbs for a play-by-play of what your users
+            did before encountering the performance issue.`
           ),
         },
       ],

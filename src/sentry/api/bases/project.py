@@ -1,5 +1,10 @@
+from __future__ import annotations
+
+from typing import Any, Mapping
+
 from rest_framework.request import Request
 from rest_framework.response import Response
+from sentry_sdk import Scope
 
 from sentry.api.base import Endpoint
 from sentry.api.exceptions import ProjectMoved, ResourceDoesNotExist
@@ -24,10 +29,11 @@ class ProjectPermission(OrganizationPermission):
     }
 
     def has_object_permission(self, request: Request, view, project):
-        result = super().has_object_permission(request, view, project.organization)
+        has_org_scope = super().has_object_permission(request, view, project.organization)
 
-        if not result:
-            return result
+        # If allow_joinleave is False, some org-roles will not have project:read for all projects
+        if has_org_scope and request.access.has_project_access(project):
+            return has_org_scope
 
         allowed_scopes = set(self.scope_map.get(request.method, []))
         return request.access.has_any_project_scope(project, allowed_scopes)
@@ -69,17 +75,6 @@ class ProjectSettingPermission(ProjectPermission):
     }
 
 
-class RelaxedSearchPermission(ProjectPermission):
-    scope_map = {
-        "GET": ["project:read", "project:write", "project:admin"],
-        # members can do writes
-        "POST": ["project:write", "project:admin", "project:read"],
-        "PUT": ["project:write", "project:admin", "project:read"],
-        # members can delete their own searches
-        "DELETE": ["project:read", "project:write", "project:admin"],
-    }
-
-
 class ProjectAlertRulePermission(ProjectPermission):
     scope_map = {
         "GET": ["project:read", "project:write", "project:admin", "alerts:read"],
@@ -89,10 +84,26 @@ class ProjectAlertRulePermission(ProjectPermission):
     }
 
 
+class ProjectOwnershipPermission(ProjectPermission):
+    scope_map = {
+        "GET": ["project:read", "project:write", "project:admin"],
+        "POST": ["project:write", "project:admin"],
+        "PUT": ["project:read", "project:write", "project:admin"],
+        "DELETE": ["project:admin"],
+    }
+
+
 class ProjectEndpoint(Endpoint):
     permission_classes = (ProjectPermission,)
 
-    def convert_args(self, request: Request, organization_slug, project_slug, *args, **kwargs):
+    def convert_args(
+        self,
+        request: Request,
+        organization_slug: str,
+        project_slug: str,
+        *args,
+        **kwargs,
+    ):
         try:
             project = (
                 Project.objects.filter(organization__slug=organization_slug, slug=project_slug)
@@ -157,7 +168,13 @@ class ProjectEndpoint(Endpoint):
 
         return params
 
-    def handle_exception(self, request: Request, exc):
+    def handle_exception(
+        self,
+        request: Request,
+        exc: Exception,
+        handler_context: Mapping[str, Any] | None = None,
+        scope: Scope | None = None,
+    ) -> Response:
         if isinstance(exc, ProjectMoved):
             response = Response(
                 {"slug": exc.detail["detail"]["extra"]["slug"], "detail": exc.detail["detail"]},
@@ -165,4 +182,4 @@ class ProjectEndpoint(Endpoint):
             )
             response["Location"] = exc.detail["detail"]["extra"]["url"]
             return response
-        return super().handle_exception(request, exc)
+        return super().handle_exception(request, exc, handler_context, scope)

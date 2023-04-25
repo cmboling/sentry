@@ -1,7 +1,7 @@
-import * as React from 'react';
 import isEqual from 'lodash/isEqual';
 
-import {Form, FormState} from 'sentry/components/deprecatedforms';
+import Form from 'sentry/components/deprecatedforms/form';
+import FormState from 'sentry/components/forms/state';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import DefaultSettings from 'sentry/plugins/components/settings';
 

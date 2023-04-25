@@ -2,25 +2,27 @@ import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
+import Access from 'sentry/components/acl/access';
 import AsyncComponent from 'sentry/components/asyncComponent';
 import Avatar from 'sentry/components/avatar';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import Confirm from 'sentry/components/confirm';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import EventOrGroupHeader from 'sentry/components/eventOrGroupHeader';
 import Pagination from 'sentry/components/pagination';
 import {Panel, PanelItem} from 'sentry/components/panels';
 import {IconDelete} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {GroupTombstone} from 'sentry/types';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 
 type RowProps = {
   data: GroupTombstone;
+  disabled: boolean;
   onUndiscard: (id: string) => void;
 };
 
-function GroupTombstoneRow({data, onUndiscard}: RowProps) {
+function GroupTombstoneRow({data, disabled, onUndiscard}: RowProps) {
   const actor = data.actor;
 
   return (
@@ -32,6 +34,7 @@ function GroupTombstoneRow({data, onUndiscard}: RowProps) {
           className="truncate"
           size="normal"
           data={data}
+          source="group-tombstome"
         />
       </StyledBox>
       <AvatarContainer>
@@ -46,19 +49,21 @@ function GroupTombstoneRow({data, onUndiscard}: RowProps) {
       <ActionContainer>
         <Confirm
           message={t(
-            'Undiscarding this issue means that ' +
-              'incoming events that match this will no longer be discarded. ' +
-              'New incoming events will count toward your event quota ' +
-              'and will display on your issues dashboard. ' +
-              'Are you sure you wish to continue?'
+            'Undiscarding this issue means that incoming events that match this will no longer be discarded. New incoming events will count toward your event quota and will display on your issues dashboard. Are you sure you wish to continue?'
           )}
           onConfirm={() => onUndiscard(data.id)}
+          disabled={disabled}
         >
           <Button
             aria-label={t('Undiscard')}
-            title={t('Undiscard')}
-            size="xsmall"
+            title={
+              disabled
+                ? t('You do not have permission to perform this action')
+                : t('Undiscard')
+            }
+            size="xs"
             icon={<IconDelete size="xs" />}
+            disabled={disabled}
           />
         </Confirm>
       </ActionContainer>
@@ -113,18 +118,23 @@ class GroupTombstones extends AsyncComponent<Props, State> {
     const {tombstones, tombstonesPageLinks} = this.state;
 
     return tombstones.length ? (
-      <Fragment>
-        <Panel>
-          {tombstones.map(data => (
-            <GroupTombstoneRow
-              key={data.id}
-              data={data}
-              onUndiscard={this.handleUndiscard}
-            />
-          ))}
-        </Panel>
-        {tombstonesPageLinks && <Pagination pageLinks={tombstonesPageLinks} />}
-      </Fragment>
+      <Access access={['project:write']}>
+        {({hasAccess}) => (
+          <Fragment>
+            <Panel>
+              {tombstones.map(data => (
+                <GroupTombstoneRow
+                  key={data.id}
+                  data={data}
+                  disabled={!hasAccess}
+                  onUndiscard={this.handleUndiscard}
+                />
+              ))}
+            </Panel>
+            {tombstonesPageLinks && <Pagination pageLinks={tombstonesPageLinks} />}
+          </Fragment>
+        )}
+      </Access>
     ) : (
       this.renderEmpty()
     );

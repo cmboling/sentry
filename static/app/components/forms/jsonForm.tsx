@@ -1,13 +1,15 @@
-import * as React from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
+import {Component, Fragment} from 'react';
+import {WithRouterProps} from 'react-router';
 import * as Sentry from '@sentry/react';
 import scrollToElement from 'scroll-to-element';
 
 import {defined} from 'sentry/utils';
 import {sanitizeQuerySelector} from 'sentry/utils/sanitizeQuerySelector';
+// eslint-disable-next-line no-restricted-imports
+import withSentryRouter from 'sentry/utils/withSentryRouter';
 
 import FormPanel from './formPanel';
-import {Field, FieldObject, JsonFormObject} from './type';
+import {Field, FieldObject, JsonFormObject} from './types';
 
 type Props = {
   additionalFieldProps?: {[key: string]: any};
@@ -33,7 +35,7 @@ type State = {
   highlighted?: string;
 };
 
-class JsonForm extends React.Component<Props, State> {
+class JsonForm extends Component<Props, State> {
   state: State = {
     // location.hash is optional because of tests.
     highlighted: this.props.location?.hash,
@@ -43,9 +45,9 @@ class JsonForm extends React.Component<Props, State> {
     this.scrollToHash();
   }
 
-  UNSAFE_componentWillReceiveProps(nextProps: Props) {
-    if (nextProps.location && this.props.location.hash !== nextProps.location.hash) {
-      const hash = nextProps.location.hash;
+  componentDidUpdate(prevProps: Props) {
+    if (this.props.location && this.props.location.hash !== prevProps.location.hash) {
+      const hash = this.props.location.hash;
       this.scrollToHash(hash);
       this.setState({highlighted: hash});
     }
@@ -137,6 +139,9 @@ class JsonForm extends React.Component<Props, State> {
       renderFooter,
       renderHeader,
       location: _location,
+      params: _params,
+      router: _router,
+      routes: _routes,
       ...otherProps
     } = this.props;
 
@@ -155,9 +160,7 @@ class JsonForm extends React.Component<Props, State> {
       <div {...otherProps}>
         {typeof forms !== 'undefined' &&
           forms.map((formGroup, i) => (
-            <React.Fragment key={i}>
-              {this.renderForm({formPanelProps, ...formGroup})}
-            </React.Fragment>
+            <Fragment key={i}>{this.renderForm({formPanelProps, ...formGroup})}</Fragment>
           ))}
         {typeof forms === 'undefined' &&
           typeof fields !== 'undefined' &&
@@ -167,4 +170,4 @@ class JsonForm extends React.Component<Props, State> {
   }
 }
 
-export default withRouter(JsonForm);
+export default withSentryRouter(JsonForm);

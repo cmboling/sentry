@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {forwardRef} from 'react';
 import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 
@@ -19,7 +19,7 @@ const COLORS = [
   '#847a8c', // gray
 ] as const;
 
-type Color = typeof COLORS[number];
+type Color = (typeof COLORS)[number];
 
 function hashIdentifier(identifier: string) {
   identifier += '';
@@ -87,7 +87,8 @@ const LetterAvatar = styled(
           height="120"
           rx="15"
           ry="15"
-          fill={suggested ? theme.white : getColor(identifier)}
+          opacity={suggested ? '50%' : '100%'}
+          fill={getColor(identifier)}
         />
         <text
           x="50%"
@@ -95,7 +96,7 @@ const LetterAvatar = styled(
           fontSize="65"
           style={{dominantBaseline: 'central'}}
           textAnchor="middle"
-          fill={suggested ? theme.gray400 : theme.white}
+          fill={theme.white}
         >
           {getInitials(displayName)}
         </text>
@@ -110,6 +111,6 @@ LetterAvatar.defaultProps = {
   round: false,
 };
 
-export default React.forwardRef<SVGSVGElement, Props>((props, ref) => (
+export default forwardRef<SVGSVGElement, Props>((props, ref) => (
   <LetterAvatar forwardedRef={ref} {...props} />
 ));

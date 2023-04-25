@@ -3,9 +3,11 @@ from rest_framework.exceptions import ErrorDetail
 
 from sentry.testutils import APITestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils.samples import load_data
 
 
+@region_silo_test
 class OrganizationEventsHasMeasurementsTest(APITestCase, SnubaTestCase):
     def setUp(self):
         super().setUp()
@@ -190,9 +192,3 @@ class OrganizationEventsHasMeasurementsTest(APITestCase, SnubaTestCase):
 
         assert response.status_code == 200, response.content
         assert response.data == {"measurements": True}
-
-
-class OrganizationEventsHasMeasurementsTestWithSnql(OrganizationEventsHasMeasurementsTest):
-    def setUp(self):
-        super().setUp()
-        self.features = {"organizations:performance-use-snql": True}

@@ -4,8 +4,10 @@ from django.urls import reverse
 
 from sentry.models import Distribution, File, Release, ReleaseFile
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test(stable=True)
 class ReleaseFileDetailsTest(APITestCase):
     def test_simple(self):
         self.login_as(user=self.user)
@@ -71,7 +73,7 @@ class ReleaseFileDetailsTest(APITestCase):
         assert response.get("Content-Disposition") == 'attachment; filename="appli catios n.js"'
         assert response.get("Content-Length") == str(f.size)
         assert response.get("Content-Type") == "application/octet-stream"
-        assert b"File contents here" == BytesIO(b"".join(response.streaming_content)).getvalue()
+        assert b"File contents here" == b"".join(response.streaming_content)
 
         user_no_permission = self.create_user("baz@localhost", username="baz")
         self.login_as(user=user_no_permission)
@@ -115,6 +117,7 @@ class ReleaseFileDetailsTest(APITestCase):
         assert response.data["id"] == id
 
 
+@region_silo_test(stable=True)
 class ReleaseFileUpdateTest(APITestCase):
     def test_simple(self):
         self.login_as(user=self.user)
@@ -150,6 +153,7 @@ class ReleaseFileUpdateTest(APITestCase):
         assert releasefile.ident == ReleaseFile.get_ident("foobar")
 
 
+@region_silo_test(stable=True)
 class ReleaseFileDeleteTest(APITestCase):
     def test_simple(self):
         self.login_as(user=self.user)

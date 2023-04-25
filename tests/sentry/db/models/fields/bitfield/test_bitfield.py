@@ -1,6 +1,7 @@
 import pickle
 import unittest
 
+import pytest
 from django import forms
 from django.db import connection, models
 from django.db.models import F
@@ -12,7 +13,7 @@ from bitfield.compat import bitand, bitor
 
 class BitFieldTestModel(models.Model):
     class Meta:
-        app_label = "tests"
+        app_label = "fixtures"
 
     flags = BitField(
         flags=("FLAG_0", "FLAG_1", "FLAG_2", "FLAG_3"), default=3, db_column="another_name"
@@ -23,6 +24,13 @@ class BitFieldTestModelForm(forms.ModelForm):
     class Meta:
         model = BitFieldTestModel
         exclude = tuple()
+
+
+class BitFieldTestModelWithDefaultsAsKeyNames(models.Model):
+    class Meta:
+        app_label = "fixtures"
+
+    flags = BitField(flags=("FLAG_0", "FLAG_1", "FLAG_2", "FLAG_3"), default=("FLAG_1", "FLAG_2"))
 
 
 class BitHandlerTest(unittest.TestCase):
@@ -44,7 +52,7 @@ class BitHandlerTest(unittest.TestCase):
         self.assertEqual(int(bithandler.FLAG_2.number), 2)
         self.assertEqual(int(bithandler.FLAG_3.number), 3)
         # Negative test non-existant key.
-        self.assertRaises(AttributeError, lambda: bithandler.FLAG_4)
+        pytest.raises(AttributeError, lambda: bithandler.FLAG_4)
         # Test bool().
         self.assertEqual(bool(bithandler.FLAG_0), False)
         self.assertEqual(bool(bithandler.FLAG_1), False)
@@ -306,7 +314,7 @@ class BitFieldTest(TestCase):
         except ValueError:
             self.fail("It should work well with these flags")
 
-        self.assertRaises(ValueError, BitField, flags=flags[: (MAX_COUNT + 1)])
+        pytest.raises(ValueError, BitField, flags=flags[: (MAX_COUNT + 1)])
 
     def test_dictionary_init(self):
         flags = {
@@ -325,18 +333,17 @@ class BitFieldTest(TestCase):
             self.fail("It should work well with these flags")
 
         self.assertEqual(bf.flags, ["zero", "first", "second", "", "", "", "", "", "", "", "tenth"])
-        self.assertRaises(ValueError, BitField, flags={})
-        self.assertRaises(ValueError, BitField, flags={"wrongkey": "wrongkey"})
-        self.assertRaises(ValueError, BitField, flags={"1": "non_int_key"})
+        pytest.raises(ValueError, BitField, flags={})
+        pytest.raises(ValueError, BitField, flags={"wrongkey": "wrongkey"})
+        pytest.raises(ValueError, BitField, flags={"1": "non_int_key"})
 
     def test_defaults_as_key_names(self):
-        class TestModel(models.Model):
-            flags = BitField(
-                flags=("FLAG_0", "FLAG_1", "FLAG_2", "FLAG_3"), default=("FLAG_1", "FLAG_2")
-            )
-
-        field = TestModel._meta.get_field("flags")
-        self.assertEqual(field.default, TestModel.flags.FLAG_1 | TestModel.flags.FLAG_2)
+        field = BitFieldTestModelWithDefaultsAsKeyNames._meta.get_field("flags")
+        self.assertEqual(
+            field.default,
+            BitFieldTestModelWithDefaultsAsKeyNames.flags.FLAG_1
+            | BitFieldTestModelWithDefaultsAsKeyNames.flags.FLAG_2,
+        )
 
     def test_pickle_integration(self):
         inst = BitFieldTestModel.objects.create(flags=1)

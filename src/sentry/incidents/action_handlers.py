@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import abc
+import logging
 from typing import Sequence, Set, Tuple
 
+from django.conf import settings
 from django.template.defaultfilters import pluralize
 from django.urls import reverse
 
+from sentry import features
+from sentry.charts.types import ChartSize
 from sentry.constants import CRASH_RATE_ALERT_AGGREGATE_ALIAS
+from sentry.incidents.charts import build_metric_alert_chart
 from sentry.incidents.models import (
     INCIDENT_STATUS,
     AlertRuleThresholdType,
@@ -16,10 +21,11 @@ from sentry.incidents.models import (
     TriggerStatus,
 )
 from sentry.models.notificationsetting import NotificationSetting
+from sentry.models.options.user_option import UserOption
+from sentry.models.user import User
 from sentry.types.integrations import ExternalProviders
 from sentry.utils import json
 from sentry.utils.email import MessageBuilder, get_email_addresses
-from sentry.utils.http import absolute_uri
 
 
 class ActionHandler(metaclass=abc.ABCMeta):
@@ -84,14 +90,16 @@ class EmailActionHandler(ActionHandler):
         self.email_users(TriggerStatus.RESOLVED, new_status)
 
     def email_users(self, trigger_status: TriggerStatus, incident_status: IncidentStatus) -> None:
-        email_context = generate_incident_trigger_email_context(
-            self.project,
-            self.incident,
-            self.action.alert_rule_trigger,
-            trigger_status,
-            incident_status,
-        )
         for user_id, email in self.get_targets():
+            user = User.objects.get_from_cache(id=user_id)
+            email_context = generate_incident_trigger_email_context(
+                self.project,
+                self.incident,
+                self.action.alert_rule_trigger,
+                trigger_status,
+                incident_status,
+                user,
+            )
             self.build_message(email_context, trigger_status, user_id).send_async(to=[email])
 
     def build_message(self, context, status, user_id):
@@ -181,7 +189,12 @@ def format_duration(minutes):
 
 
 def generate_incident_trigger_email_context(
-    project, incident, alert_rule_trigger, trigger_status, incident_status
+    project,
+    incident,
+    alert_rule_trigger,
+    trigger_status,
+    incident_status,
+    user=None,
 ):
     trigger = alert_rule_trigger
     incident_trigger = IncidentTrigger.objects.get(incident=incident, alert_rule_trigger=trigger)
@@ -209,21 +222,41 @@ def generate_incident_trigger_email_context(
         # specified
         threshold = trigger.alert_threshold
 
+    chart_url = None
+    if features.has("organizations:metric-alert-chartcuterie", incident.organization):
+        try:
+            chart_url = build_metric_alert_chart(
+                organization=incident.organization,
+                alert_rule=incident.alert_rule,
+                selected_incident=incident,
+                size=ChartSize({"width": 600, "height": 200}),
+            )
+        except Exception:
+            logging.exception("Error while attempting to build_metric_alert_chart")
+
+    tz = settings.SENTRY_DEFAULT_TIME_ZONE
+    if user is not None:
+        user_option_tz = UserOption.objects.get_value(user=user, key="timezone")
+        if user_option_tz is not None:
+            tz = user_option_tz
+
+    organization = incident.organization
     return {
-        "link": absolute_uri(
+        "link": organization.absolute_url(
             reverse(
                 "sentry-metric-alert",
                 kwargs={
-                    "organization_slug": incident.organization.slug,
+                    "organization_slug": organization.slug,
                     "incident_id": incident.identifier,
                 },
-            )
+            ),
+            query="referrer=alert_email",
         ),
-        "rule_link": absolute_uri(
+        "rule_link": organization.absolute_url(
             reverse(
                 "sentry-alert-rule",
                 kwargs={
-                    "organization_slug": incident.organization.slug,
+                    "organization_slug": organization.slug,
                     "project_slug": project.slug,
                     "alert_rule_id": trigger.alert_rule_id,
                 },
@@ -245,4 +278,6 @@ def generate_incident_trigger_email_context(
         "is_critical": incident_status == IncidentStatus.CRITICAL,
         "is_warning": incident_status == IncidentStatus.WARNING,
         "unsubscribe_link": None,
+        "chart_url": chart_url,
+        "timezone": tz,
     }

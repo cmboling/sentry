@@ -1,4 +1,3 @@
-import * as React from 'react';
 import styled from '@emotion/styled';
 import classNames from 'classnames';
 import {motion} from 'framer-motion';
@@ -7,7 +6,7 @@ import {Indicator} from 'sentry/actionCreators/indicator';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {IconCheckmark, IconClose} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import testableTransition from 'sentry/utils/testableTransition';
 
 type Props = {
@@ -60,6 +59,7 @@ const Toast = styled(motion.div)`
   display: flex;
   align-items: center;
   height: 40px;
+  max-width: calc(100vw - ${space(4)} * 2);
   padding: 0 15px 0 10px;
   margin-top: 15px;
   background: ${p => p.theme.inverted.background};
@@ -95,11 +95,12 @@ const Icon = styled('div', {shouldForwardProp: p => p !== 'type'})<{type: string
     display: block;
   }
 
-  color: ${p => (p.type === 'success' ? p.theme.green300 : p.theme.red300)};
+  color: ${p => (p.type === 'success' ? p.theme.successText : p.theme.errorText)};
 `;
 
 const Message = styled('div')`
   flex: 1;
+  ${p => p.theme.overflowEllipsis}
 `;
 
 const Undo = styled('div')`

@@ -1,70 +1,111 @@
 import {Fragment} from 'react';
 import {RouteComponentProps} from 'react-router';
+import styled from '@emotion/styled';
 
-import {Panel, PanelHeader} from 'sentry/components/panels';
-import {t} from 'sentry/locale';
-import AsyncView from 'sentry/views/asyncView';
+import DatePageFilter from 'sentry/components/datePageFilter';
+import * as Layout from 'sentry/components/layouts/thirds';
+import LoadingIndicator from 'sentry/components/loadingIndicator';
+import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
+import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {space} from 'sentry/styles/space';
+import {setApiQueryData, useApiQuery, useQueryClient} from 'sentry/utils/queryClient';
+import useOrganization from 'sentry/utils/useOrganization';
+import usePageFilters from 'sentry/utils/usePageFilters';
 
-import MonitorCheckIns from './monitorCheckIns';
-import MonitorHeader from './monitorHeader';
-import MonitorIssues from './monitorIssues';
-import MonitorStats from './monitorStats';
+import MonitorCheckIns from './components/monitorCheckIns';
+import MonitorHeader from './components/monitorHeader';
+import MonitorIssues from './components/monitorIssues';
+import MonitorStats from './components/monitorStats';
+import MonitorOnboarding from './components/onboarding';
 import {Monitor} from './types';
 
-type Props = AsyncView['props'] &
-  RouteComponentProps<{monitorId: string; orgId: string}, {}>;
+type Props = RouteComponentProps<{monitorSlug: string}, {}>;
 
-type State = AsyncView['state'] & {
-  monitor: Monitor | null;
-};
+function MonitorDetails({params, location}: Props) {
+  const {selection} = usePageFilters();
 
-class MonitorDetails extends AsyncView<Props, State> {
-  getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
-    const {params, location} = this.props;
-    return [['monitor', `/monitors/${params.monitorId}/`, {query: location.query}]];
+  const organization = useOrganization();
+  const queryClient = useQueryClient();
+
+  // TODO(epurkhiser): For now we just use the fist environment OR production
+  // if we have all environments selected
+  const environment = selection.environments[0];
+
+  const queryKey = [
+    `/organizations/${organization.slug}/monitors/${params.monitorSlug}/`,
+    {query: {...location.query, environment}},
+  ] as const;
+
+  const {data: monitor} = useApiQuery<Monitor>(queryKey, {staleTime: 0});
+
+  function onUpdate(data: Monitor) {
+    const updatedMonitor = {
+      ...data,
+      // TODO(davidenwang): This is a bit of a hack, due to the PUT request
+      // which pauses/unpauses a monitor not returning monitor environments
+      // we should reuse the environments retrieved from the initial request
+      environments: monitor?.environments,
+    };
+    setApiQueryData(queryClient, queryKey, updatedMonitor);
   }
 
-  getTitle() {
-    if (this.state.monitor) {
-      return `${this.state.monitor.name} - Monitors - ${this.props.params.orgId}`;
-    }
-    return `Monitors - ${this.props.params.orgId}`;
-  }
-
-  onUpdate = (data: Monitor) =>
-    this.setState(state => ({monitor: {...state.monitor, ...data}}));
-
-  renderBody() {
-    const {monitor} = this.state;
-
-    if (monitor === null) {
-      return null;
-    }
-
+  if (!monitor) {
     return (
-      <Fragment>
-        <MonitorHeader
-          monitor={monitor}
-          orgId={this.props.params.orgId}
-          onUpdate={this.onUpdate}
-        />
-
-        <MonitorStats monitor={monitor} />
-
-        <Panel style={{paddingBottom: 0}}>
-          <PanelHeader>{t('Related Issues')}</PanelHeader>
-
-          <MonitorIssues monitor={monitor} orgId={this.props.params.orgId} />
-        </Panel>
-
-        <Panel>
-          <PanelHeader>{t('Recent Check-ins')}</PanelHeader>
-
-          <MonitorCheckIns monitor={monitor} />
-        </Panel>
-      </Fragment>
+      <Layout.Page>
+        <LoadingIndicator />
+      </Layout.Page>
     );
   }
+
+  const monitorEnv = monitor.environments.find(env => env.name === environment);
+
+  return (
+    <SentryDocumentTitle title={`Crons - ${monitor.name}`}>
+      <Layout.Page>
+        <MonitorHeader
+          monitor={monitor}
+          monitorEnv={monitorEnv}
+          orgId={organization.slug}
+          onUpdate={onUpdate}
+        />
+        <Layout.Body>
+          <Layout.Main fullWidth>
+            {!monitorEnv?.lastCheckIn ? (
+              <MonitorOnboarding orgId={organization.slug} monitor={monitor} />
+            ) : (
+              <Fragment>
+                <StyledPageFilterBar condensed>
+                  <DatePageFilter alignDropdown="left" />
+                </StyledPageFilterBar>
+
+                <MonitorStats
+                  orgId={organization.slug}
+                  monitor={monitor}
+                  monitorEnv={monitorEnv}
+                />
+
+                <MonitorIssues
+                  orgId={organization.slug}
+                  monitor={monitor}
+                  monitorEnv={monitorEnv}
+                />
+
+                <MonitorCheckIns
+                  orgId={organization.slug}
+                  monitor={monitor}
+                  monitorEnv={monitorEnv}
+                />
+              </Fragment>
+            )}
+          </Layout.Main>
+        </Layout.Body>
+      </Layout.Page>
+    </SentryDocumentTitle>
+  );
 }
+
+const StyledPageFilterBar = styled(PageFilterBar)`
+  margin-bottom: ${space(2)};
+`;
 
 export default MonitorDetails;

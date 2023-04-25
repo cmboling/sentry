@@ -1,5 +1,4 @@
 import {useEffect, useState} from 'react';
-import {withRouter, WithRouterProps} from 'react-router';
 import styled from '@emotion/styled';
 import isEqual from 'lodash/isEqual';
 import partition from 'lodash/partition';
@@ -7,24 +6,25 @@ import partition from 'lodash/partition';
 import {updateProjects} from 'sentry/actionCreators/pageFilters';
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
 import Badge from 'sentry/components/badge';
-import MultipleProjectSelector from 'sentry/components/organizations/multipleProjectSelector';
 import PageFilterDropdownButton from 'sentry/components/organizations/pageFilters/pageFilterDropdownButton';
+import PageFilterPinIndicator from 'sentry/components/organizations/pageFilters/pageFilterPinIndicator';
+import ProjectSelector from 'sentry/components/organizations/projectSelector';
 import PlatformList from 'sentry/components/platformList';
 import {ALL_ACCESS_PROJECTS} from 'sentry/constants/pageFilters';
 import {IconProject} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import ConfigStore from 'sentry/stores/configStore';
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
-import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-import space from 'sentry/styles/space';
 import {MinimalProject} from 'sentry/types';
 import {trimSlug} from 'sentry/utils/trimSlug';
 import useOrganization from 'sentry/utils/useOrganization';
+import usePageFilters from 'sentry/utils/usePageFilters';
 import useProjects from 'sentry/utils/useProjects';
+import useRouter from 'sentry/utils/useRouter';
 
-type MultipleProjectSelectorProps = React.ComponentProps<typeof MultipleProjectSelector>;
+type ProjectSelectorProps = React.ComponentProps<typeof ProjectSelector>;
 
-type Props = WithRouterProps & {
+type Props = {
+  disabled?: ProjectSelectorProps['disabled'];
   /**
    * Message to display at the bottom of project list
    */
@@ -42,10 +42,15 @@ type Props = WithRouterProps & {
   lockedMessageSubject?: string;
 
   /**
-   * Max character length for the dropdown title. Default is 20. This number
+   * Max character length for the dropdown title. Default is 25. This number
    * is used to determine how many projects to show, and how much to truncate.
    */
   maxTitleLength?: number;
+
+  /**
+   * Reset these URL params when we fire actions (custom routing only)
+   */
+  resetParamsOnChange?: string[];
 
   /**
    * A project will be forced from parent component (selection is disabled, and if user
@@ -73,33 +78,41 @@ type Props = WithRouterProps & {
 };
 
 function ProjectPageFilter({
-  router,
   specificProjectSlugs,
-  maxTitleLength = 20,
+  maxTitleLength = 25,
+  resetParamsOnChange = [],
+  disabled,
   ...otherProps
 }: Props) {
+  const router = useRouter();
+
   const [currentSelectedProjects, setCurrentSelectedProjects] = useState<number[] | null>(
     null
   );
   const {projects, initiallyLoaded: projectsLoaded} = useProjects();
   const organization = useOrganization();
-  const {selection, isReady, desyncedFilters} = useLegacyStore(PageFiltersStore);
+  const {selection, isReady, desyncedFilters} = usePageFilters();
 
-  useEffect(() => {
-    if (!isEqual(selection.projects, currentSelectedProjects)) {
-      setCurrentSelectedProjects(selection.projects);
-    }
-  }, [selection.projects]);
+  useEffect(
+    () => {
+      if (!isEqual(selection.projects, currentSelectedProjects)) {
+        setCurrentSelectedProjects(selection.projects);
+      }
+    },
+    // We only care to update the currentSelectedProjects when the project
+    // selection has changed
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selection.projects]
+  );
 
   const handleChangeProjects = (newProjects: number[]) => {
     setCurrentSelectedProjects(newProjects);
   };
 
-  const handleUpdateProjects = (newProjects?: number[]) => {
-    // Use newProjects if provided otherwise fallback to current selection
-    updateProjects(newProjects ?? (currentSelectedProjects || []), router, {
+  const handleApplyChange = (newProjects: number[]) => {
+    updateProjects(newProjects, router, {
       save: true,
-      resetParams: [],
+      resetParams: resetParamsOnChange,
       environments: [], // Clear environments when switching projects
     });
   };
@@ -117,7 +130,7 @@ function ProjectPageFilter({
   const isOrgAdmin = organization.access.includes('org:admin');
   const nonMemberProjects = isSuperuser || isOrgAdmin ? otherProjects : [];
 
-  const customProjectDropdown: MultipleProjectSelectorProps['customDropdownButton'] = ({
+  const customProjectDropdown: ProjectSelectorProps['customDropdownButton'] = ({
     actions,
     selectedProjects,
     isOpen,
@@ -154,67 +167,56 @@ function ProjectPageFilter({
         onStepComplete={actions.open}
       >
         <PageFilterDropdownButton
-          detached
-          hideBottomBorder={false}
           isOpen={isOpen}
           highlighted={desyncedFilters.has('projects')}
+          data-test-id="page-filter-project-selector"
+          disabled={disabled}
+          icon={<PageFilterPinIndicator filter="projects">{icon}</PageFilterPinIndicator>}
         >
-          <DropdownTitle>
-            {icon}
-            <TitleContainer>{title}</TitleContainer>
-            {selectedProjects.length > projectsToShow.length && (
-              <StyledBadge text={`+${selectedProjects.length - projectsToShow.length}`} />
-            )}
-          </DropdownTitle>
+          <TitleContainer>{title}</TitleContainer>
+          {selectedProjects.length > projectsToShow.length && (
+            <StyledBadge text={`+${selectedProjects.length - projectsToShow.length}`} />
+          )}
         </PageFilterDropdownButton>
       </GuideAnchor>
     );
   };
 
   const customLoadingIndicator = (
-    <PageFilterDropdownButton showChevron={false} disabled>
-      <DropdownTitle>
-        <IconProject />
-        {t('Loading\u2026')}
-      </DropdownTitle>
+    <PageFilterDropdownButton
+      icon={<IconProject />}
+      showChevron={false}
+      disabled
+      data-test-id="page-filter-project-selector-loading"
+    >
+      <TitleContainer>{t('Loading\u2026')}</TitleContainer>
     </PageFilterDropdownButton>
   );
 
   return (
-    <MultipleProjectSelector
+    <ProjectSelector
       organization={organization}
       memberProjects={memberProjects}
       isGlobalSelectionReady={projectsLoaded && isReady}
       nonMemberProjects={nonMemberProjects}
       value={currentSelectedProjects || selection.projects}
       onChange={handleChangeProjects}
-      onUpdate={handleUpdateProjects}
+      onApplyChange={handleApplyChange}
       customDropdownButton={customProjectDropdown}
       customLoadingIndicator={customLoadingIndicator}
-      detached
-      showPin
+      disabled={disabled}
       {...otherProps}
     />
   );
 }
 
-const TitleContainer = styled('div')`
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  flex: 1 1 0%;
-  margin-left: ${space(1)};
-`;
-
-const DropdownTitle = styled('div')`
-  width: max-content;
-  display: flex;
-  align-items: center;
-  flex: 1;
+const TitleContainer = styled('span')`
+  text-align: left;
+  ${p => p.theme.overflowEllipsis}
 `;
 
 const StyledBadge = styled(Badge)`
   flex-shrink: 0;
 `;
 
-export default withRouter(ProjectPageFilter);
+export default ProjectPageFilter;

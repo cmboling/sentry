@@ -3,12 +3,11 @@ from unittest.mock import patch
 import pytz
 from django.db.models import F
 
+from fixtures.page_objects.base import BasePage
 from sentry.models import Project
 from sentry.testutils import AcceptanceTestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now
 from sentry.utils.samples import load_data
-
-from .page_objects.base import BasePage
 
 FEATURE_NAMES = (
     "organizations:discover-basic",
@@ -43,7 +42,7 @@ class PerformanceOverviewTest(AcceptanceTestCase, SnubaTestCase):
     def test_with_data(self, mock_now):
         mock_now.return_value = before_now().replace(tzinfo=pytz.utc)
 
-        event = load_data("transaction", timestamp=before_now(minutes=1))
+        event = load_data("transaction", timestamp=before_now(minutes=10))
         self.store_event(data=event, project_id=self.project.id)
         self.project.update(flags=F("flags").bitor(Project.flags.has_transactions))
 

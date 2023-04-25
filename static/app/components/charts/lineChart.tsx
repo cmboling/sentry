@@ -1,4 +1,3 @@
-import * as React from 'react';
 import type {LineSeriesOption} from 'echarts';
 
 import {Series} from 'sentry/types/echarts';
@@ -15,6 +14,7 @@ export type LineChartSeries = Series &
 
 export interface LineChartProps extends Omit<ChartProps, 'series'> {
   series: LineChartSeries[];
+  additionalSeries?: LineSeriesOption[];
   seriesOptions?: LineSeriesOption;
 }
 

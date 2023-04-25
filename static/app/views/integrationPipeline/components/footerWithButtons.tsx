@@ -1,9 +1,8 @@
-import * as React from 'react';
 import styled from '@emotion/styled';
 
 import Button from 'sentry/components/actions/button';
 import {ButtonProps} from 'sentry/components/button';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 
 interface FooterWithButtonsProps
   extends Partial<Pick<ButtonProps, 'disabled' | 'onClick' | 'href'>> {
@@ -28,7 +27,7 @@ export default function FooterWithButtons({
       {formFields?.map(field => {
         return <input type="hidden" key={field.name} {...field} />;
       })}
-      <Button priority="primary" type="submit" size="xsmall" {...rest}>
+      <Button priority="primary" type="submit" size="xs" {...rest}>
         {buttonText}
       </Button>
     </Footer>

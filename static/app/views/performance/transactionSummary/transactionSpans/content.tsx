@@ -1,43 +1,50 @@
 import {Fragment} from 'react';
 import {browserHistory} from 'react-router';
+import styled from '@emotion/styled';
 import {Location} from 'history';
 import omit from 'lodash/omit';
 
-import DropdownControl, {DropdownItem} from 'sentry/components/dropdownControl';
+import {CompactSelect} from 'sentry/components/compactSelect';
+import DatePageFilter from 'sentry/components/datePageFilter';
+import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import SearchBar from 'sentry/components/events/searchBar';
 import * as Layout from 'sentry/components/layouts/thirds';
+import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
 import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
 import Pagination from 'sentry/components/pagination';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
 import {defined} from 'sentry/utils';
-import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import DiscoverQuery from 'sentry/utils/discover/discoverQuery';
 import EventView from 'sentry/utils/discover/eventView';
 import SuspectSpansQuery from 'sentry/utils/performance/suspectSpans/suspectSpansQuery';
+import {VisuallyCompleteWithData} from 'sentry/utils/performanceForSentry';
 import {decodeScalar} from 'sentry/utils/queryString';
 import useProjects from 'sentry/utils/useProjects';
 
 import {SetStateAction} from '../types';
 
 import OpsFilter from './opsFilter';
-import {Actions} from './styles';
 import SuspectSpansTable from './suspectSpansTable';
 import {SpanSort, SpansTotalValues} from './types';
 import {
   getSuspectSpanSortFromEventView,
   getTotalsView,
+  SPAN_RELATIVE_PERIODS,
+  SPAN_RETENTION_DAYS,
   SPAN_SORT_OPTIONS,
   SPAN_SORT_TO_FIELDS,
 } from './utils';
 
 const ANALYTICS_VALUES = {
   spanOp: (organization: Organization, value: string | undefined) =>
-    trackAdvancedAnalyticsEvent('performance_views.spans.change_op', {
+    trackAnalytics('performance_views.spans.change_op', {
       organization,
       operation_name: value,
     }),
   sort: (organization: Organization, value: string | undefined) =>
-    trackAdvancedAnalyticsEvent('performance_views.spans.change_sort', {
+    trackAnalytics('performance_views.spans.change_sort', {
       organization,
       sort_column: value,
     }),
@@ -89,7 +96,7 @@ function SpansContent(props: Props) {
 
   return (
     <Layout.Main fullWidth>
-      <Actions>
+      <FilterActions>
         <OpsFilter
           location={location}
           eventView={eventView}
@@ -97,26 +104,29 @@ function SpansContent(props: Props) {
           handleOpChange={handleChange('spanOp')}
           transactionName={transactionName}
         />
-        <SearchBar
+        <PageFilterBar condensed>
+          <EnvironmentPageFilter />
+          <DatePageFilter
+            alignDropdown="left"
+            maxPickableDays={SPAN_RETENTION_DAYS}
+            relativeOptions={SPAN_RELATIVE_PERIODS}
+          />
+        </PageFilterBar>
+        <StyledSearchBar
           organization={organization}
           projectIds={eventView.project}
           query={query}
           fields={eventView.fields}
           onSearch={handleChange('query')}
         />
-        <DropdownControl buttonProps={{prefix: sort.prefix}} label={sort.label}>
-          {SPAN_SORT_OPTIONS.map(option => (
-            <DropdownItem
-              key={option.field}
-              eventKey={option.field}
-              isActive={option.field === sort.field}
-              onSelect={handleChange('sort')}
-            >
-              {option.label}
-            </DropdownItem>
-          ))}
-        </DropdownControl>
-      </Actions>
+        <CompactSelect
+          value={sort.field}
+          options={SPAN_SORT_OPTIONS.map(opt => ({value: opt.field, label: opt.label}))}
+          onChange={opt => handleChange('sort')(opt.value)}
+          triggerProps={{prefix: sort.prefix}}
+          triggerLabel={sort.label}
+        />
+      </FilterActions>
       <DiscoverQuery
         eventView={totalsView}
         orgSlug={organization.slug}
@@ -140,16 +150,21 @@ function SpansContent(props: Props) {
             >
               {({suspectSpans, isLoading, pageLinks}) => (
                 <Fragment>
-                  <SuspectSpansTable
-                    location={location}
-                    organization={organization}
-                    transactionName={transactionName}
-                    project={projects.find(p => p.id === projectId)}
-                    isLoading={isLoading}
-                    suspectSpans={suspectSpans ?? []}
-                    totals={totals}
-                    sort={sort.field}
-                  />
+                  <VisuallyCompleteWithData
+                    id="TransactionSpans-SuspectSpansTable"
+                    hasData={!!suspectSpans?.length}
+                  >
+                    <SuspectSpansTable
+                      location={location}
+                      organization={organization}
+                      transactionName={transactionName}
+                      project={projects.find(p => p.id === projectId)}
+                      isLoading={isLoading}
+                      suspectSpans={suspectSpans ?? []}
+                      totals={totals}
+                      sort={sort.field}
+                    />
+                  </VisuallyCompleteWithData>
                   <Pagination pageLinks={pageLinks ?? null} />
                 </Fragment>
               )}
@@ -167,5 +182,31 @@ function getSpansEventView(eventView: EventView, sort: SpanSort): EventView {
   eventView.fields = fields ? fields.map(field => ({field})) : [];
   return eventView;
 }
+
+const FilterActions = styled('div')`
+  display: grid;
+  gap: ${space(2)};
+  margin-bottom: ${space(2)};
+
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    grid-template-columns: repeat(3, min-content);
+  }
+
+  @media (min-width: ${p => p.theme.breakpoints.xlarge}) {
+    grid-template-columns: auto auto 1fr auto;
+  }
+`;
+
+const StyledSearchBar = styled(SearchBar)`
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    order: 1;
+    grid-column: 1/5;
+  }
+
+  @media (min-width: ${p => p.theme.breakpoints.xlarge}) {
+    order: initial;
+    grid-column: auto;
+  }
+`;
 
 export default SpansContent;

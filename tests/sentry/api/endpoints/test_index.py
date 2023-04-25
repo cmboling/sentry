@@ -4,8 +4,10 @@ from django.urls import reverse
 
 from sentry.models import ApiKey, ApiToken
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import control_silo_test
 
 
+@control_silo_test(stable=True)
 class ApiIndexTest(APITestCase):
     endpoint = "sentry-api-index"
 
@@ -24,7 +26,7 @@ class ApiIndexTest(APITestCase):
 
     def test_key_auth(self):
         org = self.create_organization()
-        key = ApiKey.objects.create(organization=org)
+        key = ApiKey.objects.create(organization_id=org.id)
         url = reverse("sentry-api-index")
         response = self.client.get(
             url, HTTP_AUTHORIZATION=b"Basic " + b64encode(f"{key.key}:".encode())

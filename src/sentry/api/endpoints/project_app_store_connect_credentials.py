@@ -1,3 +1,5 @@
+from sentry.api.base import region_silo_endpoint
+
 """Sentry API to manage the App Store Connect credentials for a project.
 
 To create and manage these credentials, several API endpoints exist:
@@ -40,7 +42,7 @@ from rest_framework import serializers
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry import features
+from sentry import audit_log, features
 from sentry.api.bases.project import ProjectEndpoint, ProjectPermission, StrictProjectPermission
 from sentry.api.exceptions import (
     AppConnectAuthenticationError,
@@ -49,8 +51,8 @@ from sentry.api.exceptions import (
 )
 from sentry.api.fields.secret import SecretField, validate_secret
 from sentry.lang.native import appconnect
-from sentry.lang.native.symbolicator import redact_source_secrets, secret_fields
-from sentry.models import AppConnectBuild, AuditLogEntryEvent, LatestAppConnectBuildsCheck, Project
+from sentry.lang.native.sources import redact_source_secrets, secret_fields
+from sentry.models import AppConnectBuild, LatestAppConnectBuildsCheck, Project
 from sentry.ratelimits.config import RateLimitConfig
 from sentry.tasks.app_store_connect import dsym_download
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
@@ -77,6 +79,7 @@ class AppStoreConnectCredentialsSerializer(serializers.Serializer):  # type: ign
     id = serializers.CharField(max_length=40, min_length=1, required=False)
 
 
+@region_silo_endpoint
 class AppStoreConnectAppsEndpoint(ProjectEndpoint):  # type: ignore
     """Retrieves available applications with provided credentials.
 
@@ -191,6 +194,7 @@ class AppStoreCreateCredentialsSerializer(serializers.Serializer):  # type: igno
     bundleId = serializers.CharField(min_length=1, required=True)
 
 
+@region_silo_endpoint
 class AppStoreConnectCreateCredentialsEndpoint(ProjectEndpoint):  # type: ignore
     """Returns all the App Store Connect symbol source settings ready to be saved.
 
@@ -212,7 +216,7 @@ class AppStoreConnectCreateCredentialsEndpoint(ProjectEndpoint):  # type: ignore
         config = serializer.validated_data
 
         config["type"] = "appStoreConnect"
-        config["id"] = uuid4().hex
+        config["id"] = str(uuid4())
         config["name"] = config["appName"]
 
         try:
@@ -232,7 +236,7 @@ class AppStoreConnectCreateCredentialsEndpoint(ProjectEndpoint):  # type: ignore
             request=request,
             organization=project.organization,
             target_object=project.id,
-            event=AuditLogEntryEvent.PROJECT_EDIT,
+            event=audit_log.get_event_id("PROJECT_EDIT"),
             data={appconnect.SYMBOL_SOURCES_PROP_NAME: redacted_sources},
         )
 
@@ -264,6 +268,7 @@ class AppStoreUpdateCredentialsSerializer(serializers.Serializer):  # type: igno
         return validate_secret(private_key_json)
 
 
+@region_silo_endpoint
 class AppStoreConnectUpdateCredentialsEndpoint(ProjectEndpoint):  # type: ignore
     """Updates a subset of the existing credentials.
 
@@ -311,7 +316,7 @@ class AppStoreConnectUpdateCredentialsEndpoint(ProjectEndpoint):  # type: ignore
             request=request,
             organization=project.organization,
             target_object=project.id,
-            event=AuditLogEntryEvent.PROJECT_EDIT,
+            event=audit_log.get_event_id("PROJECT_EDIT"),
             data={appconnect.SYMBOL_SOURCES_PROP_NAME: redacted_sources},
         )
 
@@ -325,6 +330,7 @@ class AppStoreConnectUpdateCredentialsEndpoint(ProjectEndpoint):  # type: ignore
         return Response(symbol_source_config.to_redacted_json(), status=200)
 
 
+@region_silo_endpoint
 class AppStoreConnectRefreshEndpoint(ProjectEndpoint):  # type: ignore
     """Triggers an immediate check for new App Store Connect builds.
 
@@ -340,7 +346,7 @@ class AppStoreConnectRefreshEndpoint(ProjectEndpoint):  # type: ignore
     """
 
     permission_classes = [StrictProjectPermission]
-    private = True
+
     enforce_rate_limit = True
 
     # At the time of writing the App Store Connect API has a rate limit of 3600 requests/h
@@ -374,6 +380,7 @@ class AppStoreConnectRefreshEndpoint(ProjectEndpoint):  # type: ignore
         return Response(status=200)
 
 
+@region_silo_endpoint
 class AppStoreConnectStatusEndpoint(ProjectEndpoint):  # type: ignore
     """Returns a summary of the project's App Store Connect configuration
     and builds.

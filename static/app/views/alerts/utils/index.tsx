@@ -1,62 +1,23 @@
 import round from 'lodash/round';
 
-import {Client} from 'sentry/api';
 import {t} from 'sentry/locale';
-import {Organization, SessionField} from 'sentry/types';
+import {Organization, SessionFieldWithOperation} from 'sentry/types';
 import {IssueAlertRule} from 'sentry/types/alerts';
 import {defined} from 'sentry/utils';
 import {getUtcDateString} from 'sentry/utils/dates';
 import {axisLabelFormatter, tooltipFormatter} from 'sentry/utils/discover/charts';
+import {aggregateOutputType} from 'sentry/utils/discover/fields';
+import toArray from 'sentry/utils/toArray';
 import {
   Dataset,
   Datasource,
   EventTypes,
-  IncidentRule,
-  SavedIncidentRule,
+  MetricRule,
+  SavedMetricRule,
   SessionsAggregate,
-} from 'sentry/views/alerts/incidentRules/types';
+} from 'sentry/views/alerts/rules/metric/types';
 
 import {AlertRuleStatus, Incident, IncidentStats} from '../types';
-
-// Use this api for requests that are getting cancelled
-const uncancellableApi = new Client();
-
-export function fetchAlertRule(
-  orgId: string,
-  ruleId: string,
-  query?: Record<string, string>
-): Promise<IncidentRule> {
-  return uncancellableApi.requestPromise(
-    `/organizations/${orgId}/alert-rules/${ruleId}/`,
-    {query}
-  );
-}
-
-export function fetchIncidentsForRule(
-  orgId: string,
-  alertRule: string,
-  start: string,
-  end: string
-): Promise<Incident[]> {
-  return uncancellableApi.requestPromise(`/organizations/${orgId}/incidents/`, {
-    query: {
-      project: '-1',
-      alertRule,
-      includeSnapshots: true,
-      start,
-      end,
-      expand: ['activities', 'seen_by', 'original_alert_rule'],
-    },
-  });
-}
-
-export function fetchIncident(
-  api: Client,
-  orgId: string,
-  alertId: string
-): Promise<Incident> {
-  return api.requestPromise(`/organizations/${orgId}/incidents/${alertId}/`);
-}
 
 /**
  * Gets start and end date query parameters from stats
@@ -71,7 +32,7 @@ export function getStartEndFromStats(stats: IncidentStats) {
 }
 
 export function isIssueAlert(
-  data: IssueAlertRule | SavedIncidentRule | IncidentRule
+  data: IssueAlertRule | SavedMetricRule | MetricRule
 ): data is IssueAlertRule {
   return !data.hasOwnProperty('triggers');
 }
@@ -110,8 +71,8 @@ export function convertDatasetEventTypesToSource(
   dataset: Dataset,
   eventTypes: EventTypes[]
 ) {
-  // transactions only has one datasource option regardless of event type
-  if (dataset === Dataset.TRANSACTIONS) {
+  // transactions and generic_metrics only have one datasource option regardless of event type
+  if (dataset === Dataset.TRANSACTIONS || dataset === Dataset.GENERIC_METRICS) {
     return Datasource.TRANSACTION;
   }
   // if no event type was provided use the default datasource
@@ -166,8 +127,8 @@ export function isSessionAggregate(aggregate: string) {
 }
 
 export const SESSION_AGGREGATE_TO_FIELD = {
-  [SessionsAggregate.CRASH_FREE_SESSIONS]: SessionField.SESSIONS,
-  [SessionsAggregate.CRASH_FREE_USERS]: SessionField.USERS,
+  [SessionsAggregate.CRASH_FREE_SESSIONS]: SessionFieldWithOperation.SESSIONS,
+  [SessionsAggregate.CRASH_FREE_USERS]: SessionFieldWithOperation.USERS,
 };
 
 export function alertAxisFormatter(value: number, seriesName: string, aggregate: string) {
@@ -175,7 +136,7 @@ export function alertAxisFormatter(value: number, seriesName: string, aggregate:
     return defined(value) ? `${round(value, 2)}%` : '\u2015';
   }
 
-  return axisLabelFormatter(value, seriesName);
+  return axisLabelFormatter(value, aggregateOutputType(seriesName));
 }
 
 export function alertTooltipValueFormatter(
@@ -187,7 +148,7 @@ export function alertTooltipValueFormatter(
     return defined(value) ? `${value}%` : '\u2015';
   }
 
-  return tooltipFormatter(value, seriesName);
+  return tooltipFormatter(value, aggregateOutputType(seriesName));
 }
 
 export const ALERT_CHART_MIN_MAX_BUFFER = 1.03;
@@ -210,16 +171,12 @@ export function alertDetailsLink(organization: Organization, incident: Incident)
 /**
  * Noramlizes a status string
  */
-export function getQueryStatus(status: string | string[]): string[] {
-  if (Array.isArray(status)) {
-    return status;
+export function getQueryStatus(status: string | string[]): string {
+  if (Array.isArray(status) || status === '') {
+    return 'all';
   }
 
-  if (status === '') {
-    return [];
-  }
-
-  return ['open', 'closed'].includes(status) ? [status] : [];
+  return ['open', 'closed'].includes(status) ? status : 'all';
 }
 
 const ALERT_LIST_QUERY_DEFAULT_TEAMS = ['myteams', 'unassigned'];
@@ -236,9 +193,5 @@ export function getTeamParams(team?: string | string[]): string[] {
     return [];
   }
 
-  if (Array.isArray(team)) {
-    return team;
-  }
-
-  return [team];
+  return toArray(team);
 }

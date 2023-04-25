@@ -1,27 +1,30 @@
+import EmptyMessage from 'sentry/components/emptyMessage';
+import type {StacktraceFilenameQuery} from 'sentry/components/events/interfaces/crashContent/exception/useSourceMapDebug';
 import {Panel} from 'sentry/components/panels';
 import {IconWarning} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {ExceptionValue, Group, Organization, PlatformType} from 'sentry/types';
+import {ExceptionValue, Group, PlatformType} from 'sentry/types';
 import {Event} from 'sentry/types/event';
-import {STACK_VIEW} from 'sentry/types/stacktrace';
+import {STACK_VIEW, StackTraceMechanism} from 'sentry/types/stacktrace';
 import {defined} from 'sentry/utils';
 import {isNativePlatform} from 'sentry/utils/platform';
-import useOrganization from 'sentry/utils/useOrganization';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 
 import StackTraceContent from '../stackTrace/content';
-import StacktraceContentV2 from '../stackTrace/contentV2';
-import StacktraceContentV3 from '../stackTrace/contentV3';
+import {HierarchicalGroupingContent} from '../stackTrace/hierarchicalGroupingContent';
+import {NativeContent} from '../stackTrace/nativeContent';
 
 type Props = {
   chainedException: boolean;
   data: ExceptionValue['stacktrace'];
   event: Event;
   hasHierarchicalGrouping: boolean;
+  mechanism: StackTraceMechanism | null;
   platform: PlatformType;
   stacktrace: ExceptionValue['stacktrace'];
+  debugFrames?: StacktraceFilenameQuery[];
   expandFirstFrame?: boolean;
   groupingCurrentLevel?: Group['metadata']['current_level'];
+  meta?: Record<any, any>;
   newestFirst?: boolean;
   stackView?: STACK_VIEW;
 };
@@ -30,6 +33,7 @@ function StackTrace({
   stackView,
   stacktrace,
   chainedException,
+  debugFrames,
   platform,
   newestFirst,
   groupingCurrentLevel,
@@ -37,16 +41,9 @@ function StackTrace({
   data,
   expandFirstFrame,
   event,
+  meta,
+  mechanism,
 }: Props) {
-  let organization: Organization | null = null;
-
-  try {
-    organization = useOrganization();
-  } catch {
-    // Organization context may be unavailable for the shared event view. We
-    // don't need to do anything if it's unavailable.
-  }
-
   if (!defined(stacktrace)) {
     return null;
   }
@@ -87,12 +84,9 @@ function StackTrace({
    * It is easier to fix the UI logic to show a non-empty stack trace for chained exceptions
    */
 
-  if (
-    !!organization?.features?.includes('native-stack-trace-v2') &&
-    isNativePlatform(platform)
-  ) {
+  if (isNativePlatform(platform)) {
     return (
-      <StacktraceContentV3
+      <NativeContent
         data={data}
         expandFirstFrame={expandFirstFrame}
         includeSystemFrames={includeSystemFrames}
@@ -100,13 +94,14 @@ function StackTrace({
         platform={platform}
         newestFirst={newestFirst}
         event={event}
+        meta={meta}
       />
     );
   }
 
   if (hasHierarchicalGrouping) {
     return (
-      <StacktraceContentV2
+      <HierarchicalGroupingContent
         data={data}
         expandFirstFrame={expandFirstFrame}
         includeSystemFrames={includeSystemFrames}
@@ -114,6 +109,9 @@ function StackTrace({
         platform={platform}
         newestFirst={newestFirst}
         event={event}
+        meta={meta}
+        debugFrames={debugFrames}
+        mechanism={mechanism}
       />
     );
   }
@@ -126,6 +124,9 @@ function StackTrace({
       platform={platform}
       newestFirst={newestFirst}
       event={event}
+      meta={meta}
+      debugFrames={debugFrames}
+      mechanism={mechanism}
     />
   );
 }

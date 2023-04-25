@@ -1,21 +1,38 @@
 import {useEffect, useState} from 'react';
+import {browserHistory} from 'react-router';
+import styled from '@emotion/styled';
+import omit from 'lodash/omit';
 import pick from 'lodash/pick';
+import * as qs from 'query-string';
 
-import MenuItem from 'sentry/components/menuItem';
+import {CompactSelect, SelectOption} from 'sentry/components/compactSelect';
+import {CompositeSelect} from 'sentry/components/compactSelect/composite';
+import DropdownButton from 'sentry/components/dropdownButton';
+import {IconEllipsis} from 'sentry/icons/iconEllipsis';
+import {t} from 'sentry/locale';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
-import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import EventView from 'sentry/utils/discover/eventView';
+import {Field} from 'sentry/utils/discover/fields';
+import {DisplayModes} from 'sentry/utils/discover/types';
+import {useMEPSettingContext} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {usePerformanceDisplayType} from 'sentry/utils/performance/contexts/performanceDisplayContext';
 import useOrganization from 'sentry/utils/useOrganization';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 import withOrganization from 'sentry/utils/withOrganization';
-import ContextMenu from 'sentry/views/dashboardsV2/contextMenu';
 
 import {GenericPerformanceWidgetDataType} from '../types';
-import {_setChartSetting, getChartSetting} from '../utils';
-import {PerformanceWidgetSetting, WIDGET_DEFINITIONS} from '../widgetDefinitions';
+import {_setChartSetting, filterAllowedChartsMetrics, getChartSetting} from '../utils';
+import {
+  ChartDefinition,
+  PerformanceWidgetSetting,
+  WIDGET_DEFINITIONS,
+} from '../widgetDefinitions';
 import {HistogramWidget} from '../widgets/histogramWidget';
 import {LineChartListWidget} from '../widgets/lineChartListWidget';
 import {SingleFieldAreaWidget} from '../widgets/singleFieldAreaWidget';
+import {StackedAreaChartListWidget} from '../widgets/stackedAreaChartListWidget';
 import {TrendsWidget} from '../widgets/trendsWidget';
 import {VitalWidget} from '../widgets/vitalWidget';
 
@@ -30,6 +47,7 @@ type Props = {
   organization: Organization;
   rowChartSettings: PerformanceWidgetSetting[];
   setRowChartSettings: (settings: PerformanceWidgetSetting[]) => void;
+  withStaticFilters: boolean;
   chartColor?: string;
   forceDefaultChartSetting?: boolean;
 } & ChartRowProps;
@@ -40,11 +58,12 @@ function trackChartSettingChange(
   fromDefault: boolean,
   organization: Organization
 ) {
-  trackAdvancedAnalyticsEvent('performance_views.landingv3.widget.switch', {
+  trackAnalytics('performance_views.landingv3.widget.switch', {
     organization,
     from_widget: previousChartSetting,
     to_widget: chartSetting,
     from_default: fromDefault,
+    is_new_menu: organization.features.includes('performance-new-widget-designs'),
   });
 }
 
@@ -53,7 +72,6 @@ const _WidgetContainer = (props: Props) => {
     organization,
     index,
     chartHeight,
-    allowedCharts,
     rowChartSettings,
     setRowChartSettings,
     ...rest
@@ -65,6 +83,12 @@ const _WidgetContainer = (props: Props) => {
     performanceType,
     rest.defaultChartSetting,
     rest.forceDefaultChartSetting
+  );
+  const mepSetting = useMEPSettingContext();
+  const allowedCharts = filterAllowedChartsMetrics(
+    props.organization,
+    props.allowedCharts,
+    mepSetting
   );
 
   if (!allowedCharts.includes(_chartSetting)) {
@@ -91,22 +115,46 @@ const _WidgetContainer = (props: Props) => {
 
   useEffect(() => {
     setChartSettingState(_chartSetting);
-  }, [rest.defaultChartSetting]);
+  }, [rest.defaultChartSetting, _chartSetting]);
 
   const chartDefinition = WIDGET_DEFINITIONS({organization})[chartSetting];
+
+  // Construct an EventView that matches this widget's definition. The
+  // `eventView` from the props is the _landing page_ EventView, which is different
+  const widgetEventView = makeEventViewForWidget(props.eventView, chartDefinition);
+
+  const showNewWidgetDesign = organization.features.includes(
+    'performance-new-widget-designs'
+  );
+
   const widgetProps = {
     ...chartDefinition,
     chartSetting,
     chartDefinition,
-    ContainerActions: containerProps => (
-      <WidgetContainerActions
-        {...containerProps}
-        allowedCharts={props.allowedCharts}
-        chartSetting={chartSetting}
-        setChartSetting={setChartSetting}
-        rowChartSettings={rowChartSettings}
-      />
-    ),
+    InteractiveTitle: showNewWidgetDesign
+      ? containerProps => (
+          <WidgetInteractiveTitle
+            {...containerProps}
+            eventView={widgetEventView}
+            allowedCharts={allowedCharts}
+            chartSetting={chartSetting}
+            setChartSetting={setChartSetting}
+            rowChartSettings={rowChartSettings}
+          />
+        )
+      : null,
+    ContainerActions: !showNewWidgetDesign
+      ? containerProps => (
+          <WidgetContainerActions
+            {...containerProps}
+            eventView={widgetEventView}
+            allowedCharts={allowedCharts}
+            chartSetting={chartSetting}
+            setChartSetting={setChartSetting}
+            rowChartSettings={rowChartSettings}
+          />
+        )
+      : null,
   };
 
   const passedProps = pick(props, [
@@ -114,55 +162,205 @@ const _WidgetContainer = (props: Props) => {
     'location',
     'organization',
     'chartHeight',
+    'withStaticFilters',
   ]);
+
+  const titleTooltip = showNewWidgetDesign ? '' : widgetProps.titleTooltip;
 
   switch (widgetProps.dataType) {
     case GenericPerformanceWidgetDataType.trends:
-      return <TrendsWidget {...passedProps} {...widgetProps} />;
+      return (
+        <TrendsWidget {...passedProps} {...widgetProps} titleTooltip={titleTooltip} />
+      );
     case GenericPerformanceWidgetDataType.area:
-      return <SingleFieldAreaWidget {...passedProps} {...widgetProps} />;
+      return (
+        <SingleFieldAreaWidget
+          {...passedProps}
+          {...widgetProps}
+          titleTooltip={titleTooltip}
+        />
+      );
     case GenericPerformanceWidgetDataType.vitals:
-      return <VitalWidget {...passedProps} {...widgetProps} />;
+      return (
+        <VitalWidget {...passedProps} {...widgetProps} titleTooltip={titleTooltip} />
+      );
     case GenericPerformanceWidgetDataType.line_list:
-      return <LineChartListWidget {...passedProps} {...widgetProps} />;
+      return (
+        <LineChartListWidget
+          {...passedProps}
+          {...widgetProps}
+          titleTooltip={titleTooltip}
+        />
+      );
     case GenericPerformanceWidgetDataType.histogram:
-      return <HistogramWidget {...passedProps} {...widgetProps} />;
+      return (
+        <HistogramWidget {...passedProps} {...widgetProps} titleTooltip={titleTooltip} />
+      );
+    case GenericPerformanceWidgetDataType.stacked_area:
+      return <StackedAreaChartListWidget {...passedProps} {...widgetProps} />;
     default:
       throw new Error(`Widget type "${widgetProps.dataType}" has no implementation.`);
   }
 };
 
-export const WidgetContainerActions = ({
+export function WidgetInteractiveTitle({
   chartSetting,
+  eventView,
+  setChartSetting,
+  allowedCharts,
+  rowChartSettings,
+}) {
+  const organization = useOrganization();
+  const menuOptions: SelectOption<string>[] = [];
+
+  const settingsMap = WIDGET_DEFINITIONS({organization});
+  for (const setting of allowedCharts) {
+    const options = settingsMap[setting];
+    menuOptions.push({
+      value: setting,
+      label: options.title,
+      disabled: setting !== chartSetting && rowChartSettings.includes(setting),
+    });
+  }
+
+  const chartDefinition = WIDGET_DEFINITIONS({organization})[chartSetting];
+
+  if (chartDefinition.allowsOpenInDiscover) {
+    menuOptions.push({label: t('Open in Discover'), value: 'open_in_discover'});
+  }
+
+  const handleChange = option => {
+    if (option.value === 'open_in_discover') {
+      browserHistory.push(
+        normalizeUrl(getEventViewDiscoverPath(organization, eventView))
+      );
+    } else {
+      setChartSetting(option.value);
+    }
+  };
+
+  return (
+    <StyledCompactSelect
+      options={menuOptions}
+      value={chartSetting}
+      onChange={handleChange}
+      triggerProps={{borderless: true, size: 'zero'}}
+    />
+  );
+}
+
+const StyledCompactSelect = styled(CompactSelect)`
+  /* Reset font-weight set by HeaderTitleLegend, buttons are already bold and
+   * setting this higher up causes it to trickle into the menues */
+  font-weight: normal;
+  margin: 0 -${space(0.5)};
+  min-width: 0;
+
+  button {
+    font-size: ${p => p.theme.fontSizeLarge};
+  }
+`;
+
+export function WidgetContainerActions({
+  chartSetting,
+  eventView,
   setChartSetting,
   allowedCharts,
   rowChartSettings,
 }: {
   allowedCharts: PerformanceWidgetSetting[];
   chartSetting: PerformanceWidgetSetting;
+  eventView: EventView;
   rowChartSettings: PerformanceWidgetSetting[];
   setChartSetting: (setting: PerformanceWidgetSetting) => void;
-}) => {
+}) {
   const organization = useOrganization();
-  const menuOptions: React.ReactNode[] = [];
+  const menuOptions: SelectOption<PerformanceWidgetSetting>[] = [];
 
   const settingsMap = WIDGET_DEFINITIONS({organization});
   for (const setting of allowedCharts) {
     const options = settingsMap[setting];
-    menuOptions.push(
-      <MenuItem
-        key={setting}
-        onClick={() => setChartSetting(setting)}
-        isActive={setting === chartSetting}
-        disabled={setting !== chartSetting && rowChartSettings.includes(setting)}
-        data-test-id="performance-widget-menu-item"
-      >
-        {options.title}
-      </MenuItem>
-    );
+    menuOptions.push({
+      value: setting,
+      label: options.title,
+      disabled: setting !== chartSetting && rowChartSettings.includes(setting),
+    });
   }
 
-  return <ContextMenu>{menuOptions}</ContextMenu>;
+  const chartDefinition = WIDGET_DEFINITIONS({organization})[chartSetting];
+
+  function handleWidgetActionChange(value) {
+    if (value === 'open_in_discover') {
+      browserHistory.push(
+        normalizeUrl(getEventViewDiscoverPath(organization, eventView))
+      );
+    }
+  }
+
+  return (
+    <CompositeSelect
+      trigger={triggerProps => (
+        <DropdownButton
+          {...triggerProps}
+          size="xs"
+          borderless
+          showChevron={false}
+          icon={<IconEllipsis aria-label={t('More')} />}
+        />
+      )}
+      position="bottom-end"
+    >
+      <CompositeSelect.Region
+        label={t('Display')}
+        options={menuOptions}
+        value={chartSetting}
+        onChange={opt => setChartSetting(opt.value)}
+      />
+      {chartDefinition.allowsOpenInDiscover && (
+        <CompositeSelect.Region
+          label={t('Other')}
+          options={[{label: t('Open in Discover'), value: 'open_in_discover'}]}
+          value=""
+          onChange={opt => handleWidgetActionChange(opt.value)}
+        />
+      )}
+    </CompositeSelect>
+  );
+}
+
+const getEventViewDiscoverPath = (
+  organization: Organization,
+  eventView: EventView
+): string => {
+  const discoverUrlTarget = eventView.getResultsViewUrlTarget(organization.slug);
+
+  // The landing page EventView has some additional conditions, but
+  // `EventView#getResultsViewUrlTarget` omits those! Get them manually
+  discoverUrlTarget.query.query = eventView.getQueryWithAdditionalConditions();
+
+  return `${discoverUrlTarget.pathname}?${qs.stringify(
+    omit(discoverUrlTarget.query, ['widths']) // Column widths are not useful in this case
+  )}`;
+};
+
+/**
+ * Constructs an `EventView` that matches a widget's chart definition.
+ * @param baseEventView Any valid event view. The easiest way to make a new EventView is to clone an existing one, because `EventView#constructor` takes too many abstract arguments
+ * @param chartDefinition
+ */
+const makeEventViewForWidget = (
+  baseEventView: EventView,
+  chartDefinition: ChartDefinition
+): EventView => {
+  const widgetEventView = baseEventView.clone();
+  widgetEventView.name = chartDefinition.title;
+  widgetEventView.yAxis = chartDefinition.fields[0]; // All current widgets only have one field
+  widgetEventView.display = DisplayModes.PREVIOUS;
+  widgetEventView.fields = ['transaction', 'project', ...chartDefinition.fields].map(
+    fieldName => ({field: fieldName} as Field)
+  );
+
+  return widgetEventView;
 };
 
 const WidgetContainer = withOrganization(_WidgetContainer);

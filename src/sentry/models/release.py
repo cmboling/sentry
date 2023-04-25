@@ -16,7 +16,7 @@ from django.utils.functional import cached_property
 from django.utils.translation import ugettext_lazy as _
 from sentry_relay import RelayError, parse_release
 
-from sentry.app import locks
+from sentry import features, options
 from sentry.constants import BAD_RELEASE_CHARS, COMMIT_RANGE_DELIMITER
 from sentry.db.models import (
     ArrayField,
@@ -26,11 +26,15 @@ from sentry.db.models import (
     FlexibleForeignKey,
     JSONField,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
 from sentry.exceptions import InvalidSearchQuery
+from sentry.locks import locks
 from sentry.models import (
     Activity,
+    ArtifactBundle,
     BaseManager,
     CommitFileChange,
     GroupInbox,
@@ -39,6 +43,7 @@ from sentry.models import (
 )
 from sentry.models.grouphistory import GroupHistoryStatus, record_group_history
 from sentry.signals import issue_resolved
+from sentry.tasks.relay import schedule_invalidate_project_config
 from sentry.utils import metrics
 from sentry.utils.cache import cache
 from sentry.utils.db import atomic_transaction
@@ -66,6 +71,29 @@ class ReleaseCommitError(Exception):
     pass
 
 
+class ReleaseProjectModelManager(BaseManager):
+    @staticmethod
+    def _on_post(project, trigger):
+        from sentry.dynamic_sampling import ProjectBoostedReleases
+
+        project_boosted_releases = ProjectBoostedReleases(project.id)
+        # We want to invalidate the project config only if dynamic sampling is enabled and there exists boosted releases
+        # in the project.
+        if (
+            features.has("organizations:dynamic-sampling", project.organization)
+            and options.get("dynamic-sampling:enabled-biases")
+            and project_boosted_releases.has_boosted_releases
+        ):
+            schedule_invalidate_project_config(project_id=project.id, trigger=trigger)
+
+    def post_save(self, instance, **kwargs):
+        self._on_post(project=instance.project, trigger="releaseproject.post_save")
+
+    def post_delete(self, instance, **kwargs):
+        self._on_post(project=instance.project, trigger="releaseproject.post_delete")
+
+
+@region_silo_only_model
 class ReleaseProject(Model):
     __include_in_export__ = False
 
@@ -75,6 +103,9 @@ class ReleaseProject(Model):
 
     adopted = models.DateTimeField(null=True, blank=True)
     unadopted = models.DateTimeField(null=True, blank=True)
+    first_seen_transaction = models.DateTimeField(null=True, blank=True)
+
+    objects = ReleaseProjectModelManager()
 
     class Meta:
         app_label = "sentry"
@@ -82,6 +113,7 @@ class ReleaseProject(Model):
         index_together = (
             ("project", "adopted"),
             ("project", "unadopted"),
+            ("project", "first_seen_transaction"),
         )
         unique_together = (("project", "release"),)
 
@@ -416,6 +448,7 @@ class ReleaseModelManager(BaseManager):
         return release_version or None
 
 
+@region_silo_only_model
 class Release(Model):
     """
     A release is generally created when a new version is pushed into a
@@ -440,7 +473,7 @@ class Release(Model):
     )
 
     # DEPRECATED
-    project_id = BoundedPositiveIntegerField(null=True)
+    project_id = BoundedBigIntegerField(null=True)
     version = models.CharField(max_length=DB_VERSION_LENGTH)
     # ref might be the branch name being released
     ref = models.CharField(max_length=DB_VERSION_LENGTH, null=True, blank=True)
@@ -451,10 +484,10 @@ class Release(Model):
     date_released = models.DateTimeField(null=True, blank=True)
     # arbitrary data recorded with the release
     data = JSONField(default={})
-    # new issues (groups) that arise as a consequence of this release
+    # Deprecated, we no longer write to this field
     new_groups = BoundedPositiveIntegerField(default=0)
     # generally the release manager, or the person initiating the process
-    owner = FlexibleForeignKey("sentry.User", null=True, blank=True, on_delete=models.SET_NULL)
+    owner_id = HybridCloudForeignKey("sentry.User", on_delete="SET_NULL", null=True, blank=True)
 
     # materialized stats
     commit_count = BoundedPositiveIntegerField(null=True, default=0)
@@ -483,6 +516,8 @@ class Release(Model):
     # later split up releases by project again.  This is for instance used
     # by the org release listing.
     _for_project_id = None
+    # the user agent that set the release
+    user_agent = models.TextField(null=True)
 
     # Custom Model Manager required to override create method
     objects = ReleaseModelManager()
@@ -529,16 +564,30 @@ class Release(Model):
 
     @staticmethod
     def is_valid_version(value):
+        if value is None:
+            return False
+
+        if any(c in value for c in BAD_RELEASE_CHARS):
+            return False
+
+        value_stripped = str(value).strip()
         return not (
-            not value
-            or any(c in value for c in BAD_RELEASE_CHARS)
-            or value in (".", "..")
-            or value.lower() == "latest"
+            not value_stripped
+            or value_stripped in (".", "..")
+            or value_stripped.lower() == "latest"
         )
 
     @property
     def is_semver_release(self):
         return self.package is not None
+
+    def get_previous_release(self, project):
+        """Get the release prior to this one. None if none exists"""
+        return (
+            ReleaseProject.objects.filter(project=project, release__date_added__lt=self.date_added)
+            .order_by("-release__date_added")
+            .first()
+        )
 
     @staticmethod
     def is_semver_version(version):
@@ -559,6 +608,31 @@ class Release(Model):
         except RelayError:
             # This can happen on invalid legacy releases
             return False
+
+    @staticmethod
+    def is_release_newer_or_equal(org_id, release, other_release):
+        if release is None:
+            return False
+
+        if other_release is None:
+            return True
+
+        if release == other_release:
+            return True
+
+        releases = {
+            release.version: float(release.date_added.timestamp())
+            for release in Release.objects.filter(
+                organization_id=org_id, version__in=[release, other_release]
+            )
+        }
+        release_date = releases.get(release)
+        other_release_date = releases.get(other_release)
+
+        if release_date is not None and other_release_date is not None:
+            return release_date > other_release_date
+
+        return False
 
     @classmethod
     def get_cache_key(cls, organization_id, version):
@@ -733,14 +807,14 @@ class Release(Model):
 
         try:
             with atomic_transaction(using=router.db_for_write(ReleaseProject)):
-                ReleaseProject.objects.create(project=project, release=self)
+                created = ReleaseProject.objects.get_or_create(project=project, release=self)[1]
                 if not project.flags.has_releases:
                     project.flags.has_releases = True
                     project.update(flags=F("flags").bitor(Project.flags.has_releases))
         except IntegrityError:
-            return False
-        else:
-            return True
+            created = False
+
+        return created
 
     def handle_commit_ranges(self, refs):
         """
@@ -757,7 +831,7 @@ class Release(Model):
             if COMMIT_RANGE_DELIMITER in ref["commit"]:
                 ref["previousCommit"], ref["commit"] = ref["commit"].split(COMMIT_RANGE_DELIMITER)
 
-    def set_refs(self, refs, user, fetch=False):
+    def set_refs(self, refs, user_id, fetch=False):
         with sentry_sdk.start_span(op="set_refs"):
             from sentry.api.exceptions import InvalidRepository
             from sentry.models import Commit, ReleaseHeadCommit, Repository
@@ -804,7 +878,7 @@ class Release(Model):
                 fetch_commits.apply_async(
                     kwargs={
                         "release_id": self.id,
-                        "user_id": user.id,
+                        "user_id": user_id,
                         "refs": refs,
                         "prev_release_id": prev_release and prev_release.id,
                     }
@@ -844,7 +918,7 @@ class Release(Model):
             if not RepositoryProvider.should_ignore_commit(c.get("message", ""))
         ]
         lock_key = type(self).get_lock_key(self.organization_id, self.id)
-        lock = locks.get(lock_key, duration=10)
+        lock = locks.get(lock_key, duration=10, name="release_set_commits")
         if lock.locked():
             # Signal failure to the consumer rapidly. This aims to prevent the number
             # of timeouts and prevent web worker exhaustion when customers create
@@ -1073,7 +1147,7 @@ class Release(Model):
                     },
                 )
                 group = Group.objects.get(id=group_id)
-                group.update(status=GroupStatus.RESOLVED)
+                group.update(status=GroupStatus.RESOLVED, substatus=None)
                 remove_group_from_inbox(group, action=GroupInboxRemoveAction.RESOLVED, user=actor)
                 record_group_history(group, GroupHistoryStatus.RESOLVED, actor=actor)
 
@@ -1128,6 +1202,24 @@ class Release(Model):
         """
         counts = get_artifact_counts([self.id])
         return counts.get(self.id, 0)
+
+    def last_weakly_associated_artifact_bundle(self):
+        """Counts the number of artifacts in the most recent "ArtifactBundle" that is weakly associated
+        with this release.
+        """
+        bundles = (
+            ArtifactBundle.objects.filter(
+                organization_id=self.organization.id,
+                releaseartifactbundle__release_name=self.version,
+            )
+            .order_by("-date_uploaded")
+            .select_related("file")[:1]
+        )
+
+        if len(bundles) == 0:
+            return None
+
+        return bundles[0]
 
     def clear_commits(self):
         """

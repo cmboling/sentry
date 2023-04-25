@@ -1,8 +1,9 @@
 from typing import Dict, List
 
+import sentry_sdk
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
-from rest_framework.exceptions import ParseError
+from rest_framework.exceptions import APIException, ParseError
 from rest_framework.negotiation import BaseContentNegotiation
 from rest_framework.request import Request
 from typing_extensions import TypedDict
@@ -10,10 +11,19 @@ from typing_extensions import TypedDict
 from sentry.api.bases.organization import OrganizationEndpoint, OrganizationPermission
 from sentry.models import AuthProvider
 
-from .constants import SCIM_400_INVALID_FILTER, SCIM_API_LIST
+from .constants import SCIM_400_INVALID_FILTER, SCIM_API_ERROR, SCIM_API_LIST
 
 SCIM_CONTENT_TYPES = ["application/json", "application/json+scim"]
 ACCEPTED_FILTERED_KEYS = ["userName", "value", "displayName"]
+
+
+class SCIMApiError(APIException):
+    def __init__(self, detail, status_code=400):
+        transaction = sentry_sdk.Hub.current.scope.transaction
+        if transaction is not None:
+            transaction.set_tag("http.status_code", status_code)
+        self.status_code = status_code
+        self.detail = {"schemas": [SCIM_API_ERROR], "detail": detail}
 
 
 class SCIMFilterError(ValueError):
@@ -104,7 +114,7 @@ class OrganizationSCIMPermission(OrganizationPermission):
         if not result:
             return result
         try:
-            auth_provider = AuthProvider.objects.get(organization=organization)
+            auth_provider = AuthProvider.objects.get(organization_id=organization.id)
         except AuthProvider.DoesNotExist:
             return False
         if not auth_provider.flags.scim_enabled:

@@ -1,7 +1,8 @@
 import {Fragment} from 'react';
-import {browserHistory, RouteComponentProps} from 'react-router';
+import {RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
+import isEqual from 'lodash/isEqual';
 
 import {removeAuthenticator} from 'sentry/actionCreators/account';
 import {
@@ -10,29 +11,31 @@ import {
   addSuccessMessage,
 } from 'sentry/actionCreators/indicator';
 import {resendMemberInvite, updateMember} from 'sentry/actionCreators/members';
-import AutoSelectText from 'sentry/components/autoSelectText';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
+import ButtonBar from 'sentry/components/buttonBar';
 import Confirm from 'sentry/components/confirm';
 import DateTime from 'sentry/components/dateTime';
 import NotFound from 'sentry/components/errors/notFound';
-import Field from 'sentry/components/forms/field';
+import FieldGroup from 'sentry/components/forms/fieldGroup';
 import HookOrDefault from 'sentry/components/hookOrDefault';
 import ExternalLink from 'sentry/components/links/externalLink';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
-import Tooltip from 'sentry/components/tooltip';
+import TextCopyInput from 'sentry/components/textCopyInput';
+import {Tooltip} from 'sentry/components/tooltip';
+import {IconRefresh} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import {inputStyles} from 'sentry/styles/input';
-import space from 'sentry/styles/space';
-import {Member, Organization, Team} from 'sentry/types';
+import configStore from 'sentry/stores/configStore';
+import {space} from 'sentry/styles/space';
+import {Member, Organization} from 'sentry/types';
 import isMemberDisabledFromLimit from 'sentry/utils/isMemberDisabledFromLimit';
-import recreateRoute from 'sentry/utils/recreateRoute';
 import Teams from 'sentry/utils/teams';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 import withOrganization from 'sentry/utils/withOrganization';
 import AsyncView from 'sentry/views/asyncView';
 import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
 import TeamSelect from 'sentry/views/settings/components/teamSelect';
 
-import RoleSelect from './inviteMember/roleSelect';
+import OrganizationRoleSelect from './inviteMember/orgRoleSelect';
 
 const MULTIPLE_ORGS = t('Cannot be reset since user is in more than one organization');
 const NOT_ENROLLED = t('Not enrolled in two-factor authentication');
@@ -43,7 +46,6 @@ const TWO_FACTOR_REQUIRED = t(
 
 type RouteParams = {
   memberId: string;
-  orgId: string;
 };
 
 type Props = {
@@ -52,8 +54,8 @@ type Props = {
 
 type State = {
   member: Member | null;
-  roleList: Member['roles'];
-  selectedRole: Member['role'];
+  orgRole: Member['orgRole'];
+  teamRoles: Member['teamRoles'];
 } & AsyncView['state'];
 
 const DisabledMemberTooltip = HookOrDefault({
@@ -62,12 +64,17 @@ const DisabledMemberTooltip = HookOrDefault({
 });
 
 class OrganizationMemberDetail extends AsyncView<Props, State> {
+  get hasTeamRoles() {
+    const {organization} = this.props;
+    return organization.features.includes('team-roles');
+  }
+
   getDefaultState(): State {
     return {
       ...super.getDefaultState(),
-      roleList: [],
-      selectedRole: '',
       member: null,
+      orgRole: '',
+      teamRoles: [],
     };
   }
 
@@ -78,37 +85,34 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
     ];
   }
 
-  redirectToMemberPage() {
-    const {location, params, routes} = this.props;
-    const members = recreateRoute('members/', {
-      location,
-      routes,
-      params,
-      stepBack: -2,
-    });
-    browserHistory.push(members);
+  onRequestSuccess({data, stateKey}: {data: Member; stateKey: string}) {
+    if (stateKey === 'member') {
+      const {orgRole, teamRoles} = data;
+      this.setState({orgRole, teamRoles});
+    }
   }
 
   handleSave = async () => {
     const {organization, params} = this.props;
+    const {orgRole, teamRoles} = this.state;
 
     addLoadingMessage(t('Saving...'));
     this.setState({busy: true});
 
     try {
-      await updateMember(this.api, {
+      const updatedMember = await updateMember(this.api, {
         orgId: organization.slug,
         memberId: params.memberId,
-        data: this.state.member,
+        data: {orgRole, teamRoles} as any,
       });
+      this.setState({member: updatedMember, busy: false});
       addSuccessMessage(t('Saved'));
-      this.redirectToMemberPage();
     } catch (resp) {
       const errorMessage =
         (resp && resp.responseJSON && resp.responseJSON.detail) || t('Could not save...');
+      this.setState({busy: false});
       addErrorMessage(errorMessage);
     }
-    this.setState({busy: false});
   };
 
   handleInvite = async (regenerate: boolean) => {
@@ -137,25 +141,6 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
     this.setState({busy: false});
   };
 
-  handleAddTeam = (team: Team) => {
-    const {member} = this.state;
-    if (!member!.teams.includes(team.slug)) {
-      member!.teams.push(team.slug);
-    }
-    this.setState({member});
-  };
-
-  handleRemoveTeam = (removedTeam: string) => {
-    const {member} = this.state;
-
-    this.setState({
-      member: {
-        ...member!,
-        teams: member!.teams.filter(slug => slug !== removedTeam),
-      },
-    });
-  };
-
   handle2faReset = async () => {
     const {organization, router} = this.props;
     const {user} = this.state.member!;
@@ -166,12 +151,45 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
 
     try {
       await Promise.all(requests);
-      router.push(`/settings/${organization.slug}/members/`);
+      router.push(normalizeUrl(`/settings/${organization.slug}/members/`));
       addSuccessMessage(t('All authenticators have been removed'));
     } catch (err) {
       addErrorMessage(t('Error removing authenticators'));
       Sentry.captureException(err);
     }
+  };
+
+  onAddTeam = (teamSlug: string) => {
+    const teamRoles = [...this.state.teamRoles];
+    const i = teamRoles.findIndex(r => r.teamSlug === teamSlug);
+    if (i !== -1) {
+      return;
+    }
+
+    teamRoles.push({teamSlug, role: null});
+    this.setState({teamRoles});
+  };
+
+  onRemoveTeam = (teamSlug: string) => {
+    const teamRoles = this.state.teamRoles.filter(r => r.teamSlug !== teamSlug);
+    this.setState({teamRoles});
+  };
+
+  onChangeOrgRole = orgRole => this.setState({orgRole});
+
+  onChangeTeamRole = (teamSlug: string, role: string) => {
+    if (!this.hasTeamRoles) {
+      return;
+    }
+
+    const teamRoles = [...this.state.teamRoles];
+    const i = teamRoles.findIndex(r => r.teamSlug === teamSlug);
+    if (i === -1) {
+      return;
+    }
+
+    teamRoles[i] = {...teamRoles[i], role};
+    this.setState({teamRoles});
   };
 
   showResetButton = () => {
@@ -215,6 +233,19 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
     return isMemberDisabledFromLimit(this.state.member);
   }
 
+  get hasFormChanged() {
+    const {member, orgRole, teamRoles} = this.state;
+    if (!member) {
+      return false;
+    }
+
+    if (orgRole !== member.orgRole || !isEqual(teamRoles, member?.teamRoles)) {
+      return true;
+    }
+
+    return false;
+  }
+
   renderMemberStatus(member: Member) {
     if (this.memberDeactivated) {
       return (
@@ -234,19 +265,23 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
 
   renderBody() {
     const {organization} = this.props;
-    const {member} = this.state;
+    const {member, orgRole, teamRoles} = this.state;
 
     if (!member) {
       return <NotFound />;
     }
 
-    const {access} = organization;
-    const inviteLink = member.invite_link;
+    const {access, features, orgRoleList} = organization;
     const canEdit = access.includes('org:write') && !this.memberDeactivated;
+    // org:admin is a unique scope that only org owners have
+    const isOrgOwner = access.includes('org:admin');
+    const hasTeamRoles = features.includes('team-roles');
 
-    const {email, expired, pending} = member;
+    const {email, expired, pending, invite_link: inviteLink} = member;
     const canResend = !expired;
     const showAuth = !pending;
+    const currentUser = configStore.get('user');
+    const isCurrentUser = currentUser.email === email;
 
     return (
       <Fragment>
@@ -264,55 +299,60 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
 
           <PanelBody>
             <PanelItem>
-              <OverflowWrapper>
-                <Details>
+              <Details>
+                <div>
+                  <DetailLabel>{t('Email')}</DetailLabel>
                   <div>
-                    <DetailLabel>{t('Email')}</DetailLabel>
-                    <div>
-                      <ExternalLink href={`mailto:${email}`}>{email}</ExternalLink>
-                    </div>
+                    <ExternalLink href={`mailto:${email}`}>{email}</ExternalLink>
                   </div>
+                </div>
+                <div>
+                  <DetailLabel>{t('Status')}</DetailLabel>
+                  <div data-test-id="member-status">
+                    {this.renderMemberStatus(member)}
+                  </div>
+                </div>
+                <div>
+                  <DetailLabel>{t('Added')}</DetailLabel>
                   <div>
-                    <DetailLabel>{t('Status')}</DetailLabel>
-                    <div data-test-id="member-status">
-                      {this.renderMemberStatus(member)}
-                    </div>
+                    <DateTime dateOnly date={member.dateCreated} />
                   </div>
-                  <div>
-                    <DetailLabel>{t('Added')}</DetailLabel>
-                    <div>
-                      <DateTime dateOnly date={member.dateCreated} />
-                    </div>
-                  </div>
-                </Details>
-
-                {inviteLink && (
-                  <InviteSection>
-                    <div>
-                      <DetailLabel>{t('Invite Link')}</DetailLabel>
-                      <AutoSelectText>
-                        <CodeInput>{inviteLink}</CodeInput>
-                      </AutoSelectText>
-                      <p className="help-block">
-                        {t('This unique invite link may only be used by this member.')}
-                      </p>
-                    </div>
-                    <InviteActions>
-                      <Button onClick={() => this.handleInvite(true)}>
-                        {t('Generate New Invite')}
-                      </Button>
-                      {canResend && (
-                        <Button
-                          data-test-id="resend-invite"
-                          onClick={() => this.handleInvite(false)}
-                        >
-                          {t('Resend Invite')}
-                        </Button>
+                </div>
+              </Details>
+            </PanelItem>
+            <PanelItem>
+              {inviteLink && (
+                <InviteSection>
+                  <InviteField>
+                    <DetailLabel>{t('Invite Link')}</DetailLabel>
+                    <TextCopyInput>{inviteLink}</TextCopyInput>
+                    <p className="help-block">
+                      {t(
+                        'This invite link can be used by anyone who knows it. Keep it secure!'
                       )}
-                    </InviteActions>
-                  </InviteSection>
-                )}
-              </OverflowWrapper>
+                    </p>
+                  </InviteField>
+                  <ButtonBar gap={1}>
+                    {canResend && (
+                      <Button
+                        data-test-id="resend-invite"
+                        onClick={() => this.handleInvite(false)}
+                      >
+                        {t('Resend Invite')}
+                      </Button>
+                    )}
+                    <Button
+                      onClick={() => this.handleInvite(true)}
+                      title={t(
+                        'Generate New Invite. This will invalidate the previous invite link!'
+                      )}
+                      priority="danger"
+                      aria-label={t('Generate New Invite')}
+                      icon={<IconRefresh size="sm" />}
+                    />
+                  </ButtonBar>
+                </InviteSection>
+              )}
             </PanelItem>
           </PanelBody>
         </Panel>
@@ -321,7 +361,7 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
           <Panel>
             <PanelHeader>{t('Authentication')}</PanelHeader>
             <PanelBody>
-              <Field
+              <FieldGroup
                 alignRight
                 flexibleControlStateSize
                 label={t('Reset two-factor authentication')}
@@ -329,11 +369,7 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
                   'Resetting two-factor authentication will remove all two-factor authentication methods for this member.'
                 )}
               >
-                <Tooltip
-                  data-test-id="reset-2fa-tooltip"
-                  disabled={this.showResetButton()}
-                  title={this.getTooltip()}
-                >
+                <Tooltip disabled={this.showResetButton()} title={this.getTooltip()}>
                   <Confirm
                     disabled={!this.showResetButton()}
                     message={tct(
@@ -341,34 +377,40 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
                       {name: member.name ? member.name : 'this member'}
                     )}
                     onConfirm={this.handle2faReset}
-                    data-test-id="reset-2fa-confirm"
                   >
-                    <Button data-test-id="reset-2fa" priority="danger">
+                    <Button priority="danger">
                       {t('Reset two-factor authentication')}
                     </Button>
                   </Confirm>
                 </Tooltip>
-              </Field>
+              </FieldGroup>
             </PanelBody>
           </Panel>
         )}
 
-        <RoleSelect
+        <OrganizationRoleSelect
           enforceAllowed={false}
+          enforceIdpRoleRestricted={member.flags['idp:role-restricted']}
+          enforceRetired={hasTeamRoles}
+          isCurrentUser={isCurrentUser}
           disabled={!canEdit}
-          roleList={member.roles}
-          selectedRole={member.role}
-          setRole={slug => this.setState({member: {...member, role: slug}})}
+          roleList={orgRoleList}
+          roleSelected={orgRole}
+          setSelected={this.onChangeOrgRole}
         />
 
         <Teams slugs={member.teams}>
-          {({teams, initiallyLoaded}) => (
+          {({initiallyLoaded}) => (
             <TeamSelect
-              organization={organization}
-              selectedTeams={teams}
+              enforceIdpProvisioned
               disabled={!canEdit}
-              onAddTeam={this.handleAddTeam}
-              onRemoveTeam={this.handleRemoveTeam}
+              isOrgOwner={isOrgOwner}
+              organization={organization}
+              selectedOrgRole={orgRole}
+              selectedTeamRoles={teamRoles}
+              onChangeTeamRole={this.onChangeTeamRole}
+              onAddTeam={this.onAddTeam}
+              onRemoveTeam={this.onRemoveTeam}
               loadingTeams={!initiallyLoaded}
             />
           )}
@@ -379,7 +421,7 @@ class OrganizationMemberDetail extends AsyncView<Props, State> {
             priority="primary"
             busy={this.state.busy}
             onClick={this.handleSave}
-            disabled={!canEdit}
+            disabled={!canEdit || !this.hasFormChanged}
           >
             {t('Save Member')}
           </Button>
@@ -404,7 +446,7 @@ const Details = styled('div')`
   gap: ${space(2)};
   width: 100%;
 
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
     grid-auto-flow: row;
     grid-template-columns: auto;
   }
@@ -416,27 +458,14 @@ const DetailLabel = styled('div')`
   color: ${p => p.theme.textColor};
 `;
 
-const OverflowWrapper = styled('div')`
-  overflow: hidden;
-  flex: 1;
+const InviteField = styled('div')`
+  flex-grow: 1;
 `;
 
 const InviteSection = styled('div')`
-  border-top: 1px solid ${p => p.theme.border};
-  margin-top: ${space(2)};
-  padding-top: ${space(2)};
-`;
-
-const CodeInput = styled('code')`
-  ${p => inputStyles(p)}; /* Have to do this for typescript :( */
-`;
-
-const InviteActions = styled('div')`
-  display: grid;
+  flex-grow: 1;
+  display: flex;
   gap: ${space(1)};
-  grid-auto-flow: column;
-  justify-content: flex-end;
-  margin-top: ${space(2)};
 `;
 
 const Footer = styled('div')`

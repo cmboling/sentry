@@ -1,8 +1,8 @@
-import * as React from 'react';
+import {Component, Fragment} from 'react';
 import styled from '@emotion/styled';
 
 import {Client} from 'sentry/api';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ClippedBox from 'sentry/components/clippedBox';
 import LoadingError from 'sentry/components/loadingError';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
@@ -18,7 +18,7 @@ type Props = {
   api: Client;
   eventId: Event['id'];
   platform: PlatformType;
-  projectId: Project['id'];
+  projectSlug: Project['slug'];
   type: 'original' | 'minified';
   // XXX: Organization is NOT available for Shared Issues!
   organization?: Organization;
@@ -30,7 +30,7 @@ type State = {
   loading: boolean;
 };
 
-class RawContent extends React.Component<Props, State> {
+class RawContent extends Component<Props, State> {
   state: State = {
     loading: false,
     error: false,
@@ -55,10 +55,10 @@ class RawContent extends React.Component<Props, State> {
   }
 
   getAppleCrashReportEndpoint(organization: Organization) {
-    const {type, projectId, eventId} = this.props;
+    const {type, projectSlug, eventId} = this.props;
 
     const minified = type === 'minified';
-    return `/projects/${organization.slug}/${projectId}/events/${eventId}/apple-crash-report?minified=${minified}`;
+    return `/projects/${organization.slug}/${projectSlug}/events/${eventId}/apple-crash-report?minified=${minified}`;
   }
 
   getContent(isNative: boolean, exc: any) {
@@ -105,7 +105,7 @@ class RawContent extends React.Component<Props, State> {
         downloadButton = (
           <DownloadBtnWrapper>
             <Button
-              size="xsmall"
+              size="xs"
               href={`${api.baseUrl}${appleCrashReportEndpoint}&download=1`}
             >
               {t('Download')}
@@ -152,19 +152,15 @@ class RawContent extends React.Component<Props, State> {
   }
 
   render() {
-    const {values, organization} = this.props;
+    const {values} = this.props;
     const isNative = this.isNative();
 
     if (!values) {
       return null;
     }
 
-    const hasNativeStackTraceV2 = !!organization?.features?.includes(
-      'native-stack-trace-v2'
-    );
-
     return (
-      <React.Fragment>
+      <Fragment>
         {values.map((exc, excIdx) => {
           const {downloadButton, content} = this.getContent(isNative, exc);
           if (!downloadButton && !content) {
@@ -172,12 +168,11 @@ class RawContent extends React.Component<Props, State> {
           }
           return (
             <div key={excIdx} data-test-id="raw-stack-trace">
-              {!hasNativeStackTraceV2 ? downloadButton : null}
               <pre className="traceback plain">{content}</pre>
             </div>
           );
         })}
-      </React.Fragment>
+      </Fragment>
     );
   }
 }

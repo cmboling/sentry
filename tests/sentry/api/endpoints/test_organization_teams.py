@@ -1,11 +1,14 @@
-from django.urls import reverse
-from exam import fixture
+from functools import cached_property
 
-from sentry.models import OrganizationMember, OrganizationMemberTeam, Team
+from django.urls import reverse
+
+from sentry.models import OrganizationMember, OrganizationMemberTeam, ProjectTeam, Team
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 from sentry.types.integrations import get_provider_string
 
 
+@region_silo_test(stable=True)
 class OrganizationTeamsListTest(APITestCase):
     def test_simple(self):
         user = self.create_user()
@@ -140,7 +143,24 @@ class OrganizationTeamsListTest(APITestCase):
         assert response.status_code == 200, response.content
         assert len(response.data) == 2
 
+    def test_hanging_project_team(self):
+        user = self.create_user()
+        org = self.create_organization(owner=self.user)
+        external_org = self.create_organization()
+        team1 = self.create_team(organization=org, name="foo")
+        external_team = self.create_team(organization=external_org, name="bar")
+        self.create_member(organization=org, user=user, has_global_access=False, teams=[team1])
 
+        ProjectTeam.objects.create(project=self.project, team=team1)
+        ProjectTeam.objects.create(project=self.project, team=external_team)
+
+        self.login_as(user=user)
+        path = f"/api/0/organizations/{org.slug}/teams/"
+        response = self.client.get(path)
+        assert response.status_code == 200, response.content
+
+
+@region_silo_test  # TODO(hybrid-cloud): stable blocked on org members
 class OrganizationTeamsCreateTest(APITestCase):
     endpoint = "sentry-api-0-organization-teams"
     method = "post"
@@ -149,7 +169,7 @@ class OrganizationTeamsCreateTest(APITestCase):
         super().setUp()
         self.login_as(user=self.user)
 
-    @fixture
+    @cached_property
     def path(self):
         return reverse("sentry-api-0-organization-teams", args=[self.organization.slug])
 
@@ -157,20 +177,21 @@ class OrganizationTeamsCreateTest(APITestCase):
         user = self.create_user()
         self.login_as(user=user)
 
-        self.get_valid_response(self.organization.slug, status_code=403)
+        self.get_error_response(self.organization.slug, status_code=403)
 
     def test_missing_params(self):
-        resp = self.get_valid_response(self.organization.slug, status_code=400)
+        resp = self.get_error_response(self.organization.slug, status_code=400)
         assert b"Name or slug is required" in resp.content
 
     def test_valid_params(self):
-        resp = self.get_valid_response(
+        resp = self.get_success_response(
             self.organization.slug, name="hello world", slug="foobar", status_code=201
         )
 
         team = Team.objects.get(id=resp.data["id"])
         assert team.name == "hello world"
         assert team.slug == "foobar"
+        assert not team.idp_provisioned
         assert team.organization == self.organization
 
         member = OrganizationMember.objects.get(user=self.user, organization=self.organization)
@@ -180,27 +201,39 @@ class OrganizationTeamsCreateTest(APITestCase):
         ).exists()
 
     def test_without_slug(self):
-        resp = self.get_valid_response(self.organization.slug, name="hello world", status_code=201)
+        resp = self.get_success_response(
+            self.organization.slug, name="hello world", status_code=201
+        )
 
         team = Team.objects.get(id=resp.data["id"])
         assert team.slug == "hello-world"
 
     def test_without_name(self):
-        resp = self.get_valid_response(self.organization.slug, slug="example-slug", status_code=201)
+        resp = self.get_success_response(
+            self.organization.slug, slug="example-slug", status_code=201
+        )
 
         team = Team.objects.get(id=resp.data["id"])
         assert team.slug == "example-slug"
         assert team.name == "example-slug"
 
+    def test_with_idp_provisioned(self):
+        resp = self.get_success_response(
+            self.organization.slug, name="hello world", idp_provisioned=True, status_code=201
+        )
+
+        team = Team.objects.get(id=resp.data["id"])
+        assert team.idp_provisioned
+
     def test_duplicate(self):
-        self.get_valid_response(
+        self.get_success_response(
             self.organization.slug, name="hello world", slug="foobar", status_code=201
         )
-        self.get_valid_response(
+        self.get_error_response(
             self.organization.slug, name="hello world", slug="foobar", status_code=409
         )
 
     def test_name_too_long(self):
-        self.get_valid_response(
+        self.get_error_response(
             self.organization.slug, name="x" * 65, slug="xxxxxxx", status_code=400
         )

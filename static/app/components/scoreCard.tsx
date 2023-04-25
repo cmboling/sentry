@@ -1,30 +1,40 @@
-import * as React from 'react';
+import {Theme} from '@emotion/react';
 import styled from '@emotion/styled';
 
 import {Panel} from 'sentry/components/panels';
 import QuestionTooltip from 'sentry/components/questionTooltip';
 import TextOverflow from 'sentry/components/textOverflow';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {defined} from 'sentry/utils';
-import {Theme} from 'sentry/utils/theme';
 
-type Props = {
+export type ScoreCardProps = {
   title: React.ReactNode;
   className?: string;
   help?: React.ReactNode;
+  renderOpenButton?: () => React.ReactNode;
   score?: React.ReactNode;
   trend?: React.ReactNode;
   trendStatus?: 'good' | 'bad';
 };
 
-function ScoreCard({title, score, help, trend, trendStatus, className}: Props) {
+function ScoreCard({
+  title,
+  score,
+  help,
+  trend,
+  trendStatus,
+  className,
+  renderOpenButton,
+}: ScoreCardProps) {
   return (
     <ScorePanel className={className}>
-      <HeaderTitle>
-        <Title>{title}</Title>
-        {help && <QuestionTooltip title={help} size="sm" position="top" />}
-      </HeaderTitle>
+      <HeaderWrapper>
+        <HeaderTitle>
+          <Title>{title}</Title>
+          {help && <QuestionTooltip title={help} size="sm" position="top" />}
+        </HeaderTitle>
+        {renderOpenButton?.()}
+      </HeaderWrapper>
 
       <ScoreWrapper>
         <Score>{score ?? '\u2014'}</Score>
@@ -41,11 +51,11 @@ function ScoreCard({title, score, help, trend, trendStatus, className}: Props) {
 function getTrendColor(p: TrendProps & {theme: Theme}) {
   switch (p.trendStatus) {
     case 'good':
-      return p.theme.green300;
+      return p.theme.successText;
     case 'bad':
-      return p.theme.red300;
+      return p.theme.errorText;
     default:
-      return p.theme.gray300;
+      return p.theme.subText;
   }
 }
 
@@ -66,9 +76,17 @@ export const HeaderTitle = styled('div')`
 `;
 
 export const Title = styled('div')`
+  font-size: ${p => p.theme.fontSizeLarge};
   color: ${p => p.theme.headingColor};
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
   font-weight: 600;
+`;
+
+const HeaderWrapper = styled('div')`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
 `;
 
 export const ScoreWrapper = styled('div')`
@@ -86,7 +104,7 @@ export const Score = styled('span')`
   white-space: nowrap;
 `;
 
-type TrendProps = {trendStatus: Props['trendStatus']};
+type TrendProps = {trendStatus: ScoreCardProps['trendStatus']};
 
 export const Trend = styled('div')<TrendProps>`
   color: ${getTrendColor};

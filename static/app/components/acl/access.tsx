@@ -1,6 +1,6 @@
-import * as React from 'react';
+import {Component} from 'react';
 
-import Alert from 'sentry/components/alert';
+import {Alert} from 'sentry/components/alert';
 import {t} from 'sentry/locale';
 import {Config, Organization, Scope} from 'sentry/types';
 import {isRenderFunc} from 'sentry/utils/isRenderFunc';
@@ -71,7 +71,7 @@ type Props = {
 /**
  * Component to handle access restrictions.
  */
-class Access extends React.Component<Props> {
+class Access extends Component<Props> {
   static defaultProps = defaultProps;
 
   render() {

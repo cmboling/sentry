@@ -1,7 +1,4 @@
-from sentry.models import Commit, CommitAuthor, GroupLink, PullRequest
-from sentry.utils import json
-
-from .testutils import (
+from fixtures.gitlab import (
     EXTERNAL_ID,
     MERGE_REQUEST_OPENED_EVENT,
     PUSH_EVENT,
@@ -9,6 +6,8 @@ from .testutils import (
     WEBHOOK_TOKEN,
     GitLabTestCase,
 )
+from sentry.models import Commit, CommitAuthor, GroupLink, PullRequest
+from sentry.utils import json
 
 
 class WebhookTest(GitLabTestCase):
@@ -36,6 +35,19 @@ class WebhookTest(GitLabTestCase):
     def test_get(self):
         response = self.client.get(self.url)
         assert response.status_code == 405
+        assert response.reason_phrase == "HTTP method not supported."
+
+    def test_missing_x_gitlab_token(self):
+        response = self.client.post(
+            self.url,
+            data=PUSH_EVENT,
+            content_type="application/json",
+            HTTP_X_GITLAB_EVENT="lol",
+        )
+        assert response.status_code == 400
+        assert (
+            response.reason_phrase == "The customer needs to set a Secret Token in their webhook."
+        )
 
     def test_unknown_event(self):
         response = self.client.post(
@@ -46,6 +58,10 @@ class WebhookTest(GitLabTestCase):
             HTTP_X_GITLAB_EVENT="lol",
         )
         assert response.status_code == 400
+        assert (
+            response.reason_phrase
+            == "The customer has edited the webhook in Gitlab to include other types of events."
+        )
 
     def test_invalid_token(self):
         response = self.client.post(
@@ -56,6 +72,7 @@ class WebhookTest(GitLabTestCase):
             HTTP_X_GITLAB_EVENT="Push Hook",
         )
         assert response.status_code == 400
+        assert response.reason_phrase == "The customer's Secret Token is malformed."
 
     def test_valid_id_invalid_secret(self):
         response = self.client.post(
@@ -66,6 +83,10 @@ class WebhookTest(GitLabTestCase):
             HTTP_X_GITLAB_EVENT="Push Hook",
         )
         assert response.status_code == 400
+        assert (
+            response.reason_phrase
+            == "Gitlab's webhook secret does not match. Refresh token (or re-install the integration) by following this https://docs.sentry.io/product/integrations/integration-platform/public-integration/#refreshing-tokens."
+        )
 
     def test_invalid_payload(self):
         response = self.client.post(
@@ -76,6 +97,7 @@ class WebhookTest(GitLabTestCase):
             HTTP_X_GITLAB_EVENT="Push Hook",
         )
         assert response.status_code == 400
+        assert response.reason_phrase == "Data received is not JSON."
 
     def test_push_event_missing_repo(self):
         response = self.client.post(

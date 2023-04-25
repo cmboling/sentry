@@ -1,44 +1,41 @@
-import {Component} from 'react';
-
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import TeamKeyTransaction, {
   TitleProps,
 } from 'sentry/components/performance/teamKeyTransaction';
 import * as TeamKeyTransactionManager from 'sentry/components/performance/teamKeyTransactionsManager';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {IconStar} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import {Organization, Project} from 'sentry/types';
 import {defined} from 'sentry/utils';
 import withProjects from 'sentry/utils/withProjects';
 
-class TitleStar extends Component<TitleProps> {
-  render() {
-    const {isOpen, keyedTeams, initialValue, ...props} = this.props;
-    const keyedTeamsCount = keyedTeams?.length ?? initialValue ?? 0;
-    const star = (
-      <IconStar
-        color={keyedTeamsCount ? 'yellow300' : 'gray200'}
-        isSolid={keyedTeamsCount > 0}
-        data-test-id="team-key-transaction-column"
-      />
-    );
-    const button = (
-      <Button
-        {...props}
-        icon={star}
-        borderless
-        size="zero"
-        aria-label={t('Toggle star for team')}
-      />
-    );
+function TitleStar({isOpen, keyedTeams, initialValue, ...props}: TitleProps) {
+  const keyedTeamsCount = keyedTeams?.length ?? initialValue ?? 0;
+  const star = (
+    <IconStar
+      color={keyedTeamsCount ? 'yellow400' : 'gray200'}
+      isSolid={keyedTeamsCount > 0}
+      data-test-id="team-key-transaction-column"
+    />
+  );
 
-    if (!isOpen && keyedTeams?.length) {
-      const teamSlugs = keyedTeams.map(({slug}) => slug).join(', ');
-      return <Tooltip title={teamSlugs}>{button}</Tooltip>;
-    }
-    return button;
+  const button = (
+    <Button
+      {...props}
+      icon={star}
+      borderless
+      size="zero"
+      aria-label={t('Toggle star for team')}
+    />
+  );
+
+  if (!isOpen && keyedTeams?.length) {
+    const teamSlugs = keyedTeams.map(({slug}) => slug).join(', ');
+    return <Tooltip title={teamSlugs}>{button}</Tooltip>;
   }
+
+  return button;
 }
 
 type BaseProps = {

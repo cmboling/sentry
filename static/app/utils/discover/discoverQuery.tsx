@@ -1,10 +1,10 @@
-import {MetaType} from 'sentry/utils/discover/eventView';
-import withApi from 'sentry/utils/withApi';
+import {EventsMetaType, MetaType} from 'sentry/utils/discover/eventView';
 import {TransactionThresholdMetric} from 'sentry/views/performance/transactionSummary/transactionThresholdModal';
 
 import GenericDiscoverQuery, {
   DiscoverQueryProps,
   GenericChildrenProps,
+  useGenericDiscoverQuery,
 } from './genericDiscoverQuery';
 
 /**
@@ -21,6 +21,14 @@ export type TableDataRow = {
 export type TableData = {
   data: Array<TableDataRow>;
   meta?: MetaType;
+};
+
+/**
+ * A DiscoverQuery result including rows and metadata from the events endpoint.
+ */
+export type EventsTableData = {
+  data: Array<TableDataRow>;
+  meta?: EventsMetaType;
 };
 
 export type TableDataWithTitle = TableData & {title: string};
@@ -47,13 +55,38 @@ function shouldRefetchData(
 }
 
 function DiscoverQuery(props: DiscoverQueryComponentProps) {
+  const afterFetch = (data, _) => {
+    const {fields, ...otherMeta} = data.meta ?? {};
+    return {
+      ...data,
+      meta: {...fields, ...otherMeta},
+    };
+  };
   return (
     <GenericDiscoverQuery<TableData, DiscoverQueryPropsWithThresholds>
-      route="eventsv2"
+      route="events"
       shouldRefetchData={shouldRefetchData}
+      afterFetch={afterFetch}
       {...props}
     />
   );
 }
 
-export default withApi(DiscoverQuery);
+export function useDiscoverQuery(props: Omit<DiscoverQueryComponentProps, 'children'>) {
+  const afterFetch = (data, _) => {
+    const {fields, ...otherMeta} = data.meta ?? {};
+    return {
+      ...data,
+      meta: {...fields, ...otherMeta},
+    };
+  };
+
+  return useGenericDiscoverQuery<TableData, DiscoverQueryPropsWithThresholds>({
+    route: 'events',
+    shouldRefetchData,
+    afterFetch,
+    ...props,
+  });
+}
+
+export default DiscoverQuery;

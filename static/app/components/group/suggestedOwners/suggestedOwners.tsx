@@ -1,33 +1,17 @@
-import * as React from 'react';
-
 import {assignToActor, assignToUser} from 'sentry/actionCreators/group';
-import {promptsCheck, promptsUpdate} from 'sentry/actionCreators/prompts';
-import {Client} from 'sentry/api';
 import AsyncComponent from 'sentry/components/asyncComponent';
-import {
-  Actor,
-  CodeOwner,
-  Committer,
-  Group,
-  Organization,
-  Project,
-  RepositoryProjectPathConfig,
-} from 'sentry/types';
-import {Event} from 'sentry/types/event';
-import {trackIntegrationAnalytics} from 'sentry/utils/integrationUtil';
-import {promptIsDismissed} from 'sentry/utils/promptIsDismissed';
-import withApi from 'sentry/utils/withApi';
-import withCommitters from 'sentry/utils/withCommitters';
-import withOrganization from 'sentry/utils/withOrganization';
+import type {Actor, Committer, Group, Organization, Project} from 'sentry/types';
+import type {Event} from 'sentry/types/event';
+import {defined} from 'sentry/utils';
+import useCommitters from 'sentry/utils/useCommitters';
+import useOrganization from 'sentry/utils/useOrganization';
 
 import {findMatchedRules, Rules} from './findMatchedRules';
-import {OwnershipRules} from './ownershipRules';
 import {SuggestedAssignees} from './suggestedAssignees';
 
 type OwnerList = React.ComponentProps<typeof SuggestedAssignees>['owners'];
 
 type Props = {
-  api: Client;
   event: Event;
   group: Group;
   organization: Organization;
@@ -36,10 +20,7 @@ type Props = {
 } & AsyncComponent['props'];
 
 type State = {
-  codeMappings: RepositoryProjectPathConfig[];
-  codeowners: CodeOwner[];
-  event_owners: {owners: Array<Actor>; rules: Rules};
-  isDismissed: boolean;
+  eventOwners: {owners: Array<Actor>; rules: Rules} | null;
 } & AsyncComponent['state'];
 
 class SuggestedOwners extends AsyncComponent<Props, State> {
@@ -47,9 +28,6 @@ class SuggestedOwners extends AsyncComponent<Props, State> {
     return {
       ...super.getDefaultState(),
       event: {rules: [], owners: []},
-      codeowners: [],
-      isDismissed: true,
-      codeMappings: [],
     };
   }
 
@@ -57,27 +35,12 @@ class SuggestedOwners extends AsyncComponent<Props, State> {
     const {project, organization, event} = this.props;
     const endpoints = [
       [
-        'event_owners',
+        'eventOwners',
         `/projects/${organization.slug}/${project.slug}/events/${event.id}/owners/`,
       ],
-      [
-        'codeMappings',
-        `/organizations/${organization.slug}/code-mappings/`,
-        {query: {project: -1}},
-      ],
     ];
-    if (organization.features.includes('integrations-codeowners')) {
-      endpoints.push([
-        `codeowners`,
-        `/projects/${organization.slug}/${project.slug}/codeowners/`,
-      ]);
-    }
 
     return endpoints as ReturnType<AsyncComponent['getEndpoints']>;
-  }
-
-  async onLoadAllEndpointsSuccess() {
-    await this.checkCodeOwnersPrompt();
   }
 
   componentDidUpdate(prevProps: Props) {
@@ -95,65 +58,14 @@ class SuggestedOwners extends AsyncComponent<Props, State> {
     }
   }
 
-  async checkCodeOwnersPrompt() {
-    const {api, organization, project} = this.props;
-    const {codeMappings} = this.state;
-
-    // Show CTA to all orgs that have Stack Trace Linking setup.
-    if (!codeMappings.length) {
-      return;
-    }
-    this.setState({loading: true});
-    // check our prompt backend
-    const promptData = await promptsCheck(api, {
-      organizationId: organization.id,
-      projectId: project.id,
-      feature: 'code_owners',
-    });
-    const isDismissed = promptIsDismissed(promptData, 30);
-    this.setState({isDismissed, loading: false}, () => {
-      if (!isDismissed) {
-        // now record the results
-        trackIntegrationAnalytics(
-          'integrations.show_code_owners_prompt',
-          {
-            view: 'stacktrace_issue_details',
-            project_id: project.id,
-            organization,
-          },
-          {startSession: true}
-        );
-      }
-    });
-  }
-
-  handleCTAClose = () => {
-    const {api, organization, project} = this.props;
-
-    promptsUpdate(api, {
-      organizationId: organization.id,
-      projectId: project.id,
-      feature: 'code_owners',
-      status: 'dismissed',
-    });
-
-    this.setState({isDismissed: true}, () =>
-      trackIntegrationAnalytics('integrations.dismissed_code_owners_prompt', {
-        view: 'stacktrace_issue_details',
-        project_id: project.id,
-        organization,
-      })
-    );
-  };
-
   /**
-   * Combine the commiter and ownership data into a single array, merging
+   * Combine the committer and ownership data into a single array, merging
    * users who are both owners based on having commits, and owners matching
    * project ownership rules into one array.
    *
-   * The return array will include objects of the format:
+   * ### The return array will include objects of the format:
    *
-   * {
+   * ```ts
    *   actor: <
    *    type,              # Either user or team
    *    SentryTypes.User,  # API expanded user object
@@ -161,29 +73,35 @@ class SuggestedOwners extends AsyncComponent<Props, State> {
    *    {email, name}      # Unidentified user (from commits)
    *    {id, name},        # Sentry team (check `type`)
    *   >,
+   * ```
    *
-   *   # One or both of commits and rules will be present
+   * ### One or both of commits and rules will be present
    *
+   * ```ts
    *   commits: [...]  # List of commits made by this owner
    *   rules:   [...]  # Project rules matched for this owner
-   * }
+   * ```
    */
-  getOwnerList() {
+  getOwnerList(): OwnerList {
     const committers = this.props.committers ?? [];
-    const owners = committers.map(commiter => ({
-      actor: {...commiter.author, type: 'user' as Actor['type']},
+    const owners: OwnerList = committers.map(commiter => ({
+      actor: {...commiter.author, type: 'user'},
       commits: commiter.commits,
-    })) as OwnerList;
+      source: 'suspectCommit',
+    }));
 
-    this.state.event_owners.owners.forEach(owner => {
-      const normalizedOwner = {
+    this.state.eventOwners?.owners.forEach(owner => {
+      const matchingRule = findMatchedRules(this.state.eventOwners?.rules || [], owner);
+      const normalizedOwner: OwnerList[0] = {
         actor: owner,
-        rules: findMatchedRules(this.state.event_owners.rules || [], owner),
+        rules: matchingRule,
+        source: matchingRule?.[0] === 'codeowners' ? 'codeowners' : 'projectOwnership',
       };
 
-      const existingIdx = owners.findIndex(o =>
-        committers.length === 0 ? o.actor === owner : o.actor.email === owner.email
-      );
+      const existingIdx =
+        committers.length > 0 && owner.email && owner.type === 'user'
+          ? owners.findIndex(o => o.actor.email === owner.email)
+          : -1;
       if (existingIdx > -1) {
         owners[existingIdx] = {...normalizedOwner, ...owners[existingIdx]};
         return;
@@ -191,10 +109,15 @@ class SuggestedOwners extends AsyncComponent<Props, State> {
       owners.push(normalizedOwner);
     });
 
-    return owners;
+    // Do not display current assignee
+    const assignedTo = this.props.group.assignedTo;
+    return owners.filter(
+      owner =>
+        !(owner.actor.type === assignedTo?.type && owner.actor.id === assignedTo?.id)
+    );
   }
 
-  handleAssign = (actor: Actor) => () => {
+  handleAssign = (actor: Actor) => {
     if (actor.id === undefined) {
       return;
     }
@@ -221,25 +144,49 @@ class SuggestedOwners extends AsyncComponent<Props, State> {
     }
   };
 
+  renderLoading() {
+    return this.renderBody();
+  }
+
   renderBody() {
-    const {organization, project, group} = this.props;
-    const {codeowners, isDismissed} = this.state;
+    const {organization, group} = this.props;
+    const {loading} = this.state;
     const owners = this.getOwnerList();
+
     return (
-      <React.Fragment>
-        {owners.length > 0 && (
-          <SuggestedAssignees owners={owners} onAssign={this.handleAssign} />
-        )}
-        <OwnershipRules
-          issueId={group.id}
-          project={project}
-          organization={organization}
-          codeowners={codeowners}
-          isDismissed={isDismissed}
-          handleCTAClose={this.handleCTAClose}
-        />
-      </React.Fragment>
+      <SuggestedAssignees
+        group={group}
+        organization={organization}
+        owners={owners}
+        projectId={group.project.id}
+        onAssign={this.handleAssign}
+        loading={loading}
+      />
     );
   }
 }
-export default withApi(withOrganization(withCommitters(SuggestedOwners)));
+
+function SuggestedOwnersWrapper(props: Omit<Props, 'committers' | 'organization'>) {
+  const organization = useOrganization();
+  const {data} = useCommitters(
+    {
+      eventId: props.event.id,
+      projectSlug: props.project.slug,
+    },
+    {notifyOnChangeProps: ['data'], enabled: !defined(props.group.assignedTo)}
+  );
+
+  if (defined(props.group.assignedTo)) {
+    return null;
+  }
+
+  return (
+    <SuggestedOwners
+      organization={organization}
+      committers={data?.committers ?? []}
+      {...props}
+    />
+  );
+}
+
+export default SuggestedOwnersWrapper;

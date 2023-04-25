@@ -1,23 +1,15 @@
-import * as React from 'react';
+import {forwardRef} from 'react';
 import styled from '@emotion/styled';
 
-import Button, {ButtonProps} from 'sentry/components/button';
+import {Button, ButtonLabel, ButtonProps} from 'sentry/components/button';
 import {IconChevron} from 'sentry/icons';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 
-interface DropdownButtonProps extends Omit<ButtonProps, 'prefix'> {
-  /**
-   * Whether the menu associated with this button is visually detached.
-   */
-  detached?: boolean;
+export interface DropdownButtonProps extends Omit<ButtonProps, 'type' | 'prefix'> {
   /**
    * Forward a ref to the button's root
    */
-  forwardedRef?: React.Ref<typeof Button>;
-  /**
-   * Should the bottom border become transparent when open?
-   */
-  hideBottomBorder?: boolean;
+  forwardedRef?: React.ForwardedRef<HTMLElement>;
   /**
    * Whether or not the button should render as open
    */
@@ -27,106 +19,71 @@ interface DropdownButtonProps extends Omit<ButtonProps, 'prefix'> {
    */
   prefix?: React.ReactNode;
   /**
-   * Button color
-   */
-  priority?: 'default' | 'primary' | 'form';
-  /**
-   * Align chevron to the right of dropdown button
-   */
-  rightAlignChevron?: boolean;
-  /**
    * Should a chevron icon be shown?
    */
   showChevron?: boolean;
 }
 
-const DropdownButton = ({
+function DropdownButton({
   children,
-  forwardedRef,
   prefix,
   isOpen = false,
-  showChevron = false,
-  hideBottomBorder = true,
-  detached = false,
+  showChevron = true,
   disabled = false,
-  priority = 'form',
-  rightAlignChevron = false,
+  forwardedRef,
   ...props
-}: DropdownButtonProps) => {
+}: DropdownButtonProps) {
   return (
     <StyledButton
-      {...props}
-      type="button"
-      aria-haspopup="listbox"
+      aria-haspopup="true"
+      aria-expanded={isOpen}
+      hasPrefix={!!prefix}
       disabled={disabled}
-      priority={priority}
       isOpen={isOpen}
-      hideBottomBorder={hideBottomBorder}
-      detached={detached}
       ref={forwardedRef}
+      {...props}
     >
       {prefix && <LabelText>{prefix}</LabelText>}
       {children}
       {showChevron && (
-        <StyledChevron
-          rightAlignChevron={rightAlignChevron}
-          size="xs"
-          direction={isOpen ? 'up' : 'down'}
-        />
+        <ChevronWrap>
+          <IconChevron size="xs" direction={isOpen ? 'up' : 'down'} aria-hidden="true" />
+        </ChevronWrap>
       )}
     </StyledButton>
   );
-};
+}
 
-DropdownButton.defaultProps = {
-  showChevron: true,
-};
-
-const StyledChevron = styled(IconChevron, {
-  shouldForwardProp: prop => prop !== 'rightAlignChevron',
-})<{
-  rightAlignChevron: boolean;
-}>`
-  margin-left: 0.33em;
-
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
-    position: ${p => p.rightAlignChevron && 'absolute'};
-    right: ${p => p.rightAlignChevron && `${space(2)}`};
-  }
+const ChevronWrap = styled('div')`
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  padding-left: ${space(0.75)};
+  flex-shrink: 0;
 `;
 
 const StyledButton = styled(Button)<
-  Required<
-    Pick<
-      DropdownButtonProps,
-      'isOpen' | 'disabled' | 'hideBottomBorder' | 'detached' | 'priority'
-    >
-  >
+  Required<Pick<DropdownButtonProps, 'isOpen' | 'disabled'>> & {
+    hasPrefix: boolean;
+  }
 >`
-  border-bottom-right-radius: ${p =>
-    p.isOpen && !p.detached ? 0 : p.theme.borderRadius};
-  border-bottom-left-radius: ${p => (p.isOpen && !p.detached ? 0 : p.theme.borderRadius)};
   position: relative;
+  max-width: 100%;
   z-index: 2;
 
-  ${p => (p.isOpen || p.disabled) && 'box-shadow: none'};
-
-  &,
-  &:active,
-  &:focus,
-  &:hover {
-    ${p => p.isOpen && p.hideBottomBorder && `border-bottom-color: transparent;`}
-  }
+  ${p => (p.isOpen || p.disabled) && 'box-shadow: none;'}
+  ${p => p.hasPrefix && `${ButtonLabel} {font-weight: 400;}`}
 `;
 
 const LabelText = styled('span')`
-  font-weight: 400;
-  padding-right: ${space(0.75)};
   &:after {
     content: ':';
   }
+
+  font-weight: 600;
+  padding-right: ${space(0.75)};
 `;
 
-export default React.forwardRef<typeof Button, DropdownButtonProps>((props, ref) => (
+export default forwardRef<HTMLElement, DropdownButtonProps>((props, ref) => (
   <DropdownButton forwardedRef={ref} {...props} />
 ));

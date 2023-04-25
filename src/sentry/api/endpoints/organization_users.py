@@ -2,13 +2,14 @@ import sentry_sdk
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry.api.base import EnvironmentMixin
+from sentry.api.base import EnvironmentMixin, region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models import OrganizationMemberWithProjectsSerializer
 from sentry.models import OrganizationMember, OrganizationMemberTeam, ProjectTeam
 
 
+@region_silo_endpoint
 class OrganizationUsersEndpoint(OrganizationEndpoint, EnvironmentMixin):
     def get(self, request: Request, organization) -> Response:
         """
@@ -36,11 +37,9 @@ class OrganizationUsersEndpoint(OrganizationEndpoint, EnvironmentMixin):
                     ).values_list("organizationmember_id", flat=True),
                 )
                 .select_related("user")
-                .prefetch_related(
-                    "teams", "teams__projectteam_set", "teams__projectteam_set__project"
-                )
                 .order_by("user__email")
             )
+
             organization_members = list(qs)
 
             span.set_data("Project Count", len(projects))
@@ -51,7 +50,7 @@ class OrganizationUsersEndpoint(OrganizationEndpoint, EnvironmentMixin):
                 organization_members,
                 request.user,
                 serializer=OrganizationMemberWithProjectsSerializer(
-                    project_ids=[p.id for p in projects]
+                    projects=projects,
                 ),
             )
         )

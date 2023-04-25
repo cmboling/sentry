@@ -1,15 +1,15 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
 import Access from 'sentry/components/acl/access';
 import AsyncComponent from 'sentry/components/asyncComponent';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import CircleIndicator from 'sentry/components/circleIndicator';
 import SentryAppIcon from 'sentry/components/sentryAppIcon';
 import Tag from 'sentry/components/tag';
 import {IconFlag} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {IntegrationFeature, Organization, SentryApp} from 'sentry/types';
 import {toPermissions} from 'sentry/utils/consolidatedScopes';
 import {
@@ -98,7 +98,7 @@ export default class SentryAppDetailsModal extends AsyncComponent<Props, State> 
     }
 
     return (
-      <React.Fragment>
+      <Fragment>
         <Title>Permissions</Title>
         {permissions.read.length > 0 && (
           <Permission>
@@ -134,7 +134,7 @@ export default class SentryAppDetailsModal extends AsyncComponent<Props, State> 
             </Text>
           </Permission>
         )}
-      </React.Fragment>
+      </Fragment>
     );
   }
 
@@ -155,7 +155,7 @@ export default class SentryAppDetailsModal extends AsyncComponent<Props, State> 
     const featureProps = {organization, features};
 
     return (
-      <React.Fragment>
+      <Fragment>
         <Heading>
           <SentryAppIcon sentryApp={sentryApp} size={50} />
           <HeadingInfo>
@@ -167,13 +167,13 @@ export default class SentryAppDetailsModal extends AsyncComponent<Props, State> 
         <FeatureList {...featureProps} provider={{...sentryApp, key: sentryApp.slug}} />
         <IntegrationFeatures {...featureProps}>
           {({disabled, disabledReason}) => (
-            <React.Fragment>
+            <Fragment>
               {!disabled && this.renderPermissions()}
               <Footer>
                 <Author>{t('Authored By %s', sentryApp.author)}</Author>
                 <div>
                   {disabled && <DisabledNotice reason={disabledReason} />}
-                  <Button size="small" onClick={closeModal}>
+                  <Button size="sm" onClick={closeModal}>
                     {t('Cancel')}
                   </Button>
 
@@ -181,7 +181,7 @@ export default class SentryAppDetailsModal extends AsyncComponent<Props, State> 
                     {({hasAccess}) =>
                       hasAccess && (
                         <Button
-                          size="small"
+                          size="sm"
                           priority="primary"
                           disabled={isInstalled || disabled}
                           onClick={() => this.onInstall()}
@@ -195,10 +195,10 @@ export default class SentryAppDetailsModal extends AsyncComponent<Props, State> 
                   </Access>
                 </div>
               </Footer>
-            </React.Fragment>
+            </Fragment>
           )}
         </IntegrationFeatures>
-      </React.Fragment>
+      </Fragment>
     );
   }
 }
@@ -236,7 +236,7 @@ const Author = styled('div')`
 
 const DisabledNotice = styled(({reason, ...p}: {reason: React.ReactNode}) => (
   <div {...p}>
-    <IconFlag color="red300" size="1.5em" />
+    <IconFlag color="errorText" size="md" />
     {reason}
   </div>
 ))`
@@ -244,7 +244,7 @@ const DisabledNotice = styled(({reason, ...p}: {reason: React.ReactNode}) => (
   align-items: center;
   flex: 1;
   grid-template-columns: max-content 1fr;
-  color: ${p => p.theme.red300};
+  color: ${p => p.theme.errorText};
   font-size: 0.9em;
 `;
 

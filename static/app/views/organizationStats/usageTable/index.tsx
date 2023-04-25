@@ -1,25 +1,24 @@
-import * as React from 'react';
+import {Component} from 'react';
 import styled from '@emotion/styled';
 
 import ErrorPanel from 'sentry/components/charts/errorPanel';
+import EmptyMessage from 'sentry/components/emptyMessage';
 import IdBadge from 'sentry/components/idBadge';
 import ExternalLink from 'sentry/components/links/externalLink';
 import Link from 'sentry/components/links/link';
-import {SettingsIconLink} from 'sentry/components/organizations/headerItem';
 import {Panel} from 'sentry/components/panels';
 import PanelTable from 'sentry/components/panels/panelTable';
 import {IconSettings, IconWarning} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import {DataCategory, Project} from 'sentry/types';
-import theme from 'sentry/utils/theme';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
+import {space} from 'sentry/styles/space';
+import {DataCategoryInfo, Project} from 'sentry/types';
 
-import {formatUsageWithUnits} from '../utils';
+import {formatUsageWithUnits, getFormatUsageOptions} from '../utils';
 
 const DOCS_URL = 'https://docs.sentry.io/product/accounts/membership/#restricting-access';
 
 type Props = {
-  dataCategory: DataCategory;
+  dataCategory: DataCategoryInfo['plural'];
   headers: React.ReactNode[];
   usageStats: TableStat[];
   errors?: Record<string, Error>;
@@ -40,21 +39,12 @@ export type TableStat = {
   total: number;
 };
 
-class UsageTable extends React.Component<Props> {
-  get formatUsageOptions() {
-    const {dataCategory} = this.props;
-
-    return {
-      isAbbreviated: dataCategory !== DataCategory.ATTACHMENTS,
-      useUnitScaling: dataCategory === DataCategory.ATTACHMENTS,
-    };
-  }
-
+class UsageTable extends Component<Props> {
   getErrorMessage = errorMessage => {
     if (errorMessage.projectStats.responseJSON.detail === 'No projects available') {
       return (
         <EmptyMessage
-          icon={<IconWarning color="gray300" size="48" />}
+          icon={<IconWarning color="gray300" legacySize="48px" />}
           title={t(
             "You don't have access to any projects, or your organization has no projects."
           )}
@@ -64,7 +54,7 @@ class UsageTable extends React.Component<Props> {
         />
       );
     }
-    return <IconWarning color="gray300" size="48" />;
+    return <IconWarning color="gray300" legacySize="48px" />;
   };
 
   renderTableRow(stat: TableStat & {project: Project}) {
@@ -83,20 +73,28 @@ class UsageTable extends React.Component<Props> {
           />
         </Link>
         <SettingsIconLink to={stat.projectSettingsLink}>
-          <IconSettings size={theme.iconSizes.sm} />
+          <IconSettings size="sm" />
         </SettingsIconLink>
       </CellProject>,
       <CellStat key={1}>
-        {formatUsageWithUnits(total, dataCategory, this.formatUsageOptions)}
+        {formatUsageWithUnits(total, dataCategory, getFormatUsageOptions(dataCategory))}
       </CellStat>,
       <CellStat key={2}>
-        {formatUsageWithUnits(accepted, dataCategory, this.formatUsageOptions)}
+        {formatUsageWithUnits(
+          accepted,
+          dataCategory,
+          getFormatUsageOptions(dataCategory)
+        )}
       </CellStat>,
       <CellStat key={3}>
-        {formatUsageWithUnits(filtered, dataCategory, this.formatUsageOptions)}
+        {formatUsageWithUnits(
+          filtered,
+          dataCategory,
+          getFormatUsageOptions(dataCategory)
+        )}
       </CellStat>,
       <CellStat key={4}>
-        {formatUsageWithUnits(dropped, dataCategory, this.formatUsageOptions)}
+        {formatUsageWithUnits(dropped, dataCategory, getFormatUsageOptions(dataCategory))}
       </CellStat>,
     ];
   }
@@ -125,7 +123,7 @@ export default UsageTable;
 const StyledPanelTable = styled(PanelTable)`
   grid-template-columns: repeat(5, auto);
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     grid-template-columns: 1fr repeat(4, minmax(0, auto));
   }
 `;
@@ -146,4 +144,18 @@ const StyledIdBadge = styled(IdBadge)`
   overflow: hidden;
   white-space: nowrap;
   flex-shrink: 1;
+`;
+
+const SettingsIconLink = styled(Link)`
+  color: ${p => p.theme.gray300};
+  align-items: center;
+  display: inline-flex;
+  justify-content: space-between;
+  margin-right: ${space(1.5)};
+  margin-left: ${space(1.0)};
+  transition: 0.5s opacity ease-out;
+
+  &:hover {
+    color: ${p => p.theme.textColor};
+  }
 `;

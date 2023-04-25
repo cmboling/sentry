@@ -1,11 +1,12 @@
 import re
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Set, Tuple, Union
 
 from parsimonious.exceptions import ParseError
 from parsimonious.grammar import Grammar, NodeVisitor
 
 from sentry.exceptions import InvalidSearchQuery
+from sentry.search.events.constants import TOTAL_COUNT_ALIAS, TOTAL_TRANSACTION_DURATION_ALIAS
 
 # prefix on fields so we know they're equations
 EQUATION_PREFIX = "equation|"
@@ -159,6 +160,8 @@ class ArithmeticVisitor(NodeVisitor):
         "measurements.fid",
         "measurements.ttfb",
         "measurements.ttfb.requesttime",
+        TOTAL_COUNT_ALIAS,
+        TOTAL_TRANSACTION_DURATION_ALIAS,
     }
     function_allowlist = {
         "count",
@@ -180,16 +183,18 @@ class ArithmeticVisitor(NodeVisitor):
         "eps",
         "epm",
         "count_miserable",
+        "count_web_vitals",
+        "percentile_range",
     }
 
-    def __init__(self, max_operators: int, use_snql: bool):
+    def __init__(self, max_operators: int, custom_measurements: Optional[Set[str]]):
         super().__init__()
         self.operators: int = 0
         self.terms: int = 0
         self.max_operators = max_operators if max_operators else self.DEFAULT_MAX_OPERATORS
         self.fields: set[str] = set()
         self.functions: set[str] = set()
-        self.use_snql = use_snql
+        self.custom_measurements: set[str] = custom_measurements or set()
 
     def visit_term(self, _, children):
         maybe_factor, remaining_adds = children
@@ -261,7 +266,7 @@ class ArithmeticVisitor(NodeVisitor):
 
     def visit_field_value(self, node, _):
         field = node.text
-        if field not in self.field_allowlist:
+        if field not in self.field_allowlist and field not in self.custom_measurements:
             raise ArithmeticValidationError(f"{field} not allowed in arithmetic")
         self.fields.add(field)
         return field
@@ -273,21 +278,16 @@ class ArithmeticVisitor(NodeVisitor):
         if function_name not in self.function_allowlist:
             raise ArithmeticValidationError(f"{function_name} not allowed in arithmetic")
         self.functions.add(field)
-        if self.use_snql:
-            return field
-        else:
-            # use the alias to reference the function in arithmetic
-            # TODO(snql): once fully on snql no longer need the alias
-            from sentry.search.events.fields import get_function_alias
-
-            return get_function_alias(field)
+        return field
 
     def generic_visit(self, node, children):
         return children or node
 
 
 def parse_arithmetic(
-    equation: str, max_operators: Optional[int] = None, use_snql: Optional[bool] = False
+    equation: str,
+    max_operators: Optional[int] = None,
+    custom_measurements: Optional[Set[str]] = None,
 ) -> Tuple[Operation, List[str], List[str]]:
     """Given a string equation try to parse it into a set of Operations"""
     try:
@@ -296,8 +296,14 @@ def parse_arithmetic(
         raise ArithmeticParseError(
             "Unable to parse your equation, make sure it is well formed arithmetic"
         )
-    visitor = ArithmeticVisitor(max_operators, use_snql)
+    visitor = ArithmeticVisitor(max_operators, custom_measurements)
     result = visitor.visit(tree)
+    # total count is the exception to the no mixing rule
+    if (
+        visitor.fields.intersection({TOTAL_COUNT_ALIAS, TOTAL_TRANSACTION_DURATION_ALIAS})
+        and len(visitor.functions) > 0
+    ):
+        return result, list(visitor.fields), list(visitor.functions)
     if len(visitor.fields) > 0 and len(visitor.functions) > 0:
         raise ArithmeticValidationError("Cannot mix functions and fields in arithmetic")
     if visitor.terms <= 1:
@@ -313,8 +319,8 @@ def resolve_equation_list(
     aggregates_only: Optional[bool] = False,
     auto_add: Optional[bool] = False,
     plain_math: Optional[bool] = False,
-    use_snql: Optional[bool] = False,
-) -> Tuple[List[JsonQueryType], List[str], List[Operation], List[bool]]:
+    custom_measurements: Optional[Set[str]] = None,
+) -> Tuple[List[str], List[Operation], List[bool]]:
     """Given a list of equation strings, resolve them to their equivalent snuba json query formats
     :param equations: list of equations strings that haven't been parsed yet
     :param selected_columns: list of public aliases from the endpoint, can be a mix of fields and aggregates
@@ -323,13 +329,11 @@ def resolve_equation_list(
     :param: auto_add: Optional parameter that will take any fields in the equation that's missing in the
         selected_columns and return a new list with them added
     :param plain_math: Allow equations that don't include any fields or functions, disabled by default
-    :param use_snql: Whether we're resolving for snql or not
     """
-    resolved_equations: List[JsonQueryType] = []
     parsed_equations: List[ParsedEquation] = []
     resolved_columns: List[str] = selected_columns[:]
     for index, equation in enumerate(equations):
-        parsed_equation, fields, functions = parse_arithmetic(equation, use_snql=use_snql)
+        parsed_equation, fields, functions = parse_arithmetic(equation, None, custom_measurements)
 
         if (len(fields) == 0 and len(functions) == 0) and not plain_math:
             raise InvalidSearchQuery("Equations need to include a field or function")
@@ -353,13 +357,10 @@ def resolve_equation_list(
                         f"{function} used in an equation but is not a selected function"
                     )
 
-        # We just jam everything into resolved_equations because the json format can't take arithmetic in the aggregates
-        # field, but can do the aliases in the selected_columns field
-        resolved_equations.append(parsed_equation.to_snuba_json(f"equation[{index}]"))
         # TODO: currently returning "resolved_equations" for the json syntax
         # once we're converted to SnQL this should only return parsed_equations
         parsed_equations.append(ParsedEquation(parsed_equation, len(functions) > 0))
-    return resolved_equations, resolved_columns, parsed_equations
+    return resolved_columns, parsed_equations
 
 
 def is_equation(field: str) -> bool:

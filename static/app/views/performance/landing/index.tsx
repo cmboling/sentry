@@ -1,31 +1,36 @@
 import {FC, Fragment, useEffect, useRef} from 'react';
-import {browserHistory} from 'react-router';
+import {browserHistory, InjectedRouter} from 'react-router';
 import styled from '@emotion/styled';
 import {Location} from 'history';
 
-import {openModal} from 'sentry/actionCreators/modal';
-import Feature from 'sentry/components/acl/feature';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
-import SearchBar from 'sentry/components/events/searchBar';
-import {GlobalSdkUpdateAlert} from 'sentry/components/globalSdkUpdateAlert';
+import DatePageFilter from 'sentry/components/datePageFilter';
+import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import * as Layout from 'sentry/components/layouts/thirds';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
-import PageHeading from 'sentry/components/pageHeading';
+import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
+import {PageHeadingQuestionTooltip} from 'sentry/components/pageHeadingQuestionTooltip';
+import TransactionNameSearchBar from 'sentry/components/performance/searchBar';
 import * as TeamKeyTransactionManager from 'sentry/components/performance/teamKeyTransactionsManager';
-import {MAX_QUERY_LENGTH} from 'sentry/constants';
-import {IconSettings} from 'sentry/icons';
+import ProjectPageFilter from 'sentry/components/projectPageFilter';
+import {TabList, TabPanels, Tabs} from 'sentry/components/tabs';
 import {t} from 'sentry/locale';
-import {PageContent} from 'sentry/styles/organization';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, PageFilters, Project} from 'sentry/types';
 import EventView from 'sentry/utils/discover/eventView';
-import {generateAggregateFields} from 'sentry/utils/discover/fields';
 import {GenericQueryBatcher} from 'sentry/utils/performance/contexts/genericQueryBatcher';
+import {MetricsCardinalityProvider} from 'sentry/utils/performance/contexts/metricsCardinality';
+import {
+  MEPConsumer,
+  MEPSettingProvider,
+  MEPState,
+} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {
   PageErrorAlert,
   PageErrorProvider,
 } from 'sentry/utils/performance/contexts/pageError';
+import {MutableSearch} from 'sentry/utils/tokenizeSearch';
 import useTeams from 'sentry/utils/useTeams';
 
 import Onboarding from '../onboarding';
@@ -37,7 +42,8 @@ import {BackendView} from './views/backendView';
 import {FrontendOtherView} from './views/frontendOtherView';
 import {FrontendPageloadView} from './views/frontendPageloadView';
 import {MobileView} from './views/mobileView';
-import SamplingModal, {modalCss} from './samplingModal';
+import {MetricsDataSwitcher} from './metricsDataSwitcher';
+import {MetricsDataSwitcherAlert} from './metricsDataSwitcherAlert';
 import {
   getDefaultDisplayForPlatform,
   getLandingDisplayFromParam,
@@ -48,14 +54,16 @@ import {
 
 type Props = {
   eventView: EventView;
-  handleSearch: (searchQuery: string) => void;
+  handleSearch: (searchQuery: string, currentMEPState?: MEPState) => void;
   handleTrendsClick: () => void;
   location: Location;
+  onboardingProject: Project | undefined;
   organization: Organization;
   projects: Project[];
+  router: InjectedRouter;
   selection: PageFilters;
   setError: (msg: string | undefined) => void;
-  shouldShowOnboarding: boolean;
+  withStaticFilters: boolean;
 };
 
 const fieldToViewMap: Record<LandingDisplayField, FC<Props>> = {
@@ -74,7 +82,7 @@ export function PerformanceLanding(props: Props) {
     projects,
     handleSearch,
     handleTrendsClick,
-    shouldShowOnboarding,
+    onboardingProject,
   } = props;
 
   const {teams, initiallyLoaded} = useTeams({provideUserTeams: true});
@@ -86,6 +94,7 @@ export function PerformanceLanding(props: Props) {
     eventView
   );
   const landingDisplay = paramLandingDisplay ?? defaultLandingDisplayForProjects;
+  const showOnboarding = onboardingProject !== undefined;
 
   useEffect(() => {
     if (hasMounted.current) {
@@ -97,157 +106,201 @@ export function PerformanceLanding(props: Props) {
         },
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventView.project.join('.')]);
 
   useEffect(() => {
     hasMounted.current = true;
   }, []);
 
-  const filterString = getTransactionSearchQuery(location, eventView.query);
+  const getFreeTextFromQuery = (query: string) => {
+    const conditions = new MutableSearch(query);
+    const transactionValues = conditions.getFilterValues('transaction');
+    if (transactionValues.length) {
+      return transactionValues[0];
+    }
+    if (conditions.freeText.length > 0) {
+      // raw text query will be wrapped in wildcards in generatePerformanceEventView
+      // so no need to wrap it here
+      return conditions.freeText.join(' ');
+    }
+    return '';
+  };
 
-  const showOnboarding = shouldShowOnboarding;
+  const derivedQuery = getTransactionSearchQuery(location, eventView.query);
 
   const ViewComponent = fieldToViewMap[landingDisplay.field];
 
-  const fnOpenModal = () => {
-    openModal(
-      modalProps => (
-        <SamplingModal
-          {...modalProps}
-          organization={organization}
-          eventView={eventView}
-          projects={projects}
-          onApply={() => {}}
-          isMEPEnabled
-        />
-      ),
-      {modalCss, backdrop: 'static'}
-    );
-  };
+  let pageFilters: React.ReactNode = (
+    <PageFilterBar condensed>
+      <ProjectPageFilter />
+      <EnvironmentPageFilter />
+      <DatePageFilter alignDropdown="left" />
+    </PageFilterBar>
+  );
+
+  if (showOnboarding) {
+    pageFilters = <SearchContainerWithFilter>{pageFilters}</SearchContainerWithFilter>;
+  }
+
+  const SearchFilterContainer = organization.features.includes('performance-use-metrics')
+    ? SearchContainerWithFilterAndMetrics
+    : SearchContainerWithFilter;
 
   return (
-    <StyledPageContent data-test-id="performance-landing-v3">
+    <Layout.Page data-test-id="performance-landing-v3">
       <PageErrorProvider>
-        <Layout.Header>
-          <Layout.HeaderContent>
-            <StyledHeading>{t('Performance')}</StyledHeading>
-          </Layout.HeaderContent>
-          <Layout.HeaderActions>
-            {!showOnboarding && (
-              <ButtonBar gap={3}>
-                <Button
-                  priority="primary"
-                  data-test-id="landing-header-trends"
-                  onClick={() => handleTrendsClick()}
-                >
-                  {t('View Trends')}
-                </Button>
-                <Feature features={['organizations:performance-use-metrics']}>
+        <Tabs
+          value={landingDisplay.field}
+          onChange={field =>
+            handleLandingDisplayChange(field, location, projects, organization, eventView)
+          }
+        >
+          <Layout.Header>
+            <Layout.HeaderContent>
+              <Layout.Title>
+                {t('Performance')}
+                <PageHeadingQuestionTooltip
+                  docsUrl="https://docs.sentry.io/product/performance/"
+                  title={t(
+                    'Your main view for transaction data with graphs that visualize transactions or trends, as well as a table where you can drill down on individual transactions.'
+                  )}
+                />
+              </Layout.Title>
+            </Layout.HeaderContent>
+            <Layout.HeaderActions>
+              {!showOnboarding && (
+                <ButtonBar gap={3}>
                   <Button
-                    onClick={() => fnOpenModal()}
-                    icon={<IconSettings />}
-                    aria-label={t('Settings')}
-                    data-test-id="open-meps-settings"
-                  />
-                </Feature>
-              </ButtonBar>
-            )}
-          </Layout.HeaderActions>
-
-          <Layout.HeaderNavTabs>
-            {LANDING_DISPLAYS.map(({label, field}) => (
-              <li key={label} className={landingDisplay.field === field ? 'active' : ''}>
-                <a
-                  href="#"
-                  data-test-id={`landing-tab-${field}`}
-                  onClick={() =>
-                    handleLandingDisplayChange(
-                      field,
-                      location,
-                      projects,
-                      organization,
-                      eventView
-                    )
-                  }
-                >
-                  {t(label)}
-                </a>
-              </li>
-            ))}
-          </Layout.HeaderNavTabs>
-        </Layout.Header>
-        <Layout.Body>
-          <Layout.Main fullWidth>
-            <GlobalSdkUpdateAlert />
-            <PageErrorAlert />
-            {showOnboarding ? (
-              <Onboarding
-                organization={organization}
-                project={
-                  props.selection.projects.length > 0
-                    ? // If some projects selected, use the first selection
-                      projects.find(
-                        project => props.selection.projects[0].toString() === project.id
-                      ) || projects[0]
-                    : // Otherwise, use the first project in the org
-                      projects[0]
-                }
-              />
-            ) : (
-              <Fragment>
-                <SearchContainerWithFilter>
-                  <SearchBar
-                    searchSource="performance_landing"
-                    organization={organization}
-                    projectIds={eventView.project}
-                    query={filterString}
-                    fields={generateAggregateFields(
-                      organization,
-                      [...eventView.fields, {field: 'tps()'}],
-                      ['epm()', 'eps()']
-                    )}
-                    onSearch={handleSearch}
-                    maxQueryLength={MAX_QUERY_LENGTH}
-                  />
-                  <MetricsEventsDropdown />
-                </SearchContainerWithFilter>
-                {initiallyLoaded ? (
-                  <TeamKeyTransactionManager.Provider
-                    organization={organization}
-                    teams={teams}
-                    selectedTeams={['myteams']}
-                    selectedProjects={eventView.project.map(String)}
+                    size="sm"
+                    priority="primary"
+                    data-test-id="landing-header-trends"
+                    onClick={() => handleTrendsClick()}
                   >
-                    <GenericQueryBatcher>
-                      <ViewComponent {...props} />
-                    </GenericQueryBatcher>
-                  </TeamKeyTransactionManager.Provider>
-                ) : (
-                  <LoadingIndicator />
-                )}
-              </Fragment>
-            )}
-          </Layout.Main>
-        </Layout.Body>
+                    {t('View Trends')}
+                  </Button>
+                </ButtonBar>
+              )}
+            </Layout.HeaderActions>
+
+            <TabList hideBorder>
+              {LANDING_DISPLAYS.map(({label, field}) => (
+                <TabList.Item key={field}>{label}</TabList.Item>
+              ))}
+            </TabList>
+          </Layout.Header>
+
+          <Layout.Body data-test-id="performance-landing-body">
+            <Layout.Main fullWidth>
+              <TabPanels>
+                <TabPanels.Item key={landingDisplay.field}>
+                  <MetricsCardinalityProvider
+                    sendOutcomeAnalytics
+                    organization={organization}
+                    location={location}
+                  >
+                    <MetricsDataSwitcher
+                      organization={organization}
+                      eventView={eventView}
+                      location={location}
+                    >
+                      {metricsDataSide => {
+                        return (
+                          <MEPSettingProvider
+                            location={location}
+                            forceTransactions={metricsDataSide.forceTransactionsOnly}
+                          >
+                            <MetricsDataSwitcherAlert
+                              organization={organization}
+                              eventView={eventView}
+                              projects={projects}
+                              location={location}
+                              router={props.router}
+                              {...metricsDataSide}
+                            />
+                            <PageErrorAlert />
+                            {showOnboarding ? (
+                              <Fragment>
+                                {pageFilters}
+                                <Onboarding
+                                  organization={organization}
+                                  project={onboardingProject}
+                                />
+                              </Fragment>
+                            ) : (
+                              <Fragment>
+                                <SearchFilterContainer>
+                                  {pageFilters}
+                                  <MEPConsumer>
+                                    {({metricSettingState}) => (
+                                      // TODO replace `handleSearch prop` with transaction name search once
+                                      // transaction name search becomes the default search bar
+                                      <TransactionNameSearchBar
+                                        organization={organization}
+                                        eventView={eventView}
+                                        onSearch={(query: string) => {
+                                          handleSearch(
+                                            query,
+                                            metricSettingState ?? undefined
+                                          );
+                                        }}
+                                        query={getFreeTextFromQuery(derivedQuery)}
+                                      />
+                                    )}
+                                  </MEPConsumer>
+                                  <MetricsEventsDropdown />
+                                </SearchFilterContainer>
+                                {initiallyLoaded ? (
+                                  <TeamKeyTransactionManager.Provider
+                                    organization={organization}
+                                    teams={teams}
+                                    selectedTeams={['myteams']}
+                                    selectedProjects={eventView.project.map(String)}
+                                  >
+                                    <GenericQueryBatcher>
+                                      <ViewComponent {...props} />
+                                    </GenericQueryBatcher>
+                                  </TeamKeyTransactionManager.Provider>
+                                ) : (
+                                  <LoadingIndicator />
+                                )}
+                              </Fragment>
+                            )}
+                          </MEPSettingProvider>
+                        );
+                      }}
+                    </MetricsDataSwitcher>
+                  </MetricsCardinalityProvider>
+                </TabPanels.Item>
+              </TabPanels>
+            </Layout.Main>
+          </Layout.Body>
+        </Tabs>
       </PageErrorProvider>
-    </StyledPageContent>
+    </Layout.Page>
   );
 }
 
-const StyledPageContent = styled(PageContent)`
-  padding: 0;
-`;
-
-const StyledHeading = styled(PageHeading)`
-  line-height: 40px;
-`;
-
 const SearchContainerWithFilter = styled('div')`
   display: grid;
-  gap: ${space(0)};
+  grid-template-rows: auto auto;
+  gap: ${space(2)};
   margin-bottom: ${space(2)};
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
-    grid-template-columns: 1fr min-content;
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    grid-template-rows: auto;
+    grid-template-columns: auto 1fr;
+  }
+`;
+
+const SearchContainerWithFilterAndMetrics = styled('div')`
+  display: grid;
+  grid-template-rows: auto auto auto;
+  gap: ${space(2)};
+  margin-bottom: ${space(2)};
+
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    grid-template-rows: auto;
+    grid-template-columns: auto 1fr auto;
   }
 `;

@@ -3,10 +3,19 @@ from __future__ import annotations
 import logging
 
 from django.db import models
+from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from sentry.db.models import DefaultFieldsModel, FlexibleForeignKey, JSONField, sane_repr
+from sentry import analytics
+from sentry.db.models import (
+    DefaultFieldsModel,
+    FlexibleForeignKey,
+    JSONField,
+    region_silo_only_model,
+    sane_repr,
+)
+from sentry.models.organization import Organization
 from sentry.ownership.grammar import convert_codeowners_syntax, create_schema_from_issue_owners
 from sentry.utils.cache import cache
 
@@ -14,6 +23,7 @@ logger = logging.getLogger(__name__)
 READ_CACHE_DURATION = 3600
 
 
+@region_silo_only_model
 class ProjectCodeOwners(DefaultFieldsModel):
 
     __include_in_export__ = False
@@ -77,7 +87,7 @@ class ProjectCodeOwners(DefaultFieldsModel):
 
         return merged_code_owners
 
-    def update_schema(self, raw: str | None = None) -> None:
+    def update_schema(self, organization: Organization, raw: str | None = None) -> None:
         """
         Updating the schema goes through the following steps:
         1. parsing the original codeowner file to get the associations
@@ -85,11 +95,20 @@ class ProjectCodeOwners(DefaultFieldsModel):
         3. convert the ownership syntax to the schema
         """
         from sentry.api.validators.project_codeowners import validate_codeowners_associations
+        from sentry.utils.codeowners import MAX_RAW_LENGTH
 
         if raw and self.raw != raw:
             self.raw = raw
 
         if not self.raw:
+            return
+
+        if len(self.raw) > MAX_RAW_LENGTH:
+            analytics.record(
+                "codeowners.max_length_exceeded",
+                organization_id=organization.id,
+            )
+            logger.warning({"raw": f"Raw needs to be <= {MAX_RAW_LENGTH} characters in length"})
             return
 
         associations, _ = validate_codeowners_associations(self.raw, self.project)
@@ -111,3 +130,33 @@ class ProjectCodeOwners(DefaultFieldsModel):
                 self.save()
         except ValidationError:
             return
+
+
+def process_resource_change(instance, change, **kwargs):
+    from sentry.models import GroupOwner, ProjectOwnership
+
+    cache.set(
+        ProjectCodeOwners.get_cache_key(instance.project_id),
+        None,
+        READ_CACHE_DURATION,
+    )
+    ownership = ProjectOwnership.get_ownership_cached(instance.project_id)
+    if not ownership:
+        ownership = ProjectOwnership(project_id=instance.project_id)
+
+    autoassignment_types = ProjectOwnership._get_autoassignment_types(ownership)
+    GroupOwner.invalidate_autoassigned_owner_cache(instance.project_id, autoassignment_types)
+    GroupOwner.invalidate_debounce_issue_owners_evaluation_cache(instance.project_id)
+
+
+# Signals update the cached reads used in post_processing
+post_save.connect(
+    lambda instance, **kwargs: process_resource_change(instance, "updated", **kwargs),
+    sender=ProjectCodeOwners,
+    weak=False,
+)
+post_delete.connect(
+    lambda instance, **kwargs: process_resource_change(instance, "deleted", **kwargs),
+    sender=ProjectCodeOwners,
+    weak=False,
+)

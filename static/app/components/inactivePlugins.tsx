@@ -4,7 +4,7 @@ import {Panel, PanelBody, PanelHeader} from 'sentry/components/panels';
 import TextOverflow from 'sentry/components/textOverflow';
 import {t} from 'sentry/locale';
 import PluginIcon from 'sentry/plugins/components/pluginIcon';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Plugin} from 'sentry/types';
 
 type Props = {
@@ -12,7 +12,7 @@ type Props = {
   plugins: Plugin[];
 };
 
-const InactivePlugins = ({plugins, onEnablePlugin}: Props) => {
+function InactivePlugins({plugins, onEnablePlugin}: Props) {
   if (plugins.length === 0) {
     return null;
   }
@@ -39,7 +39,7 @@ const InactivePlugins = ({plugins, onEnablePlugin}: Props) => {
       </PanelBody>
     </Panel>
   );
-};
+}
 
 const Plugins = styled('div')`
   display: flex;

@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Fragment} from 'react';
 import omit from 'lodash/omit';
 
 import GenericDiscoverQuery, {
@@ -6,7 +6,6 @@ import GenericDiscoverQuery, {
   GenericChildrenProps,
 } from 'sentry/utils/discover/genericDiscoverQuery';
 import {DataFilter, HistogramData} from 'sentry/utils/performance/histogram/types';
-import withApi from 'sentry/utils/withApi';
 
 type Histograms = Record<string, HistogramData>;
 
@@ -71,14 +70,14 @@ function HistogramQuery(props: Props) {
 
   if (fields.length === 0) {
     return (
-      <React.Fragment>
+      <Fragment>
         {children({
           isLoading: false,
           error: null,
           pageLinks: null,
           histograms: {},
         })}
-      </React.Fragment>
+      </Fragment>
     );
   }
 
@@ -96,4 +95,4 @@ function HistogramQuery(props: Props) {
   );
 }
 
-export default withApi(HistogramQuery);
+export default HistogramQuery;

@@ -5,16 +5,15 @@ import * as Layout from 'sentry/components/layouts/thirds';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import {t} from 'sentry/locale';
 import {Organization, Project} from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import DiscoverQuery from 'sentry/utils/discover/discoverQuery';
 import EventView from 'sentry/utils/discover/eventView';
 import {
   isAggregateField,
-  QueryFieldValue,
   SPAN_OP_BREAKDOWN_FIELDS,
   SPAN_OP_RELATIVE_BREAKDOWN_FIELD,
-  WebVital,
 } from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
 import {removeHistogramQueryStrings} from 'sentry/utils/performance/histogram';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
@@ -36,6 +35,8 @@ import {
   EventsDisplayFilterName,
   filterEventsDisplayToLocationQuery,
   getEventsFilterOptions,
+  getPercentilesEventView,
+  mapPercentileValues,
 } from './utils';
 
 type PercentileValues = Record<EventsDisplayFilterName, number>;
@@ -63,7 +64,15 @@ function TransactionEvents(props: Props) {
 }
 
 function EventsContentWrapper(props: ChildProps) {
-  const {location, organization, eventView, transactionName, setError} = props;
+  const {
+    location,
+    organization,
+    eventView,
+    transactionName,
+    setError,
+    projectId,
+    projects,
+  } = props;
   const eventsDisplayFilterName = decodeEventsDisplayFilterFromLocation(location);
   const spanOperationBreakdownFilter = decodeFilterFromLocation(location);
   const webVital = getWebVital(location);
@@ -86,10 +95,8 @@ function EventsContentWrapper(props: ChildProps) {
   const onChangeSpanOperationBreakdownFilter = (
     newFilter: SpanOperationBreakdownFilter
   ) => {
-    trackAnalyticsEvent({
-      eventName: 'Performance Views: Transaction Events Ops Breakdown Filter Dropdown',
-      eventKey: 'performance_views.transactionEvents.ops_filter_dropdown.selection',
-      organization_id: parseInt(organization.id, 10),
+    trackAnalytics('performance_views.transactionEvents.ops_filter_dropdown.selection', {
+      organization,
       action: newFilter as string,
     });
 
@@ -124,12 +131,13 @@ function EventsContentWrapper(props: ChildProps) {
   };
 
   const onChangeEventsDisplayFilter = (newFilterName: EventsDisplayFilterName) => {
-    trackAnalyticsEvent({
-      eventName: 'Performance Views: Transaction Events Display Filter Dropdown',
-      eventKey: 'performance_views.transactionEvents.display_filter_dropdown.selection',
-      organization_id: parseInt(organization.id, 10),
-      action: newFilterName as string,
-    });
+    trackAnalytics(
+      'performance_views.transactionEvents.display_filter_dropdown.selection',
+      {
+        organization,
+        action: newFilterName as string,
+      }
+    );
 
     const nextQuery: Location['query'] = {
       ...removeHistogramQueryStrings(location, [ZOOM_START, ZOOM_END]),
@@ -162,10 +170,9 @@ function EventsContentWrapper(props: ChildProps) {
           );
         }
 
-        const percentiles: PercentileValues = tableData
-          ?.data?.[0] as any as PercentileValues;
+        const percentileData = tableData?.data?.[0];
+        const percentiles = mapPercentileValues(percentileData);
         const filteredEventView = getFilteredEventView(percentiles);
-
         return (
           <EventsContent
             location={location}
@@ -177,6 +184,8 @@ function EventsContentWrapper(props: ChildProps) {
             eventsDisplayFilterName={eventsDisplayFilterName}
             onChangeEventsDisplayFilter={onChangeEventsDisplayFilter}
             percentileValues={percentiles}
+            projectId={projectId}
+            projects={projects}
             webVital={webVital}
             setError={setError}
           />
@@ -210,6 +219,7 @@ function generateEventView({
   transactionName,
 }: {
   location: Location;
+  organization: Organization;
   transactionName: string;
 }): EventView {
   const query = decodeScalar(location.query.query, '');
@@ -256,33 +266,6 @@ function generateEventView({
     },
     location
   );
-}
-
-function getPercentilesEventView(eventView: EventView): EventView {
-  const percentileColumns: QueryFieldValue[] = [
-    {
-      kind: 'function',
-      function: ['p100', '', undefined, undefined],
-    },
-    {
-      kind: 'function',
-      function: ['p99', '', undefined, undefined],
-    },
-    {
-      kind: 'function',
-      function: ['p95', '', undefined, undefined],
-    },
-    {
-      kind: 'function',
-      function: ['p75', '', undefined, undefined],
-    },
-    {
-      kind: 'function',
-      function: ['p50', '', undefined, undefined],
-    },
-  ];
-
-  return eventView.withColumns(percentileColumns);
 }
 
 export default withProjects(withOrganization(TransactionEvents));

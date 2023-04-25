@@ -1,5 +1,3 @@
-import * as React from 'react';
-
 import ExternalLink from 'sentry/components/links/externalLink';
 import Link from 'sentry/components/links/link';
 
@@ -28,7 +26,7 @@ type Props = {
   to?: string;
 };
 
-const SidebarMenuItemLink = ({to, href, ...props}: Props) => {
+function SidebarMenuItemLink({to, href, ...props}: Props) {
   if (href) {
     return <ExternalLink href={href} {...props} />;
   }
@@ -38,6 +36,6 @@ const SidebarMenuItemLink = ({to, href, ...props}: Props) => {
   }
 
   return <div tabIndex={0} {...props} />;
-};
+}
 
 export default SidebarMenuItemLink;

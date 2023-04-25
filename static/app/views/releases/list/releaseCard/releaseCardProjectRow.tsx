@@ -4,7 +4,7 @@ import styled from '@emotion/styled';
 import {Location} from 'history';
 
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import MiniBarChart from 'sentry/components/charts/miniBarChart';
 import Count from 'sentry/components/count';
 import GlobalSelectionLink from 'sentry/components/globalSelectionLink';
@@ -15,13 +15,13 @@ import {extractSelectionParameters} from 'sentry/components/organizations/pageFi
 import {PanelItem} from 'sentry/components/panels';
 import Placeholder from 'sentry/components/placeholder';
 import Tag from 'sentry/components/tag';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
+import {IconCheckmark, IconFire, IconWarning} from 'sentry/icons';
 import {t, tn} from 'sentry/locale';
-import overflowEllipsis from 'sentry/styles/overflowEllipsis';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Release, ReleaseProject} from 'sentry/types';
 import {defined} from 'sentry/utils';
-import {getCrashFreeIcon} from 'sentry/utils/sessions';
+import type {IconSize} from 'sentry/utils/theme';
 
 import {
   ADOPTION_STAGE_LABELS,
@@ -42,6 +42,21 @@ import {
   ReleaseProjectColumn,
   ReleaseProjectsLayout,
 } from '.';
+
+const CRASH_FREE_DANGER_THRESHOLD = 98;
+const CRASH_FREE_WARNING_THRESHOLD = 99.5;
+
+function getCrashFreeIcon(crashFreePercent: number, iconSize: IconSize = 'sm') {
+  if (crashFreePercent < CRASH_FREE_DANGER_THRESHOLD) {
+    return <IconFire color="errorText" size={iconSize} />;
+  }
+
+  if (crashFreePercent < CRASH_FREE_WARNING_THRESHOLD) {
+    return <IconWarning color="warningText" size={iconSize} />;
+  }
+
+  return <IconCheckmark isCircled color="successText" size={iconSize} />;
+}
 
 type Props = {
   activeDisplay: ReleasesDisplayOption;
@@ -89,11 +104,12 @@ function ReleaseCardProjectRow({
     adoptionStages?.[project.slug].stage;
 
   const adoptionStageLabel =
-    Boolean(get24hCountByProject && adoptionStage && isMobileRelease(project.platform)) &&
-    ADOPTION_STAGE_LABELS[adoptionStage];
+    get24hCountByProject && adoptionStage && isMobileRelease(project.platform)
+      ? ADOPTION_STAGE_LABELS[adoptionStage]
+      : null;
 
   return (
-    <ProjectRow>
+    <ProjectRow data-test-id="release-card-project-row">
       <ReleaseProjectsLayout showReleaseAdoptionStages={showReleaseAdoptionStages}>
         <ReleaseProjectColumn>
           <ProjectBadge project={project} avatarSize={16} />
@@ -195,7 +211,7 @@ function ReleaseCardProjectRow({
         <ViewColumn>
           <GuideAnchor disabled={!isTopRelease || index !== 0} target="view_release">
             <Button
-              size="xsmall"
+              size="xs"
               to={{
                 pathname: `/organizations/${
                   organization.slug
@@ -220,7 +236,7 @@ export default ReleaseCardProjectRow;
 
 const ProjectRow = styled(PanelItem)`
   padding: ${space(1)} ${space(2)};
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (min-width: ${p => p.theme.breakpoints.medium}) {
     font-size: ${p => p.theme.fontSizeMedium};
   }
 `;
@@ -252,7 +268,7 @@ const CrashFreeWrapper = styled('div')`
 `;
 
 const ViewColumn = styled('div')`
-  ${overflowEllipsis};
+  ${p => p.theme.overflowEllipsis};
   line-height: 20px;
   text-align: right;
 `;

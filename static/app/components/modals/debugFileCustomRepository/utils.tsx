@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/react';
 
-import {Field} from 'sentry/components/forms/type';
+import {Field} from 'sentry/components/forms/types';
 import ExternalLink from 'sentry/components/links/externalLink';
 import {
   AWS_REGIONS,
@@ -9,9 +9,10 @@ import {
 } from 'sentry/data/debugFileSources';
 import {t, tct} from 'sentry/locale';
 import {CustomRepoType} from 'sentry/types/debugFiles';
+import {uniqueId} from 'sentry/utils/guid';
 
 function objectToChoices(obj: Record<string, string>): [key: string, value: string][] {
-  return Object.entries(obj).map(([key, value]) => [key, t(value)]);
+  return Object.entries(obj).map(([key, value]) => [key, value]);
 }
 
 type FieldMap = Record<string, Field>;
@@ -21,7 +22,7 @@ const commonFields: FieldMap = {
     name: 'id',
     type: 'hidden',
     required: true,
-    defaultValue: () => Math.random().toString(36).substring(2),
+    defaultValue: uniqueId,
   },
   name: {
     name: 'name',

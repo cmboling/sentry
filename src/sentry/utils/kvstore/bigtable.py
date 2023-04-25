@@ -8,7 +8,7 @@ from typing import Any, Iterator, Mapping, Optional, Sequence, Tuple, cast
 from django.utils import timezone
 from google.api_core import exceptions, retry
 from google.cloud import bigtable
-from google.cloud.bigtable.row_data import PartialRowData
+from google.cloud.bigtable.row import PartialRowData
 from google.cloud.bigtable.row_set import RowSet
 from google.cloud.bigtable.table import Table
 
@@ -170,6 +170,18 @@ class BigtableKVStorage(KVStorage[str, bytes]):
         return value
 
     def set(self, key: str, value: bytes, ttl: Optional[timedelta] = None) -> None:
+        try:
+            return self._set(key, value, ttl)
+        except (exceptions.InternalServerError, exceptions.ServiceUnavailable):
+            # Delete cached client before retry
+            with self.__table_lock:
+                del self.__table
+            # Retry once on InternalServerError or ServiceUnavailable
+            # 500 Received RST_STREAM with error code 2
+            # SENTRY-S6D
+            return self._set(key, value, ttl)
+
+    def _set(self, key: str, value: bytes, ttl: Optional[timedelta] = None) -> None:
         # XXX: There is a type mismatch here -- ``direct_row`` expects
         # ``bytes`` but we are providing it with ``str``.
         row = self._get_table().direct_row(key)

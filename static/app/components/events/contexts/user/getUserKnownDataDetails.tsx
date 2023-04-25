@@ -1,11 +1,11 @@
-import * as React from 'react';
+import styled from '@emotion/styled';
 
 import ExternalLink from 'sentry/components/links/externalLink';
 import {IconMail} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {AvatarUser as UserType} from 'sentry/types';
+import {defined} from 'sentry/utils';
 
-import {UserKnownDataType} from './types';
+import {UserEventContextData, UserKnownDataType} from '.';
 
 const EMAIL_REGEX = /[^@]+@[^\.]+\..+/;
 
@@ -15,10 +15,12 @@ type Output = {
   subjectIcon?: React.ReactNode;
 };
 
-function getUserKnownDataDetails(
-  data: UserType,
-  type: UserKnownDataType
-): Output | undefined {
+type Props = {
+  data: UserEventContextData;
+  type: UserKnownDataType;
+};
+
+export function getUserKnownDataDetails({data, type}: Props): Output | undefined {
   switch (type) {
     case UserKnownDataType.NAME:
       return {
@@ -44,9 +46,9 @@ function getUserKnownDataDetails(
       return {
         subject: t('Email'),
         value: data.email,
-        subjectIcon: EMAIL_REGEX.test(data.email) && (
+        subjectIcon: defined(data.email) && EMAIL_REGEX.test(data.email) && (
           <ExternalLink href={`mailto:${data.email}`} className="external-icon">
-            <IconMail size="xs" />
+            <StyledIconMail size="xs" />
           </ExternalLink>
         ),
       };
@@ -55,4 +57,6 @@ function getUserKnownDataDetails(
   }
 }
 
-export default getUserKnownDataDetails;
+const StyledIconMail = styled(IconMail)`
+  vertical-align: middle;
+`;

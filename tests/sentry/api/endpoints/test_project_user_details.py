@@ -1,7 +1,9 @@
 from sentry.models import EventUser
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class ProjectUserDetailsTest(APITestCase):
     endpoint = "sentry-api-0-project-user-details"
 
@@ -18,7 +20,7 @@ class ProjectUserDetailsTest(APITestCase):
 
     def test_simple(self):
         self.login_as(user=self.user)
-        response = self.get_valid_response(self.org.slug, self.project.slug, self.euser.hash)
+        response = self.get_success_response(self.org.slug, self.project.slug, self.euser.hash)
         assert response.data["id"] == str(self.euser.id)
 
     def test_delete_event_user(self):

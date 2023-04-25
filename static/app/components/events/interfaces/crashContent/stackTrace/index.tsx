@@ -1,3 +1,5 @@
+import styled from '@emotion/styled';
+
 import ErrorBoundary from 'sentry/components/errorBoundary';
 import {PlatformType} from 'sentry/types';
 import {Event} from 'sentry/types/event';
@@ -5,21 +7,26 @@ import {STACK_VIEW, StacktraceType} from 'sentry/types/stacktrace';
 import {isNativePlatform} from 'sentry/utils/platform';
 
 import Content from './content';
-import ContentV2 from './contentV2';
-import ContentV3 from './contentV3';
+import {HierarchicalGroupingContent} from './hierarchicalGroupingContent';
+import {NativeContent} from './nativeContent';
 import rawStacktraceContent from './rawContent';
 
-type Props = Pick<React.ComponentProps<typeof ContentV2>, 'groupingCurrentLevel'> & {
+type Props = Pick<
+  React.ComponentProps<typeof HierarchicalGroupingContent>,
+  'groupingCurrentLevel'
+> & {
   event: Event;
   hasHierarchicalGrouping: boolean;
   newestFirst: boolean;
   platform: PlatformType;
   stacktrace: StacktraceType;
-  nativeV2?: boolean;
+  inlined?: boolean;
+  maxDepth?: number;
+  meta?: Record<any, any>;
   stackView?: STACK_VIEW;
 };
 
-function StackTrace({
+export function StackTraceContent({
   stackView,
   stacktrace,
   event,
@@ -27,7 +34,9 @@ function StackTrace({
   platform,
   hasHierarchicalGrouping,
   groupingCurrentLevel,
-  nativeV2,
+  maxDepth,
+  meta,
+  inlined,
 }: Props) {
   if (stackView === STACK_VIEW.RAW) {
     return (
@@ -39,16 +48,19 @@ function StackTrace({
     );
   }
 
-  if (nativeV2 && isNativePlatform(platform)) {
+  if (isNativePlatform(platform)) {
     return (
       <ErrorBoundary mini>
-        <ContentV3
+        <StyledNativeContent
           data={stacktrace}
           includeSystemFrames={stackView === STACK_VIEW.FULL}
           platform={platform}
           event={event}
           newestFirst={newestFirst}
           groupingCurrentLevel={groupingCurrentLevel}
+          meta={meta}
+          inlined={inlined}
+          maxDepth={maxDepth}
         />
       </ErrorBoundary>
     );
@@ -57,7 +69,7 @@ function StackTrace({
   if (hasHierarchicalGrouping) {
     return (
       <ErrorBoundary mini>
-        <ContentV2
+        <StyledHierarchicalGroupingContent
           data={stacktrace}
           className="no-exception"
           includeSystemFrames={stackView === STACK_VIEW.FULL}
@@ -65,6 +77,10 @@ function StackTrace({
           event={event}
           newestFirst={newestFirst}
           groupingCurrentLevel={groupingCurrentLevel}
+          meta={meta}
+          hideIcon={inlined}
+          inlined={inlined}
+          maxDepth={maxDepth}
         />
       </ErrorBoundary>
     );
@@ -72,16 +88,38 @@ function StackTrace({
 
   return (
     <ErrorBoundary mini>
-      <Content
+      <StyledContent
         data={stacktrace}
         className="no-exception"
         includeSystemFrames={stackView === STACK_VIEW.FULL}
         platform={platform}
         event={event}
         newestFirst={newestFirst}
+        meta={meta}
+        hideIcon={inlined}
+        inlined={inlined}
+        maxDepth={maxDepth}
       />
     </ErrorBoundary>
   );
 }
 
-export default StackTrace;
+const inlinedStyles = `
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+`;
+
+const StyledNativeContent = styled(NativeContent)<{inlined?: boolean}>`
+  ${p => p.inlined && inlinedStyles}
+`;
+
+const StyledHierarchicalGroupingContent = styled(HierarchicalGroupingContent)<{
+  inlined?: boolean;
+}>`
+  ${p => p.inlined && inlinedStyles}
+`;
+
+const StyledContent = styled(Content)<{inlined?: boolean}>`
+  ${p => p.inlined && inlinedStyles}
+`;

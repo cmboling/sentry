@@ -5,11 +5,12 @@ import GenericDiscoverQuery, {
   DiscoverQueryProps,
   GenericChildrenProps,
 } from 'sentry/utils/discover/genericDiscoverQuery';
-import withApi from 'sentry/utils/withApi';
 
 import {SuspectSpans} from './types';
 
 type SuspectSpansProps = {
+  maxExclusiveTime?: string;
+  minExclusiveTime?: string;
   perSuspect?: number;
   spanGroups?: string[];
   spanOps?: string[];
@@ -26,8 +27,14 @@ type Props = RequestProps & {
 };
 
 function getSuspectSpanPayload(props: RequestProps) {
-  const {perSuspect, spanOps, spanGroups} = props;
-  const payload = {perSuspect, spanOp: spanOps, spanGroup: spanGroups};
+  const {perSuspect, spanOps, spanGroups, minExclusiveTime, maxExclusiveTime} = props;
+  const payload = {
+    perSuspect,
+    spanOp: spanOps,
+    spanGroup: spanGroups,
+    min_exclusive_time: minExclusiveTime,
+    max_exclusive_time: maxExclusiveTime,
+  };
   if (!defined(payload.perSuspect)) {
     delete payload.perSuspect;
   }
@@ -38,7 +45,10 @@ function getSuspectSpanPayload(props: RequestProps) {
     delete payload.spanGroup;
   }
   const additionalPayload = props.eventView.getEventsAPIPayload(props.location);
-  return Object.assign(payload, additionalPayload);
+  return {
+    ...payload,
+    ...additionalPayload,
+  };
 }
 
 function SuspectSpansQuery(props: Props) {
@@ -55,4 +65,4 @@ function SuspectSpansQuery(props: Props) {
   );
 }
 
-export default withApi(SuspectSpansQuery);
+export default SuspectSpansQuery;

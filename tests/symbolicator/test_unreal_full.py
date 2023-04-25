@@ -9,38 +9,37 @@ from django.urls import reverse
 from sentry.lang.native.utils import STORE_CRASH_REPORTS_ALL
 from sentry.models import EventAttachment, File
 from sentry.testutils import RelayStoreHelper, TransactionTestCase
+from sentry.testutils.factories import get_fixture_path
 from sentry.utils.safe import get_path
-from tests.symbolicator import get_fixture_path, normalize_exception
+from tests.symbolicator import normalize_native_exception
 
 # IMPORTANT:
-# For these tests to run, write `symbolicator.enabled: true` into your
-# `~/.sentry/config.yml` and run `sentry devservices up`
+#
+# This test suite requires Symbolicator in order to run correctly.
+# Set `symbolicator.enabled: true` in your `~/.sentry/config.yml` and run `sentry devservices up`
+#
+# If you are using a local instance of Symbolicator, you need to
+# either change `system.url-prefix` option override inside `initialize` fixture to `system.internal-url-prefix`,
+# or add `127.0.0.1 host.docker.internal` entry to your `/etc/hosts`
 
 
 def get_unreal_crash_file():
-    return get_fixture_path("unreal_crash")
+    return get_fixture_path("native", "unreal_crash")
 
 
 def get_unreal_crash_apple_file():
-    return get_fixture_path("unreal_crash_apple")
+    return get_fixture_path("native", "unreal_crash_apple")
 
 
 class SymbolicatorUnrealIntegrationTest(RelayStoreHelper, TransactionTestCase):
-    # For these tests to run, write `symbolicator.enabled: true` into your
-    # `~/.sentry/config.yml` and run `sentry devservices up`
-    # Also running locally, it might be necessary to set the
-    # `system.internal-url-prefix` option instead of `system.url-prefix`.
-
     @pytest.fixture(autouse=True)
     def initialize(self, live_server):
         self.project.update_option("sentry:builtin_symbol_sources", [])
-        new_prefix = live_server.url
 
         with patch("sentry.auth.system.is_internal_ip", return_value=True), self.options(
-            {"system.url-prefix": new_prefix}
+            {"system.url-prefix": live_server.url}
         ):
-
-            # Run test case:
+            # Run test case
             yield
 
     def upload_symbols(self):
@@ -56,7 +55,7 @@ class SymbolicatorUnrealIntegrationTest(RelayStoreHelper, TransactionTestCase):
 
         out = BytesIO()
         f = zipfile.ZipFile(out, "w")
-        f.write(get_fixture_path("unreal_crash.sym"), "crash.sym")
+        f.write(get_fixture_path("native", "unreal_crash.sym"), "crash.sym")
         f.close()
 
         response = self.client.post(
@@ -85,7 +84,7 @@ class SymbolicatorUnrealIntegrationTest(RelayStoreHelper, TransactionTestCase):
                 "contexts": event.data.get("contexts"),
                 "exception": {
                     "values": [
-                        normalize_exception(x)
+                        normalize_native_exception(x)
                         for x in get_path(event.data, "exception", "values") or ()
                     ]
                 },

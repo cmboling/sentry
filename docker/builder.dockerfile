@@ -1,4 +1,4 @@
-FROM python:3.8.12-slim-buster as sdist
+FROM python:3.8.16-slim-buster as sdist
 
 LABEL maintainer="oss@sentry.io"
 LABEL org.opencontainers.image.title="Sentry Wheel Builder"
@@ -14,19 +14,18 @@ ENV PIP_NO_CACHE_DIR=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
   # Needed for fetching stuff
   wget \
-  && rm -rf /var/lib/apt/lists/* \
-  # Needed to extract final dependencies from the whl
-  && pip install pkginfo==1.5.0.1
+  && rm -rf /var/lib/apt/lists/*
 
 # Get and set up Node for front-end asset building
-ENV VOLTA_VERSION=0.8.1 \
+ENV VOLTA_VERSION=1.1.0 \
   VOLTA_HOME=/.volta \
   PATH=/.volta/bin:$PATH
 
-RUN wget "https://github.com/volta-cli/volta/releases/download/v$VOLTA_VERSION/volta-$VOLTA_VERSION-linux-openssl-1.1.tar.gz" \
-  && tar -xzf "volta-$VOLTA_VERSION-linux-openssl-1.1.tar.gz" -C /usr/local/bin \
+RUN wget "https://github.com/volta-cli/volta/releases/download/v$VOLTA_VERSION/volta-$VOLTA_VERSION-linux.tar.gz" \
+  && tar -xzf "volta-$VOLTA_VERSION-linux.tar.gz" -C /usr/local/bin \
   # Running `volta -v` triggers setting up the shims in VOLTA_HOME (otherwise node won't work)
-  && volta -v
+  && volta -v \
+  && rm "volta-$VOLTA_VERSION-linux.tar.gz"
 
 WORKDIR /js
 

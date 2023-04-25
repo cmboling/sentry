@@ -4,11 +4,14 @@ import sentry_sdk
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from sentry import features, tagstore
+from sentry import tagstore
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import NoProjects, OrganizationEventsV2EndpointBase
+from sentry.search.utils import DEVICE_CLASS
 from sentry.snuba import discover
 
 
+@region_silo_endpoint
 class OrganizationEventsFacetsEndpoint(OrganizationEventsV2EndpointBase):
     def get(self, request: Request, organization) -> Response:
         if not self.has_feature(organization, request):
@@ -25,9 +28,6 @@ class OrganizationEventsFacetsEndpoint(OrganizationEventsV2EndpointBase):
                     query=request.GET.get("query"),
                     params=params,
                     referrer="api.organization-events-facets.top-tags",
-                    use_snql=features.has(
-                        "organizations:discover-use-snql", organization, actor=request.user
-                    ),
                 )
 
         with sentry_sdk.start_span(op="discover.endpoint", description="populate_results") as span:
@@ -43,6 +43,7 @@ class OrganizationEventsFacetsEndpoint(OrganizationEventsV2EndpointBase):
                         "count": row.count,
                     }
                 )
+
             if "project" in resp:
                 # Replace project ids with slugs as that is what we generally expose to users
                 # and filter out projects that the user doesn't have access too.
@@ -55,5 +56,17 @@ class OrganizationEventsFacetsEndpoint(OrganizationEventsV2EndpointBase):
                         filtered_values.append(v)
 
                 resp["project"]["topValues"] = filtered_values
+
+            if "device.class" in resp:
+                # Map device.class tag values to low, medium, or high
+                filtered_values = []
+                for v in resp["device.class"]["topValues"]:
+                    for key, value in DEVICE_CLASS.items():
+                        if v["value"] in value:
+                            v.update({"name": key, "value": key})
+                            filtered_values.append(v)
+                            continue
+
+                resp["device.class"]["topValues"] = filtered_values
 
         return Response(list(resp.values()))

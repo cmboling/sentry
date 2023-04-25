@@ -1,13 +1,13 @@
 import {Fragment} from 'react';
 import {RouteComponentProps} from 'react-router';
 
-import ProjectActions from 'sentry/actions/projectActions';
 import Feature from 'sentry/components/acl/feature';
 import Form from 'sentry/components/forms/form';
 import JsonForm from 'sentry/components/forms/jsonForm';
 import ExternalLink from 'sentry/components/links/externalLink';
 import {fields} from 'sentry/data/forms/projectIssueGrouping';
 import {t, tct} from 'sentry/locale';
+import ProjectsStore from 'sentry/stores/projectsStore';
 import {EventGroupingConfig, Organization, Project} from 'sentry/types';
 import routeTitleGen from 'sentry/utils/routeTitle';
 import AsyncView from 'sentry/views/asyncView';
@@ -16,7 +16,7 @@ import TextBlock from 'sentry/views/settings/components/text/textBlock';
 
 import UpgradeGrouping from './upgradeGrouping';
 
-type Props = RouteComponentProps<{orgId: string; projectId: string}, {}> & {
+type Props = RouteComponentProps<{projectId: string}, {}> & {
   organization: Organization;
   project: Project;
 };
@@ -40,20 +40,24 @@ class ProjectIssueGrouping extends AsyncView<Props, State> {
   }
 
   getEndpoints(): ReturnType<AsyncView['getEndpoints']> {
-    const {projectId, orgId} = this.props.params;
-    return [['groupingConfigs', `/projects/${orgId}/${projectId}/grouping-configs/`]];
+    const {organization, project} = this.props;
+    return [
+      [
+        'groupingConfigs',
+        `/projects/${organization.slug}/${project.slug}/grouping-configs/`,
+      ],
+    ];
   }
 
   handleSubmit = (response: Project) => {
     // This will update our project context
-    ProjectActions.updateSuccess(response);
+    ProjectsStore.onUpdateSuccess(response);
   };
 
   renderBody() {
     const {groupingConfigs} = this.state;
     const {organization, project, params, location} = this.props;
-    const {orgId, projectId} = params;
-    const endpoint = `/projects/${orgId}/${projectId}/`;
+    const endpoint = `/projects/${organization.slug}/${project.slug}/`;
     const access = new Set(organization.access);
     const jsonFormProps = {
       additionalFieldProps: {
@@ -111,6 +115,12 @@ class ProjectIssueGrouping extends AsyncView<Props, State> {
               ]}
             />
           </Feature>
+
+          <JsonForm
+            {...jsonFormProps}
+            title={t('Automatic Grouping Updates')}
+            fields={[fields.groupingAutoUpdate]}
+          />
 
           <UpgradeGrouping
             groupingConfigs={groupingConfigs ?? []}

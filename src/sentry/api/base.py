@@ -4,7 +4,7 @@ import functools
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Iterable, List, Mapping, Optional, Type
 
 import sentry_sdk
 from django.conf import settings
@@ -12,35 +12,55 @@ from django.http import HttpResponse
 from django.utils.http import urlquote
 from django.views.decorators.csrf import csrf_exempt
 from pytz import utc
-from rest_framework.authentication import SessionAuthentication
+from rest_framework import status
+from rest_framework.authentication import BaseAuthentication, SessionAuthentication
 from rest_framework.exceptions import ParseError
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from sentry_sdk import Scope
 
 from sentry import analytics, tsdb
 from sentry.apidocs.hooks import HTTP_METHODS_SET
 from sentry.auth import access
 from sentry.models import Environment
 from sentry.ratelimits.config import DEFAULT_RATE_LIMIT_CONFIG, RateLimitConfig
+from sentry.silo import SiloLimit, SiloMode
 from sentry.utils import json
 from sentry.utils.audit import create_audit_entry
 from sentry.utils.cursors import Cursor
 from sentry.utils.dates import to_datetime
-from sentry.utils.http import absolute_uri, is_valid_origin, origin_from_request
-from sentry.utils.sdk import capture_exception
+from sentry.utils.http import is_valid_origin, origin_from_request
+from sentry.utils.sdk import capture_exception, merge_context_into_scope
 
 from .authentication import ApiKeyAuthentication, TokenAuthentication
 from .paginator import BadPaginationError, Paginator
 from .permissions import NoPermission
 
-__all__ = ["Endpoint", "EnvironmentMixin", "StatsMixin"]
+__all__ = [
+    "Endpoint",
+    "EnvironmentMixin",
+    "StatsMixin",
+    "control_silo_endpoint",
+    "region_silo_endpoint",
+    "pending_silo_endpoint",
+]
+
+from ..services.hybrid_cloud.auth import RpcAuthentication, RpcAuthenticatorType
+from ..utils.pagination_factory import (
+    annotate_span_with_pagination_args,
+    clamp_pagination_per_page,
+    get_cursor,
+    get_paginator,
+)
 
 ONE_MINUTE = 60
 ONE_HOUR = ONE_MINUTE * 60
 ONE_DAY = ONE_HOUR * 24
 
-LINK_HEADER = '<{uri}&cursor={cursor}>; rel="{name}"; results="{has_results}"; cursor="{cursor}"'
+CURSOR_LINK_HEADER = (
+    '<{uri}&cursor={cursor}>; rel="{name}"; results="{has_results}"; cursor="{cursor}"'
+)
 
 DEFAULT_AUTHENTICATION = (TokenAuthentication, ApiKeyAuthentication, SessionAuthentication)
 
@@ -75,7 +95,8 @@ def allow_cors_options(func):
         response["Access-Control-Allow-Methods"] = allow
         response["Access-Control-Allow-Headers"] = (
             "X-Sentry-Auth, X-Requested-With, Origin, Accept, "
-            "Content-Type, Authentication, Authorization, Content-Encoding"
+            "Content-Type, Authentication, Authorization, Content-Encoding, "
+            "sentry-trace, baggage, X-CSRFToken"
         )
         response["Access-Control-Expose-Headers"] = "X-Sentry-Error, Retry-After"
 
@@ -101,14 +122,43 @@ class Endpoint(APIView):
 
     cursor_name = "cursor"
 
-    # end user of endpoint must set private to true, or define public endpoints
-    private: Optional[bool] = None
     public: Optional[HTTP_METHODS_SET] = None
 
     rate_limits: RateLimitConfig = DEFAULT_RATE_LIMIT_CONFIG
     enforce_rate_limit: bool = settings.SENTRY_RATELIMITER_ENABLED
 
-    def build_cursor_link(self, request: Request, name, cursor):
+    def get_authenticators(self) -> List[BaseAuthentication]:
+        """
+        Instantiates and returns the list of authenticators that this view can use.
+        Aggregates together authenticators that can be supported using HybridCloud.
+        """
+
+        # TODO: Increase test coverage and get this working for monolith mode.
+        if SiloMode.get_current_mode() == SiloMode.MONOLITH:
+            return super().get_authenticators()
+
+        last_api_authenticator = RpcAuthentication([])
+        result: List[BaseAuthentication] = []
+        for authenticator_cls in self.authentication_classes:
+            auth_type = RpcAuthenticatorType.from_authenticator(authenticator_cls)
+            if auth_type:
+                last_api_authenticator.types.append(auth_type)
+            else:
+                if last_api_authenticator.types:
+                    result.append(last_api_authenticator)
+                    last_api_authenticator = RpcAuthentication([])
+                result.append(authenticator_cls())
+
+        if last_api_authenticator.types:
+            result.append(last_api_authenticator)
+        return result
+
+    def build_link_header(self, request: Request, path: str, rel: str):
+        # TODO(dcramer): it would be nice to expand this to support params to consolidate `build_cursor_link`
+        uri = request.build_absolute_uri(urlquote(path))
+        return f'<{uri}>; rel="{rel}">'
+
+    def build_cursor_link(self, request: Request, name: str, cursor: Cursor):
         querystring = None
         if request.GET.get("cursor") is None:
             querystring = request.GET.urlencode()
@@ -117,14 +167,14 @@ class Endpoint(APIView):
             mutable_query_dict.pop("cursor")
             querystring = mutable_query_dict.urlencode()
 
-        base_url = absolute_uri(urlquote(request.path))
+        base_url = request.build_absolute_uri(urlquote(request.path))
 
         if querystring is not None:
             base_url = f"{base_url}?{querystring}"
         else:
             base_url = base_url + "?"
 
-        return LINK_HEADER.format(
+        return CURSOR_LINK_HEADER.format(
             uri=base_url,
             cursor=str(cursor),
             name=name,
@@ -134,17 +184,43 @@ class Endpoint(APIView):
     def convert_args(self, request: Request, *args, **kwargs):
         return (args, kwargs)
 
-    def handle_exception(self, request: Request, exc):
+    def handle_exception(
+        self,
+        request: Request,
+        exc: Exception,
+        handler_context: Mapping[str, Any] | None = None,
+        scope: Scope | None = None,
+    ) -> Response:
+        """
+        Handle exceptions which arise while processing incoming API requests.
+
+        :param request:          The incoming request.
+        :param exc:              The exception raised during handling.
+        :param handler_context:  (Optional) Extra data which will be attached to the event sent
+                                 to Sentry, under the "Request Handler Data" heading.
+        :param scope:            (Optional) A `Scope` object containing extra data which will be
+                                 attached to the event sent to Sentry.
+
+        :returns: A 500 response including the event id of the captured Sentry event.
+        """
         try:
+            # Django REST Framework's built-in exception handler. If `settings.EXCEPTION_HANDLER`
+            # exists and returns a response, that's used. Otherwise, `exc` is just re-raised
+            # and caught below.
             response = super().handle_exception(exc)
-        except Exception:
+        except Exception as err:
             import sys
             import traceback
 
             sys.stderr.write(traceback.format_exc())
-            event_id = capture_exception()
-            context = {"detail": "Internal Error", "errorId": event_id}
-            response = Response(context, status=500)
+
+            scope = scope or sentry_sdk.Scope()
+            if handler_context:
+                merge_context_into_scope("Request Handler Data", handler_context, scope)
+            event_id = capture_exception(err, scope=scope)
+
+            response_body = {"detail": "Internal Error", "errorId": event_id}
+            response = Response(response_body, status=500)
             response.exception = True
         return response
 
@@ -234,9 +310,11 @@ class Endpoint(APIView):
                 self.initial(request, *args, **kwargs)
 
                 # Get the appropriate handler method
-                if request.method.lower() in self.http_method_names:
-                    handler = getattr(self, request.method.lower(), self.http_method_not_allowed)
+                method = request.method.lower()
+                if method in self.http_method_names and hasattr(self, method):
+                    handler = getattr(self, method)
 
+                    # Only convert args when using defined handlers
                     (args, kwargs) = self.convert_args(request, *args, **kwargs)
                     self.args = args
                     self.kwargs = kwargs
@@ -298,24 +376,19 @@ class Endpoint(APIView):
 
     def get_per_page(self, request: Request, default_per_page=100, max_per_page=100):
         try:
-            per_page = int(request.GET.get("per_page", default_per_page))
-        except ValueError:
-            raise ParseError(detail="Invalid per_page parameter.")
-
-        max_per_page = max(max_per_page, default_per_page)
-        if per_page > max_per_page:
-            raise ParseError(detail=f"Invalid per_page value. Cannot exceed {max_per_page}.")
-
-        return per_page
+            return clamp_pagination_per_page(
+                request.GET.get("per_page", default_per_page),
+                default_per_page=default_per_page,
+                max_per_page=max_per_page,
+            )
+        except ValueError as e:
+            raise ParseError(detail=str(e))
 
     def get_cursor_from_request(self, request: Request, cursor_cls=Cursor):
-        if not request.GET.get(self.cursor_name):
-            return
-
         try:
-            return cursor_cls.from_string(request.GET.get(self.cursor_name))
-        except ValueError:
-            raise ParseError(detail="Invalid cursor parameter.")
+            return get_cursor(request.GET.get(self.cursor_name), cursor_cls)
+        except ValueError as e:
+            raise ParseError(detail=str(e))
 
     def paginate(
         self,
@@ -326,26 +399,31 @@ class Endpoint(APIView):
         default_per_page=100,
         max_per_page=100,
         cursor_cls=Cursor,
+        response_cls=Response,
+        response_kwargs=None,
+        count_hits=None,
         **paginator_kwargs,
     ):
-        assert (paginator and not paginator_kwargs) or (paginator_cls and paginator_kwargs)
-
-        per_page = self.get_per_page(request, default_per_page, max_per_page)
-
-        input_cursor = self.get_cursor_from_request(request, cursor_cls=cursor_cls)
-
-        if not paginator:
-            paginator = paginator_cls(**paginator_kwargs)
-
         try:
+            per_page = self.get_per_page(request, default_per_page, max_per_page)
+            cursor = self.get_cursor_from_request(request, cursor_cls)
             with sentry_sdk.start_span(
                 op="base.paginate.get_result",
                 description=type(self).__name__,
             ) as span:
-                span.set_data("Limit", per_page)
-                cursor_result = paginator.get_result(limit=per_page, cursor=input_cursor)
+                annotate_span_with_pagination_args(span, per_page)
+                paginator = get_paginator(paginator, paginator_cls, paginator_kwargs)
+                result_args = dict(count_hits=count_hits) if count_hits is not None else dict()
+                cursor_result = paginator.get_result(
+                    limit=per_page,
+                    cursor=cursor,
+                    **result_args,
+                )
         except BadPaginationError as e:
             raise ParseError(detail=str(e))
+
+        if response_kwargs is None:
+            response_kwargs = {}
 
         # map results based on callback
         if on_results:
@@ -357,10 +435,8 @@ class Endpoint(APIView):
         else:
             results = cursor_result.results
 
-        response = Response(results)
-
+        response = response_cls(results, **response_kwargs)
         self.add_cursor_headers(request, response, cursor_result)
-
         return response
 
 
@@ -463,3 +539,96 @@ class ReleaseAnalyticsMixin:
             project_ids=project_ids,
             user_agent=request.META.get("HTTP_USER_AGENT", ""),
         )
+
+
+def resolve_region(request: Request):
+    subdomain = getattr(request, "subdomain", None)
+    if subdomain is None:
+        return None
+    if subdomain in {"us", "eu"}:
+        return subdomain
+    return None
+
+
+class EndpointSiloLimit(SiloLimit):
+    def modify_endpoint_class(self, decorated_class: Type[Endpoint]) -> type:
+        dispatch_override = self.create_override(decorated_class.dispatch)
+        new_class = type(
+            decorated_class.__name__,
+            (decorated_class,),
+            {
+                "dispatch": dispatch_override,
+                "silo_limit": self,
+            },
+        )
+        new_class.__module__ = decorated_class.__module__
+        return new_class
+
+    def create_override(
+        self,
+        original_method: Callable[..., Any],
+        extra_modes: Iterable[SiloMode] = (),
+    ) -> Callable[..., Any]:
+        limiting_override = super().create_override(original_method, extra_modes)
+
+        def single_process_silo_mode_wrapper(*args: Any, **kwargs: Any) -> Any:
+            if SiloMode.single_process_silo_mode():
+                entering_mode: SiloMode = SiloMode.MONOLITH
+                for mode in self.modes:
+                    # Select a mode, if available, from the target modes.
+                    entering_mode = mode
+                with SiloMode.enter_single_process_silo_context(entering_mode):
+                    return limiting_override(*args, **kwargs)
+            else:
+                return limiting_override(*args, **kwargs)
+
+        functools.update_wrapper(single_process_silo_mode_wrapper, limiting_override)
+        return single_process_silo_mode_wrapper
+
+    def modify_endpoint_method(self, decorated_method: Callable[..., Any]) -> Callable[..., Any]:
+        return self.create_override(decorated_method)
+
+    def handle_when_unavailable(
+        self,
+        original_method: Callable[..., Any],
+        current_mode: SiloMode,
+        available_modes: Iterable[SiloMode],
+    ) -> Callable[..., Any]:
+        def handle(obj: Any, request: Request, *args: Any, **kwargs: Any) -> HttpResponse:
+            mode_str = ", ".join(str(m) for m in available_modes)
+            message = (
+                f"Received {request.method} request at {request.path!r} to server in "
+                f"{current_mode} mode. This endpoint is available only in: {mode_str}"
+            )
+            if settings.FAIL_ON_UNAVAILABLE_API_CALL:
+                raise self.AvailabilityError(message)
+            else:
+                logger.warning(message)
+                return HttpResponse(status=status.HTTP_404_NOT_FOUND)
+
+        return handle
+
+    def __call__(self, decorated_obj: Any) -> Any:
+        if isinstance(decorated_obj, type):
+            if not issubclass(decorated_obj, Endpoint):
+                raise ValueError("`@EndpointSiloLimit` can decorate only Endpoint subclasses")
+            return self.modify_endpoint_class(decorated_obj)
+
+        if callable(decorated_obj):
+            return self.modify_endpoint_method(decorated_obj)
+
+        raise TypeError("`@EndpointSiloLimit` must decorate a class or method")
+
+
+control_silo_endpoint = EndpointSiloLimit(SiloMode.CONTROL)
+region_silo_endpoint = EndpointSiloLimit(SiloMode.REGION)
+
+# Use this decorator to mark endpoints that still need to be marked as either
+# control_silo_endpoint or region_silo_endpoint. Marking a class with
+# pending_silo_endpoint keeps it from tripping SiloLimitCoverageTest, while ensuring
+# that the test will fail if a new endpoint is added with no decorator at all.
+# Eventually we should replace all instances of this decorator and delete it.
+pending_silo_endpoint = EndpointSiloLimit()
+
+# This should be rarely used, but this should be used for any endpoints that exist in any silo mode.
+all_silo_endpoint = EndpointSiloLimit(SiloMode.CONTROL, SiloMode.REGION, SiloMode.MONOLITH)

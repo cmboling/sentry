@@ -1,19 +1,23 @@
 import capitalize from 'lodash/capitalize';
 import * as qs from 'query-string';
 
-import {Result} from 'sentry/components/forms/selectAsyncControl';
+import {Result} from 'sentry/components/forms/controls/selectAsyncControl';
 import {
+  IconAsana,
   IconBitbucket,
+  IconCodecov,
   IconGeneric,
   IconGithub,
   IconGitlab,
   IconJira,
+  IconSentry,
   IconVsts,
 } from 'sentry/icons';
 import {t} from 'sentry/locale';
 import HookStore from 'sentry/stores/hookStore';
-import {
+import type {
   AppOrProviderOrPlugin,
+  CodeOwner,
   DocIntegration,
   ExternalActorMapping,
   ExternalActorMappingOrSuggestion,
@@ -21,34 +25,20 @@ import {
   IntegrationFeature,
   IntegrationInstallationStatus,
   IntegrationType,
-  Organization,
   PluginWithProjectList,
   SentryApp,
   SentryAppInstallation,
 } from 'sentry/types';
 import {Hooks} from 'sentry/types/hooks';
-import {
-  integrationEventMap,
-  IntegrationEventParameters,
-} from 'sentry/utils/analytics/integrationAnalyticsEvents';
-import makeAnalyticsFunction from 'sentry/utils/analytics/makeAnalyticsFunction';
+import {trackAnalytics} from 'sentry/utils/analytics';
 
-const mapIntegrationParams = analyticsParams => {
-  // Reload expects integration_status even though it's not relevant for non-sentry apps
-  // Passing in a dummy value of published in those cases
-  const fullParams = {...analyticsParams};
-  if (analyticsParams.integration && analyticsParams.integration_type !== 'sentry_app') {
-    fullParams.integration_status = 'published';
-  }
-  return fullParams;
-};
+import {IconSize} from './theme';
 
-export const trackIntegrationAnalytics = makeAnalyticsFunction<
-  IntegrationEventParameters,
-  {organization: Organization} // org is required
->(integrationEventMap, {
-  mapValuesFn: mapIntegrationParams,
-});
+/**
+ * TODO: remove alias once all usages are updated
+ * @deprecated Use trackAnalytics instead
+ */
+export const trackIntegrationAnalytics = trackAnalytics;
 
 /**
  * In sentry.io the features list supports rendering plan details. If the hook
@@ -71,12 +61,10 @@ const generateIntegrationFeatures = p =>
     gatedFeatureGroups: [],
   });
 
-const defaultFeatureGateComponents = {
+const defaultFeatureGateComponents: ReturnType<Hooks['integrations:feature-gates']> = {
   IntegrationFeatures: generateIntegrationFeatures,
-  IntegrationDirectoryFeatures: generateIntegrationFeatures,
   FeatureList: generateFeaturesList,
-  IntegrationDirectoryFeatureList: generateFeaturesList,
-} as ReturnType<Hooks['integrations:feature-gates']>;
+};
 
 export const getIntegrationFeatureGate = () => {
   const defaultHook = () => defaultFeatureGateComponents;
@@ -197,9 +185,13 @@ export const safeGetQsParam = (param: string) => {
   }
 };
 
-export const getIntegrationIcon = (integrationType?: string, size?: string) => {
-  const iconSize = size || 'md';
+export const getIntegrationIcon = (
+  integrationType?: string,
+  iconSize: IconSize = 'md'
+) => {
   switch (integrationType) {
+    case 'asana':
+      return <IconAsana size={iconSize} />;
     case 'bitbucket':
       return <IconBitbucket size={iconSize} />;
     case 'gitlab':
@@ -212,10 +204,26 @@ export const getIntegrationIcon = (integrationType?: string, size?: string) => {
       return <IconJira size={iconSize} />;
     case 'vsts':
       return <IconVsts size={iconSize} />;
+    case 'codecov':
+      return <IconCodecov size={iconSize} />;
     default:
       return <IconGeneric size={iconSize} />;
   }
 };
+
+export function getCodeOwnerIcon(
+  provider: CodeOwner['provider'],
+  iconSize: IconSize = 'md'
+) {
+  switch (provider ?? '') {
+    case 'github':
+      return <IconGithub size={iconSize} />;
+    case 'gitlab':
+      return <IconGitlab size={iconSize} />;
+    default:
+      return <IconSentry size={iconSize} />;
+  }
+}
 
 // used for project creation and onboarding
 // determines what integration maps to what project platform

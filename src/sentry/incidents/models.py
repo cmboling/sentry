@@ -14,15 +14,20 @@ from sentry.db.models import (
     Model,
     OneToOneCascadeDeletes,
     UUIDField,
+    region_silo_only_model,
     sane_repr,
 )
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
 from sentry.db.models.manager import BaseManager
-from sentry.models import Team, User
+from sentry.models import Team
+from sentry.models.notificationaction import AbstractNotificationAction, ActionService, ActionTarget
+from sentry.services.hybrid_cloud.user import user_service
 from sentry.snuba.models import QuerySubscription
 from sentry.utils import metrics
 from sentry.utils.retries import TimedRetryPolicy
 
 
+@region_silo_only_model
 class IncidentProject(Model):
     __include_in_export__ = False
 
@@ -35,17 +40,18 @@ class IncidentProject(Model):
         unique_together = (("project", "incident"),)
 
 
+@region_silo_only_model
 class IncidentSeen(Model):
     __include_in_export__ = False
 
     incident = FlexibleForeignKey("sentry.Incident")
-    user = FlexibleForeignKey(settings.AUTH_USER_MODEL, db_index=False)
+    user_id = HybridCloudForeignKey(settings.AUTH_USER_MODEL, on_delete="CASCADE", db_index=False)
     last_seen = models.DateTimeField(default=timezone.now)
 
     class Meta:
         app_label = "sentry"
         db_table = "sentry_incidentseen"
-        unique_together = (("user", "incident"),)
+        unique_together = (("user_id", "incident"),)
 
 
 class IncidentManager(BaseManager):
@@ -55,8 +61,8 @@ class IncidentManager(BaseManager):
         return self.filter(organization=organization, projects__in=projects).distinct()
 
     @classmethod
-    def _build_active_incident_cache_key(self, alert_rule_id, project_id):
-        return self.CACHE_KEY % (alert_rule_id, project_id)
+    def _build_active_incident_cache_key(cls, alert_rule_id, project_id):
+        return cls.CACHE_KEY % (alert_rule_id, project_id)
 
     def get_active_incident(self, alert_rule, project):
         cache_key = self._build_active_incident_cache_key(alert_rule.id, project.id)
@@ -145,6 +151,7 @@ INCIDENT_STATUS = {
 }
 
 
+@region_silo_only_model
 class Incident(Model):
     __include_in_export__ = True
 
@@ -191,6 +198,7 @@ class Incident(Model):
         return self.current_end_date - self.date_started
 
 
+@region_silo_only_model
 class PendingIncidentSnapshot(Model):
     __include_in_export__ = True
 
@@ -203,6 +211,7 @@ class PendingIncidentSnapshot(Model):
         db_table = "sentry_pendingincidentsnapshot"
 
 
+@region_silo_only_model
 class IncidentSnapshot(Model):
     __include_in_export__ = True
 
@@ -217,6 +226,7 @@ class IncidentSnapshot(Model):
         db_table = "sentry_incidentsnapshot"
 
 
+@region_silo_only_model
 class TimeSeriesSnapshot(Model):
     __include_in_export__ = True
 
@@ -238,11 +248,12 @@ class IncidentActivityType(Enum):
     DETECTED = 4
 
 
+@region_silo_only_model
 class IncidentActivity(Model):
     __include_in_export__ = True
 
     incident = FlexibleForeignKey("sentry.Incident")
-    user = FlexibleForeignKey("sentry.User", null=True)
+    user_id = HybridCloudForeignKey(settings.AUTH_USER_MODEL, on_delete="CASCADE", null=True)
     type = models.IntegerField()
     value = models.TextField(null=True)
     previous_value = models.TextField(null=True)
@@ -254,17 +265,18 @@ class IncidentActivity(Model):
         db_table = "sentry_incidentactivity"
 
 
+@region_silo_only_model
 class IncidentSubscription(Model):
     __include_in_export__ = True
 
     incident = FlexibleForeignKey("sentry.Incident", db_index=False)
-    user = FlexibleForeignKey(settings.AUTH_USER_MODEL)
+    user_id = HybridCloudForeignKey(settings.AUTH_USER_MODEL, on_delete="CASCADE")
     date_added = models.DateTimeField(default=timezone.now)
 
     class Meta:
         app_label = "sentry"
         db_table = "sentry_incidentsubscription"
-        unique_together = (("incident", "user"),)
+        unique_together = (("incident", "user_id"),)
 
     __repr__ = sane_repr("incident_id", "user_id")
 
@@ -300,8 +312,8 @@ class AlertRuleManager(BaseManager):
         return self.filter(snuba_query__subscriptions__project=project)
 
     @classmethod
-    def __build_subscription_cache_key(self, subscription_id):
-        return self.CACHE_SUBSCRIPTION_KEY % subscription_id
+    def __build_subscription_cache_key(cls, subscription_id):
+        return cls.CACHE_SUBSCRIPTION_KEY % subscription_id
 
     def get_for_subscription(self, subscription):
         """
@@ -331,6 +343,7 @@ class AlertRuleManager(BaseManager):
             )
 
 
+@region_silo_only_model
 class AlertRuleExcludedProjects(Model):
     __include_in_export__ = True
 
@@ -344,6 +357,7 @@ class AlertRuleExcludedProjects(Model):
         unique_together = (("alert_rule", "project"),)
 
 
+@region_silo_only_model
 class AlertRule(Model):
     __include_in_export__ = True
 
@@ -352,7 +366,11 @@ class AlertRule(Model):
 
     organization = FlexibleForeignKey("sentry.Organization", null=True)
     snuba_query = FlexibleForeignKey("sentry.SnubaQuery", null=True, unique=True)
-    owner = FlexibleForeignKey("sentry.Actor", null=True)
+    owner = FlexibleForeignKey(
+        "sentry.Actor",
+        null=True,
+        on_delete=models.SET_NULL,
+    )
     excluded_projects = models.ManyToManyField(
         "sentry.Project", related_name="alert_rule_exclusions", through=AlertRuleExcludedProjects
     )
@@ -380,12 +398,12 @@ class AlertRule(Model):
     __repr__ = sane_repr("id", "name", "date_added")
 
     @property
-    def created_by(self):
+    def created_by_id(self):
         try:
             created_activity = AlertRuleActivity.objects.get(
                 alert_rule=self, type=AlertRuleActivityType.CREATED.value
             )
-            return created_activity.user
+            return created_activity.user_id
         except AlertRuleActivity.DoesNotExist:
             pass
         return None
@@ -403,8 +421,8 @@ class IncidentTriggerManager(BaseManager):
     CACHE_KEY = "incident:triggers:%s"
 
     @classmethod
-    def _build_cache_key(self, incident_id):
-        return self.CACHE_KEY % incident_id
+    def _build_cache_key(cls, incident_id):
+        return cls.CACHE_KEY % incident_id
 
     def get_for_incident(self, incident):
         """
@@ -428,6 +446,7 @@ class IncidentTriggerManager(BaseManager):
         cache.delete(cls._build_cache_key(instance.incident_id))
 
 
+@region_silo_only_model
 class IncidentTrigger(Model):
     __include_in_export__ = True
 
@@ -449,8 +468,8 @@ class AlertRuleTriggerManager(BaseManager):
     CACHE_KEY = "alert_rule_triggers:alert_rule:%s"
 
     @classmethod
-    def _build_trigger_cache_key(self, alert_rule_id):
-        return self.CACHE_KEY % alert_rule_id
+    def _build_trigger_cache_key(cls, alert_rule_id):
+        return cls.CACHE_KEY % alert_rule_id
 
     def get_for_alert_rule(self, alert_rule):
         """
@@ -473,6 +492,7 @@ class AlertRuleTriggerManager(BaseManager):
         cache.delete(cls._build_trigger_cache_key(instance.id))
 
 
+@region_silo_only_model
 class AlertRuleTrigger(Model):
     __include_in_export__ = True
 
@@ -494,6 +514,7 @@ class AlertRuleTrigger(Model):
         unique_together = (("alert_rule", "label"),)
 
 
+@region_silo_only_model
 class AlertRuleTriggerExclusion(Model):
     __include_in_export__ = True
 
@@ -507,7 +528,8 @@ class AlertRuleTriggerExclusion(Model):
         unique_together = (("alert_rule_trigger", "query_subscription"),)
 
 
-class AlertRuleTriggerAction(Model):
+@region_silo_only_model
+class AlertRuleTriggerAction(AbstractNotificationAction):
     """
     This model represents an action that occurs when a trigger is fired. This is
     typically some sort of notification.
@@ -515,28 +537,16 @@ class AlertRuleTriggerAction(Model):
 
     __include_in_export__ = True
 
-    _type_registrations = {}
+    # Aliases from NotificationAction
+    Type = ActionService
+    TargetType = ActionTarget
 
-    # Which sort of action to take
-    class Type(Enum):
-        EMAIL = 0
-        PAGERDUTY = 1
-        SLACK = 2
-        MSTEAMS = 3
-        SENTRY_APP = 4
+    _type_registrations = {}
 
     INTEGRATION_TYPES = frozenset((Type.PAGERDUTY.value, Type.SLACK.value, Type.MSTEAMS.value))
 
-    class TargetType(Enum):
-        # A direct reference, like an email address, Slack channel, or PagerDuty service
-        SPECIFIC = 0
-        # A specific user. This could be used to grab the user's email address.
-        USER = 1
-        # A specific team. This could be used to send an email to everyone associated
-        # with a team.
-        TEAM = 2
-        # A Sentry App instead of any of the above.
-        SENTRY_APP = 3
+    # ActionService items which are not supported for AlertRuleTriggerActions
+    EXEMPT_SERVICES = frozenset((Type.SENTRY_NOTIFICATION.value,))
 
     TypeRegistration = namedtuple(
         "TypeRegistration",
@@ -544,14 +554,7 @@ class AlertRuleTriggerAction(Model):
     )
 
     alert_rule_trigger = FlexibleForeignKey("sentry.AlertRuleTrigger")
-    integration = FlexibleForeignKey("sentry.Integration", null=True)
-    sentry_app = FlexibleForeignKey("sentry.SentryApp", null=True)
-    type = models.SmallIntegerField()
-    target_type = models.SmallIntegerField()
-    # Identifier used to perform the action on a given target
-    target_identifier = models.TextField(null=True)
-    # Human readable name to display in the UI
-    target_display = models.TextField(null=True)
+
     date_added = models.DateTimeField(default=timezone.now)
     sentry_app_config = JSONField(null=True)
 
@@ -561,11 +564,11 @@ class AlertRuleTriggerAction(Model):
 
     @property
     def target(self):
+        if self.target_identifier is None:
+            return None
+
         if self.target_type == self.TargetType.USER.value:
-            try:
-                return User.objects.get(id=int(self.target_identifier))
-            except User.DoesNotExist:
-                pass
+            return user_service.get_user(user_id=int(self.target_identifier))
         elif self.target_type == self.TargetType.TEAM.value:
             try:
                 return Team.objects.get(id=int(self.target_identifier))
@@ -634,6 +637,7 @@ class AlertRuleActivityType(Enum):
     SNAPSHOT = 6
 
 
+@region_silo_only_model
 class AlertRuleActivity(Model):
     __include_in_export__ = True
 
@@ -641,7 +645,7 @@ class AlertRuleActivity(Model):
     previous_alert_rule = FlexibleForeignKey(
         "sentry.AlertRule", null=True, related_name="previous_alert_rule"
     )
-    user = FlexibleForeignKey("sentry.User", null=True, on_delete=models.SET_NULL)
+    user_id = HybridCloudForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete="SET_NULL")
     type = models.IntegerField()
     date_added = models.DateTimeField(default=timezone.now)
 

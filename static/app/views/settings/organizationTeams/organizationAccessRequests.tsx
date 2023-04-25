@@ -1,12 +1,12 @@
-import * as React from 'react';
+import {Component} from 'react';
 import styled from '@emotion/styled';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {Client} from 'sentry/api';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import {Panel, PanelBody, PanelHeader, PanelItem} from 'sentry/components/panels';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {AccessRequest} from 'sentry/types';
 import withApi from 'sentry/utils/withApi';
 
@@ -28,7 +28,7 @@ type HandleOpts = {
   successMessage: string;
 };
 
-class OrganizationAccessRequests extends React.Component<Props, State> {
+class OrganizationAccessRequests extends Component<Props, State> {
   state: State = {
     accessRequestBusy: {},
   };
@@ -112,7 +112,7 @@ class OrganizationAccessRequests extends React.Component<Props, State> {
                 <div>
                   <StyledButton
                     priority="primary"
-                    size="small"
+                    size="sm"
                     onClick={e => this.handleApprove(id, e)}
                     busy={accessRequestBusy[id]}
                   >
@@ -121,7 +121,7 @@ class OrganizationAccessRequests extends React.Component<Props, State> {
                   <Button
                     busy={accessRequestBusy[id]}
                     onClick={e => this.handleDeny(id, e)}
-                    size="small"
+                    size="sm"
                   >
                     {t('Deny')}
                   </Button>

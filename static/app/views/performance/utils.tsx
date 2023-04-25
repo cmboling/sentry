@@ -3,21 +3,25 @@ import {Location} from 'history';
 
 import {ALL_ACCESS_PROJECTS} from 'sentry/constants/pageFilters';
 import {backend, frontend, mobile} from 'sentry/data/platformCategories';
+import {t} from 'sentry/locale';
 import {
+  NewQuery,
   Organization,
   OrganizationSummary,
   PageFilters,
   Project,
   ReleaseProject,
 } from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import {statsPeriodToDays} from 'sentry/utils/dates';
-import EventView from 'sentry/utils/discover/eventView';
+import EventView, {EventData} from 'sentry/utils/discover/eventView';
 import {TRACING_FIELDS} from 'sentry/utils/discover/fields';
 import {getDuration} from 'sentry/utils/formatters';
 import getCurrentSentryReactTransaction from 'sentry/utils/getCurrentSentryReactTransaction';
 import {decodeScalar} from 'sentry/utils/queryString';
+import toArray from 'sentry/utils/toArray';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 
 import {DEFAULT_MAX_DURATION} from './trends/utils';
 
@@ -29,6 +33,47 @@ export const QUERY_KEYS = [
   'end',
   'statsPeriod',
 ] as const;
+
+export const UNPARAMETERIZED_TRANSACTION = '<< unparameterized >>'; // Represents 'other' transactions with high cardinality names that were dropped on the metrics dataset.
+const UNPARAMETRIZED_TRANSACTION = '<< unparametrized >>'; // Old spelling. Can be deleted in the future when all data for this transaction name is gone.
+export const EXCLUDE_METRICS_UNPARAM_CONDITIONS = `(!transaction:"${UNPARAMETERIZED_TRANSACTION}" AND !transaction:"${UNPARAMETRIZED_TRANSACTION}")`;
+const SHOW_UNPARAM_BANNER = 'showUnparameterizedBanner';
+
+export enum DiscoverQueryPageSource {
+  PERFORMANCE = 'performance',
+  DISCOVER = 'discover',
+}
+
+export function createUnnamedTransactionsDiscoverTarget(props: {
+  location: Location;
+  organization: Organization;
+  source?: DiscoverQueryPageSource;
+}) {
+  const fields =
+    props.source === DiscoverQueryPageSource.DISCOVER
+      ? ['transaction', 'project', 'transaction.source', 'epm()']
+      : ['transaction', 'project', 'transaction.source', 'epm()', 'p50()', 'p95()'];
+
+  const query: NewQuery = {
+    id: undefined,
+    name:
+      props.source === DiscoverQueryPageSource.DISCOVER
+        ? t('Unparameterized Transactions')
+        : t('Performance - Unparameterized Transactions'),
+    query: 'event.type:transaction transaction.source:"url"',
+    projects: [],
+    fields,
+    version: 2,
+  };
+
+  const discoverEventView = EventView.fromNewQueryWithLocation(
+    query,
+    props.location
+  ).withSorts([{field: 'epm', kind: 'desc'}]);
+  const target = discoverEventView.getResultsViewUrlTarget(props.organization.slug);
+  target.query[SHOW_UNPARAM_BANNER] = 'true';
+  return target;
+}
 
 /**
  * Performance type can used to determine a default view or which specific field should be used by default on pages
@@ -44,7 +89,9 @@ export enum PROJECT_PERFORMANCE_TYPE {
 
 // The native SDK is equally used on clients and end-devices as on
 // backend, the default view should be "All Transactions".
-const FRONTEND_PLATFORMS: string[] = [...frontend];
+const FRONTEND_PLATFORMS: string[] = [...frontend].filter(
+  platform => platform !== 'javascript-nextjs' // Next has both frontend and backend transactions.
+);
 const BACKEND_PLATFORMS: string[] = backend.filter(platform => platform !== 'native');
 const MOBILE_PLATFORMS: string[] = [...mobile];
 
@@ -64,31 +111,27 @@ export function platformToPerformanceType(
     return PROJECT_PERFORMANCE_TYPE.ANY;
   }
 
-  if (
-    selectedProjects.every(project =>
-      FRONTEND_PLATFORMS.includes(project.platform as string)
-    )
-  ) {
-    return PROJECT_PERFORMANCE_TYPE.FRONTEND;
-  }
+  const projectPerformanceTypes = new Set<PROJECT_PERFORMANCE_TYPE>();
 
-  if (
-    selectedProjects.every(project =>
-      BACKEND_PLATFORMS.includes(project.platform as string)
-    )
-  ) {
-    return PROJECT_PERFORMANCE_TYPE.BACKEND;
-  }
+  selectedProjects.forEach(project => {
+    if (FRONTEND_PLATFORMS.includes(project.platform ?? '')) {
+      projectPerformanceTypes.add(PROJECT_PERFORMANCE_TYPE.FRONTEND);
+    }
+    if (BACKEND_PLATFORMS.includes(project.platform ?? '')) {
+      projectPerformanceTypes.add(PROJECT_PERFORMANCE_TYPE.BACKEND);
+    }
+    if (MOBILE_PLATFORMS.includes(project.platform ?? '')) {
+      projectPerformanceTypes.add(PROJECT_PERFORMANCE_TYPE.MOBILE);
+    }
+  });
 
-  if (
-    selectedProjects.every(project =>
-      MOBILE_PLATFORMS.includes(project.platform as string)
-    )
-  ) {
-    return PROJECT_PERFORMANCE_TYPE.MOBILE;
-  }
+  const uniquePerformanceTypeCount = projectPerformanceTypes.size;
 
-  return PROJECT_PERFORMANCE_TYPE.ANY;
+  if (!uniquePerformanceTypeCount || uniquePerformanceTypeCount > 1) {
+    return PROJECT_PERFORMANCE_TYPE.ANY;
+  }
+  const [platformType] = projectPerformanceTypes;
+  return platformType;
 }
 
 /**
@@ -144,20 +187,21 @@ export function getTransactionSearchQuery(location: Location, query: string = ''
 export function handleTrendsClick({
   location,
   organization,
+  projectPlatforms,
 }: {
   location: Location;
   organization: Organization;
+  projectPlatforms: string;
 }) {
-  trackAnalyticsEvent({
-    eventKey: 'performance_views.change_view',
-    eventName: 'Performance Views: Change View',
-    organization_id: parseInt(organization.id, 10),
+  trackAnalytics('performance_views.change_view', {
+    organization,
     view_name: 'TRENDS',
+    project_platforms: projectPlatforms,
   });
 
   const target = trendsTargetRoute({location, organization});
 
-  browserHistory.push(target);
+  browserHistory.push(normalizeUrl(target));
 }
 
 export function trendsTargetRoute({
@@ -264,4 +308,50 @@ export function getTransactionName(location: Location): string | undefined {
 
 export function getPerformanceDuration(milliseconds: number) {
   return getDuration(milliseconds / 1000, milliseconds > 1000 ? 2 : 0, true);
+}
+
+export function areMultipleProjectsSelected(eventView: EventView) {
+  if (!eventView.project.length) {
+    return true; // My projects
+  }
+  if (eventView.project.length === 1 && eventView.project[0] === ALL_ACCESS_PROJECTS) {
+    return true; // All projects
+  }
+  return false;
+}
+
+export function getSelectedProjectPlatformsArray(
+  location: Location,
+  projects: Project[]
+) {
+  const projectQuery = location.query.project;
+  const selectedProjectIdSet = new Set(toArray(projectQuery));
+
+  const selectedProjectPlatforms = projects.reduce((acc: string[], project) => {
+    if (selectedProjectIdSet.has(project.id)) {
+      acc.push(project.platform ?? 'undefined');
+    }
+
+    return acc;
+  }, []);
+
+  return selectedProjectPlatforms;
+}
+
+export function getSelectedProjectPlatforms(location: Location, projects: Project[]) {
+  const selectedProjectPlatforms = getSelectedProjectPlatformsArray(location, projects);
+  return selectedProjectPlatforms.join(', ');
+}
+
+export function getProjectID(
+  eventData: EventData,
+  projects: Project[]
+): string | undefined {
+  const projectSlug = (eventData?.project as string) || undefined;
+
+  if (typeof projectSlug === undefined) {
+    return undefined;
+  }
+
+  return projects.find(currentProject => currentProject.slug === projectSlug)?.id;
 }

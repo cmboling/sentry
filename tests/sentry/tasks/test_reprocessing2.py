@@ -23,10 +23,11 @@ from sentry.models import (
 from sentry.plugins.base.v2 import Plugin2
 from sentry.projectoptions.defaults import DEFAULT_GROUPING_CONFIG
 from sentry.reprocessing2 import is_group_finished
-from sentry.tasks.reprocessing2 import reprocess_group
+from sentry.tasks.reprocessing2 import finish_reprocessing, reprocess_group
 from sentry.tasks.store import preprocess_event
 from sentry.testutils.helpers import Feature
 from sentry.testutils.helpers.datetime import before_now, iso_format
+from sentry.types.activity import ActivityType
 from sentry.utils.cache import cache_key_for_event
 
 
@@ -111,6 +112,7 @@ def test_basic(
     register_event_preprocessor,
     burst_task_runner,
     monkeypatch,
+    django_cache,
 ):
     from sentry import eventstream
 
@@ -211,6 +213,7 @@ def test_concurrent_events_go_into_new_group(
     process_and_save,
     burst_task_runner,
     default_user,
+    django_cache,
 ):
     """
     Assert that both unmodified and concurrently inserted events go into "the
@@ -233,7 +236,7 @@ def test_concurrent_events_go_into_new_group(
     original_issue_id = event.group.id
 
     original_assignee = GroupAssignee.objects.create(
-        group_id=original_issue_id, project=default_project, user=default_user
+        group_id=original_issue_id, project=default_project, user_id=default_user.id
     )
 
     with burst_task_runner() as burst_reprocess:
@@ -261,7 +264,7 @@ def test_concurrent_events_go_into_new_group(
 
     assert group.short_id == original_short_id
     assert GroupAssignee.objects.get(group=group) == original_assignee
-    activity = Activity.objects.get(group=group, type=Activity.REPROCESS)
+    activity = Activity.objects.get(group=group, type=ActivityType.REPROCESS.value)
     assert activity.ident == str(original_issue_id)
 
 
@@ -412,7 +415,13 @@ def test_attachments_and_userfeedback(
 @pytest.mark.snuba
 @pytest.mark.parametrize("remaining_events", ["keep", "delete"])
 def test_nodestore_missing(
-    default_project, reset_snuba, process_and_save, burst_task_runner, monkeypatch, remaining_events
+    default_project,
+    reset_snuba,
+    process_and_save,
+    burst_task_runner,
+    monkeypatch,
+    remaining_events,
+    django_cache,
 ):
     logs = []
     monkeypatch.setattr("sentry.reprocessing2.logger.error", logs.append)
@@ -596,3 +605,19 @@ def test_apply_new_stack_trace_rules(
     assert event1.group.id == event2.group.id
 
     assert event1.data["grouping_config"] != original_grouping_config
+
+
+@pytest.mark.django_db
+def test_finish_reprocessing(default_project):
+    # Pretend that the old group has more than one activity still connected:
+    old_group = Group.objects.create(project=default_project)
+    new_group = Group.objects.create(project=default_project)
+
+    old_group.activity_set.create(
+        project=default_project,
+        type=ActivityType.REPROCESS.value,
+        data={"newGroupId": new_group.id},
+    )
+    old_group.activity_set.create(project=default_project, type=ActivityType.NOTE.value)
+
+    finish_reprocessing(old_group.project_id, old_group.id)

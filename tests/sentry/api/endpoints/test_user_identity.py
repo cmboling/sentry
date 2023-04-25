@@ -1,7 +1,9 @@
 from sentry.models import Identity, IdentityProvider, IdentityStatus
 from sentry.testutils import APITestCase
+from sentry.testutils.silo import control_silo_test
 
 
+@control_silo_test
 class UserIdentityTest(APITestCase):
     endpoint = "sentry-api-0-user-identity"
     method = "get"
@@ -20,5 +22,5 @@ class UserIdentityTest(APITestCase):
             scopes=[],
         )
 
-        response = self.get_valid_response(self.user.id)
+        response = self.get_success_response(self.user.id)
         assert response.data[0]["identityProvider"]["type"] == "slack"

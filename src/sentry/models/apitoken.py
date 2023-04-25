@@ -1,11 +1,19 @@
+from __future__ import annotations
+
 from datetime import timedelta
 from uuid import uuid4
 
 from django.db import models, transaction
 from django.utils import timezone
-from django.utils.encoding import force_text, python_2_unicode_compatible
+from django.utils.encoding import force_text
 
-from sentry.db.models import BaseManager, FlexibleForeignKey, Model, sane_repr
+from sentry.db.models import (
+    BaseManager,
+    FlexibleForeignKey,
+    Model,
+    control_silo_only_model,
+    sane_repr,
+)
 from sentry.models.apiscopes import HasApiScopes
 
 DEFAULT_EXPIRATION = timedelta(days=30)
@@ -19,7 +27,7 @@ def generate_token():
     return uuid4().hex + uuid4().hex
 
 
-@python_2_unicode_compatible
+@control_silo_only_model
 class ApiToken(Model, HasApiScopes):
     __include_in_export__ = True
 
@@ -68,3 +76,12 @@ class ApiToken(Model, HasApiScopes):
             expires_at = timezone.now() + DEFAULT_EXPIRATION
 
         self.update(token=generate_token(), refresh_token=generate_token(), expires_at=expires_at)
+
+
+def is_api_token_auth(auth: object) -> bool:
+    """:returns True when an API token is hitting the API."""
+    from sentry.services.hybrid_cloud.auth import AuthenticatedToken
+
+    if isinstance(auth, AuthenticatedToken):
+        return auth.kind == "api_token"
+    return isinstance(auth, ApiToken)

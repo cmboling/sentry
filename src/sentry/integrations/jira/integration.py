@@ -10,6 +10,7 @@ from django.urls import reverse
 from django.utils.translation import ugettext as _
 
 from sentry import features
+from sentry.eventstore.models import GroupEvent
 from sentry.integrations import (
     FeatureDescription,
     IntegrationFeatures,
@@ -17,7 +18,8 @@ from sentry.integrations import (
     IntegrationMetadata,
     IntegrationProvider,
 )
-from sentry.integrations.mixins import IssueSyncMixin, ResolveSyncAction
+from sentry.integrations.mixins.issues import MAX_CHAR, IssueSyncMixin, ResolveSyncAction
+from sentry.issues.grouptype import GroupCategory
 from sentry.models import (
     ExternalIssue,
     IntegrationExternalProject,
@@ -25,6 +27,8 @@ from sentry.models import (
     OrganizationIntegration,
     User,
 )
+from sentry.services.hybrid_cloud.integration import integration_service
+from sentry.services.hybrid_cloud.user import RpcUser
 from sentry.shared_integrations.exceptions import (
     ApiError,
     ApiHostError,
@@ -32,11 +36,11 @@ from sentry.shared_integrations.exceptions import (
     IntegrationError,
     IntegrationFormError,
 )
-from sentry.utils.compat import filter
+from sentry.tasks.integrations import migrate_issues
 from sentry.utils.decorators import classproperty
-from sentry.utils.http import absolute_uri
+from sentry.utils.strings import truncatechars
 
-from .client import JiraApiClient, JiraCloud
+from .client import JiraCloudClient
 from .utils import build_user_choice
 
 logger = logging.getLogger("sentry.integrations.jira")
@@ -187,10 +191,8 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
                 "name": self.issues_ignored_fields_key,
                 "label": "Ignored Fields",
                 "type": "textarea",
-                "placeholder": _('e.g. "components, security, customfield_10006"'),
-                "help": _(
-                    "Comma-separated list of Jira fields that you don't want to show in issue creation form"
-                ),
+                "placeholder": _("components, security, customfield_10006"),
+                "help": _("Comma-separated Jira field IDs that you want to hide."),
             },
         ]
 
@@ -255,13 +257,18 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
             # accidentally use newlines, so we explicitly handle that case. On page
             # refresh, they will see how it got interpreted as `get_config_data` will
             # re-serialize the config as a comma-separated list.
-            ignored_fields_list = filter(
-                None, [field.strip() for field in re.split(r"[,\n\r]+", ignored_fields_text)]
+            ignored_fields_list = list(
+                filter(
+                    None, [field.strip() for field in re.split(r"[,\n\r]+", ignored_fields_text)]
+                )
             )
             data[self.issues_ignored_fields_key] = ignored_fields_list
 
         config.update(data)
-        self.org_integration.update(config=config)
+        self.org_integration = integration_service.update_organization_integration(
+            org_integration_id=self.org_integration.id,
+            config=config,
+        )
 
     def get_config_data(self):
         config = self.org_integration.config
@@ -322,28 +329,59 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
     def get_persisted_ignored_fields(self):
         return self.org_integration.config.get(self.issues_ignored_fields_key, [])
 
+    def get_performance_issue_body(self, event):
+        (
+            transaction_name,
+            parent_span,
+            num_repeating_spans,
+            repeating_spans,
+        ) = self.get_performance_issue_description_data(event)
+
+        body = f"| *Transaction Name* | {truncatechars(transaction_name, MAX_CHAR)} |\n"
+        body += f"| *Parent Span* | {truncatechars(parent_span, MAX_CHAR)} |\n"
+        body += f"| *Repeating Spans ({num_repeating_spans})* | {truncatechars(repeating_spans, MAX_CHAR)} |"
+        return body
+
+    def get_generic_issue_body(self, event):
+        body = ""
+        important = event.occurrence.important_evidence_display
+        if important:
+            body = f"| *{important.name}* | {truncatechars(important.value, MAX_CHAR)} |\n"
+        for evidence in event.occurrence.evidence_display:
+            if evidence.important is False:
+                body += f"| *{evidence.name}* | {truncatechars(evidence.value, MAX_CHAR)} |\n"
+        return body[:-2]  # chop off final newline
+
     def get_group_description(self, group, event, **kwargs):
         output = [
             "Sentry Issue: [{}|{}]".format(
                 group.qualified_short_id,
-                absolute_uri(group.get_absolute_url(params={"referrer": "jira_integration"})),
+                group.get_absolute_url(params={"referrer": "jira_integration"}),
             )
         ]
-        body = self.get_group_body(group, event)
-        if body:
-            output.extend(["", "{code}", body, "{code}"])
+
+        if group.issue_category == GroupCategory.PERFORMANCE:
+            body = self.get_performance_issue_body(event)
+            output.extend([body])
+        elif isinstance(event, GroupEvent) and event.occurrence is not None:
+            body = self.get_generic_issue_body(event)
+            output.extend([body])
+        else:
+            body = self.get_group_body(group, event)
+            if body:
+                output.extend(["", "{code}", body, "{code}"])
         return "\n".join(output)
 
     def get_client(self):
         logging_context = {"org_id": self.organization_id}
 
         if self.organization_id is not None:
-            logging_context["integration_id"] = attrgetter("org_integration.integration.id")(self)
+            logging_context["integration_id"] = attrgetter("org_integration.integration_id")(self)
             logging_context["org_integration_id"] = attrgetter("org_integration.id")(self)
 
-        return JiraApiClient(
+        return JiraCloudClient(
             self.model.metadata["base_url"],
-            JiraCloud(self.model.metadata["shared_secret"]),
+            self.model.metadata["shared_secret"],
             verify_ssl=True,
             logging_context=logging_context,
         )
@@ -506,14 +544,17 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
         return issue_type_meta
 
     def get_issue_create_meta(self, client, project_id, jira_projects):
+        meta = None
         if project_id:
-            return self.fetch_issue_create_meta(client, project_id)
+            meta = self.fetch_issue_create_meta(client, project_id)
+        if meta is not None:
+            return meta
 
-        # If we don't have a jira projectid, iterate all projects and find
-        # the first project that has metadata. We only want one project as getting
-        # all project metadata is expensive and wasteful. In the first run experience,
-        # the user won't have a 'last used' project id so we need to iterate available
-        # projects until we find one that we can get metadata for.
+        # If we don't have a jira projectid (or we couldn't fetch the metadata from the given project_id),
+        # iterate all projects and find the first project that has metadata.
+        # We only want one project as getting all project metadata is expensive and wasteful.
+        # In the first run experience, the user won't have a 'last used' project id
+        # so we need to iterate available projects until we find one that we can get metadata for.
         attempts = 0
         if len(jira_projects):
             for fallback in jira_projects:
@@ -839,7 +880,7 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
     def sync_assignee_outbound(
         self,
         external_issue: ExternalIssue,
-        user: Optional[User],
+        user: Optional[RpcUser],
         assign: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -847,12 +888,11 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
         Propagate a sentry issue's assignee to a jira issue's assignee
         """
         client = self.get_client()
-
         jira_user = None
         if user and assign:
-            for ue in user.emails.filter(is_verified=True):
+            for ue in user.emails:
                 try:
-                    possible_users = client.search_users_for_issue(external_issue.key, ue.email)
+                    possible_users = client.search_users_for_issue(external_issue.key, ue)
                 except (ApiUnauthorized, ApiError):
                     continue
                 for possible_user in possible_users:
@@ -862,8 +902,7 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
                         account_id = possible_user.get("accountId")
                         email = client.get_email(account_id)
                     # match on lowercase email
-                    # TODO(steve): add check against display name when JIRA_USE_EMAIL_SCOPE is false
-                    if email and email.lower() == ue.email.lower():
+                    if email and email.lower() == ue.lower():
                         jira_user = possible_user
                         break
             if jira_user is None:
@@ -877,7 +916,6 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
                     },
                 )
                 return
-
         try:
             id_field = client.user_id_field()
             client.assign_issue(external_issue.key, jira_user and jira_user.get(id_field))
@@ -952,6 +990,14 @@ class JiraIntegration(IntegrationInstallation, IssueSyncMixin):
         return ResolveSyncAction.from_resolve_unresolve(
             should_resolve=c_to in done_statuses and c_from not in done_statuses,
             should_unresolve=c_from in done_statuses and c_to not in done_statuses,
+        )
+
+    def migrate_issues(self):
+        migrate_issues.apply_async(
+            kwargs={
+                "integration_id": self.model.id,
+                "organization_id": self.organization_id,
+            }
         )
 
 

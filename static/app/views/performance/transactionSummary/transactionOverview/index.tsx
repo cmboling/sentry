@@ -5,16 +5,15 @@ import {Location} from 'history';
 import {loadOrganizationTags} from 'sentry/actionCreators/tags';
 import {t} from 'sentry/locale';
 import {Organization, PageFilters, Project} from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
-import DiscoverQuery from 'sentry/utils/discover/discoverQuery';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import {useDiscoverQuery} from 'sentry/utils/discover/discoverQuery';
 import EventView from 'sentry/utils/discover/eventView';
+import {Column, isAggregateField, QueryFieldValue} from 'sentry/utils/discover/fields';
+import {WebVital} from 'sentry/utils/fields';
 import {
-  Column,
-  isAggregateField,
-  QueryFieldValue,
-  WebVital,
-} from 'sentry/utils/discover/fields';
-import {MEPSettingProvider} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
+  MEPSettingProvider,
+  useMEPSettingContext,
+} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {removeHistogramQueryStrings} from 'sentry/utils/performance/histogram';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
@@ -22,6 +21,10 @@ import useApi from 'sentry/utils/useApi';
 import withOrganization from 'sentry/utils/withOrganization';
 import withPageFilters from 'sentry/utils/withPageFilters';
 import withProjects from 'sentry/utils/withProjects';
+import {
+  getTransactionMEPParamsIfApplicable,
+  getUnfilteredTotalsEventView,
+} from 'sentry/views/performance/transactionSummary/transactionOverview/utils';
 
 import {addRoutePerformanceContext} from '../../utils';
 import {
@@ -58,7 +61,10 @@ function TransactionOverview(props: Props) {
   useEffect(() => {
     loadOrganizationTags(api, organization.slug, selection);
     addRoutePerformanceContext(selection);
-  }, [selection]);
+    trackAnalytics('performance_views.transaction_summary.view', {
+      organization,
+    });
+  }, [selection, organization, api]);
 
   return (
     <MEPSettingProvider>
@@ -86,15 +92,62 @@ function OverviewContentWrapper(props: ChildProps) {
     transactionThresholdMetric,
   } = props;
 
+  const mepSetting = useMEPSettingContext();
+  const queryExtras = getTransactionMEPParamsIfApplicable(
+    mepSetting,
+    organization,
+    location
+  );
+
+  const queryData = useDiscoverQuery({
+    eventView: getTotalsEventView(organization, eventView),
+    orgSlug: organization.slug,
+    location,
+    transactionThreshold,
+    transactionThresholdMetric,
+    referrer: 'api.performance.transaction-summary',
+    queryExtras,
+  });
+
+  // Count has to be total indexed events count because it's only used
+  // in indexed events contexts
+  const totalCountQueryData = useDiscoverQuery({
+    eventView: getTotalCountEventView(organization, eventView),
+    orgSlug: organization.slug,
+    location,
+    transactionThreshold,
+    transactionThresholdMetric,
+    referrer: 'api.performance.transaction-summary',
+  });
+
+  // Unfiltered count has to be total indexed events count because it's only used
+  // in indexed events contexts
+  const additionalQueryData = useDiscoverQuery({
+    eventView: getUnfilteredTotalsEventView(eventView, location, ['count']),
+    orgSlug: organization.slug,
+    location,
+    transactionThreshold,
+    transactionThresholdMetric,
+    referrer: 'api.performance.transaction-summary',
+  });
+
+  const {data: tableData, isLoading, error} = queryData;
+  const {
+    data: unfilteredTableData,
+    isLoading: isAdditionalQueryLoading,
+    error: additionalQueryError,
+  } = additionalQueryData;
+  const {
+    data: totalCountTableData,
+    isLoading: isTotalCountQueryLoading,
+    error: totalCountQueryError,
+  } = totalCountQueryData;
+
   const spanOperationBreakdownFilter = decodeFilterFromLocation(location);
 
-  const totalsView = getTotalsEventView(organization, eventView);
-
   const onChangeFilter = (newFilter: SpanOperationBreakdownFilter) => {
-    trackAnalyticsEvent({
-      eventName: 'Performance Views: Filter Dropdown',
-      eventKey: 'performance_views.filter_dropdown.selection',
-      organization_id: parseInt(organization.id, 10),
+    trackAnalytics('performance_views.filter_dropdown.selection', {
+      organization,
       action: newFilter as string,
     });
 
@@ -113,34 +166,34 @@ function OverviewContentWrapper(props: ChildProps) {
     });
   };
 
+  let totals: TotalValues | null =
+    (tableData?.data?.[0] as {
+      [k: string]: number;
+    }) ?? null;
+  const totalCountData: TotalValues | null =
+    (totalCountTableData?.data?.[0] as {[k: string]: number}) ?? null;
+
+  // Count is always a count of indexed events,
+  // while other fields could be either metrics or index based
+  totals = {...totals, ...totalCountData};
+
+  const unfilteredTotals: TotalValues | null =
+    (unfilteredTableData?.data?.[0] as {[k: string]: number}) ?? null;
+
   return (
-    <DiscoverQuery
-      eventView={totalsView}
-      orgSlug={organization.slug}
+    <SummaryContent
       location={location}
-      transactionThreshold={transactionThreshold}
-      transactionThresholdMetric={transactionThresholdMetric}
-      referrer="api.performance.transaction-summary"
-    >
-      {({isLoading, error, tableData}) => {
-        const totals: TotalValues | null =
-          (tableData?.data?.[0] as {[k: string]: number}) ?? null;
-        return (
-          <SummaryContent
-            location={location}
-            organization={organization}
-            eventView={eventView}
-            projectId={projectId}
-            transactionName={transactionName}
-            isLoading={isLoading}
-            error={error}
-            totalValues={totals}
-            onChangeFilter={onChangeFilter}
-            spanOperationBreakdownFilter={spanOperationBreakdownFilter}
-          />
-        );
-      }}
-    </DiscoverQuery>
+      organization={organization}
+      eventView={eventView}
+      projectId={projectId}
+      transactionName={transactionName}
+      isLoading={isLoading || isAdditionalQueryLoading || isTotalCountQueryLoading}
+      error={error || additionalQueryError || totalCountQueryError}
+      totalValues={totals}
+      onChangeFilter={onChangeFilter}
+      spanOperationBreakdownFilter={spanOperationBreakdownFilter}
+      unfilteredTotalValues={unfilteredTotals}
+    />
   );
 }
 
@@ -160,6 +213,7 @@ function generateEventView({
   transactionName,
 }: {
   location: Location;
+  organization: Organization;
   transactionName: string;
 }): EventView {
   // Use the user supplied query but overwrite any transaction or event type
@@ -191,6 +245,18 @@ function generateEventView({
   );
 }
 
+function getTotalCountEventView(
+  _organization: Organization,
+  eventView: EventView
+): EventView {
+  const totalCountField: QueryFieldValue = {
+    kind: 'function',
+    function: ['count', '', undefined, undefined],
+  };
+
+  return eventView.withColumns([totalCountField]);
+}
+
 function getTotalsEventView(
   _organization: Organization,
   eventView: EventView
@@ -204,10 +270,6 @@ function getTotalsEventView(
     {
       kind: 'function',
       function: ['p95', '', undefined, undefined],
-    },
-    {
-      kind: 'function',
-      function: ['count', '', undefined, undefined],
     },
     {
       kind: 'function',
@@ -232,6 +294,10 @@ function getTotalsEventView(
     {
       kind: 'function',
       function: ['apdex', '', undefined, undefined],
+    },
+    {
+      kind: 'function',
+      function: ['sum', 'transaction.duration', undefined, undefined],
     },
   ];
 

@@ -15,9 +15,17 @@ __all__ = (
     "TransactionTagsKey",
     "TransactionStatusTagValue",
     "TransactionSatisfactionTagValue",
+    "PUBLIC_EXPRESSION_REGEX",
+    "PUBLIC_NAME_REGEX",
 )
 
+import re
 from enum import Enum
+
+from sentry.snuba.metrics.utils import OP_REGEX
+
+PUBLIC_NAME_REGEX = r"([a-z_]+(?:\.[a-z_]+)*)"
+PUBLIC_EXPRESSION_REGEX = re.compile(rf"^{OP_REGEX}\({PUBLIC_NAME_REGEX}\)$")
 
 
 class SessionMetricKey(Enum):
@@ -30,15 +38,23 @@ class SessionMetricKey(Enum):
     ALL = "session.all"
     ABNORMAL = "session.abnormal"
     CRASHED = "session.crashed"
+    CRASH_FREE = "session.crash_free"
     ERRORED = "session.errored"
+    ERRORED_PREAGGREGATED = "session.errored_preaggregated"
     HEALTHY = "session.healthy"
+    CRASH_RATE = "session.crash_rate"
     CRASH_FREE_RATE = "session.crash_free_rate"
     ALL_USER = "session.all_user"
     ABNORMAL_USER = "session.abnormal_user"
     CRASHED_USER = "session.crashed_user"
+    CRASH_FREE_USER = "session.crash_free_user"
     ERRORED_USER = "session.errored_user"
     HEALTHY_USER = "session.healthy_user"
+    CRASH_USER_RATE = "session.crash_user_rate"
     CRASH_FREE_USER_RATE = "session.crash_free_user_rate"
+    ERRORED_SET = "sessions.errored.unique"
+    ANR_RATE = "session.anr_rate"
+    FOREGROUND_ANR_RATE = "session.foreground_anr_rate"
 
 
 class TransactionMetricKey(Enum):
@@ -61,6 +77,8 @@ class TransactionMetricKey(Enum):
     MEASUREMENTS_FRAMES_SLOW = "transaction.measurements.frames_slow"
     MEASUREMENTS_FRAMES_SLOW_RATE = "transaction.measurements.frames_slow_rate"
     MEASUREMENTS_FRAMES_TOTAL = "transaction.measurements.frames_total"
+    MEASUREMENTS_TIME_TO_INITIAL_DISPLAY = "transaction.measurements.time_to_initial_display"
+    MEASUREMENTS_TIME_TO_FULL_DISPLAY = "transaction.measurements.time_to_full_display"
     MEASUREMENTS_STALL_COUNT = "transaction.measurements.stall_count"
     MEASUREMENTS_STALL_LONGEST_TIME = "transaction.measurements.stall_longest_time"
     MEASUREMENTS_STALL_PERCENTAGE = "transaction.measurements.stall_percentage"
@@ -75,6 +93,8 @@ class TransactionMetricKey(Enum):
     APDEX = "transaction.apdex"
     MISERABLE_USER = "transaction.miserable_user"
     USER_MISERY = "transaction.user_misery"
+    FAILURE_COUNT = "transaction.failure_count"
+    TEAM_KEY_TRANSACTION = "transactions.team_key_transaction"
 
 
 # TODO: these tag keys and values below probably don't belong here, and should

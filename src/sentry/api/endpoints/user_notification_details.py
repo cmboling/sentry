@@ -4,10 +4,12 @@ from rest_framework import serializers, status
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry.api.base import control_silo_endpoint
 from sentry.api.bases.user import UserEndpoint
 from sentry.api.fields.empty_integer import EmptyIntegerField
 from sentry.api.serializers import Serializer, serialize
 from sentry.models import NotificationSetting, UserOption
+from sentry.models.actor import get_actor_id_for_user
 from sentry.notifications.types import NotificationScopeType, UserOptionsSettingsKey
 from sentry.notifications.utils.legacy_mappings import (
     USER_OPTION_SETTINGS,
@@ -21,11 +23,11 @@ from sentry.types.integrations import ExternalProviders
 class UserNotificationsSerializer(Serializer):
     def get_attrs(self, item_list, user, *args, **kwargs):
         user_options = UserOption.objects.filter(
-            user__in=item_list, organization=None, project=None
+            user__in=item_list, organization_id=None, project_id=None
         ).select_related("user")
         keys_to_user_option_objects = {user_option.key: user_option for user_option in user_options}
 
-        actor_mapping = {user.actor_id: user for user in item_list}
+        actor_mapping = {get_actor_id_for_user(user): user for user in item_list}
         notification_settings = NotificationSetting.objects._filter(
             ExternalProviders.EMAIL,
             scope_type=NotificationScopeType.USER,
@@ -72,6 +74,7 @@ class UserNotificationDetailsSerializer(serializers.Serializer):
     )
 
 
+@control_silo_endpoint
 class UserNotificationDetailsEndpoint(UserEndpoint):
     def get(self, request: Request, user) -> Response:
         serialized = serialize(user, request.user, UserNotificationsSerializer())
@@ -104,8 +107,8 @@ class UserNotificationDetailsEndpoint(UserEndpoint):
                 user_option, _ = UserOption.objects.get_or_create(
                     key=USER_OPTION_SETTINGS[key]["key"],
                     user=user,
-                    project=None,
-                    organization=None,
+                    project_id=None,
+                    organization_id=None,
                 )
                 user_option.update(value=str(int(value)))
 

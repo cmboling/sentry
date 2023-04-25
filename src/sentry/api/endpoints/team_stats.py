@@ -2,12 +2,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import tsdb
-from sentry.api.base import EnvironmentMixin, StatsMixin
+from sentry.api.base import EnvironmentMixin, StatsMixin, region_silo_endpoint
 from sentry.api.bases.team import TeamEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.models import Environment, Project
 
 
+@region_silo_endpoint
 class TeamStatsEndpoint(TeamEndpoint, EnvironmentMixin, StatsMixin):
     def get(self, request: Request, team) -> Response:
         """
@@ -50,6 +51,7 @@ class TeamStatsEndpoint(TeamEndpoint, EnvironmentMixin, StatsMixin):
                 model=tsdb.models.project,
                 keys=[p.id for p in projects],
                 **self._parse_args(request, environment_id),
+                tenant_ids={"organization_id": team.organization_id},
             ).values()
         )
 

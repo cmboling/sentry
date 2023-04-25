@@ -5,8 +5,10 @@ from django.urls import reverse
 from sentry.models import ApiToken
 from sentry.testutils import APITestCase
 from sentry.testutils.helpers import with_feature
+from sentry.testutils.silo import region_silo_test
 
 
+@region_silo_test
 class ProjectGroupingConfigsPermissionsTest(APITestCase):
 
     endpoint = "sentry-api-0-project-grouping-configs"
@@ -19,6 +21,7 @@ class ProjectGroupingConfigsPermissionsTest(APITestCase):
         assert response.status_code == 403
 
 
+@region_silo_test
 class ProjectGroupingConfigsTest(APITestCase):
 
     endpoint = "sentry-api-0-project-grouping-configs"
@@ -39,4 +42,4 @@ class ProjectGroupingConfigsTest(APITestCase):
     def test_feature_flag_on(self):
         response = self.get_success_response(self.project.organization.slug, self.project.slug)
         for config in response.data:
-            assert config["latest"] == (config["id"] == "mobile:2021-02-12")
+            assert config["latest"] == (config["id"] == "newstyle:2019-10-29")

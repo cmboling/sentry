@@ -1,6 +1,9 @@
-from sentry.db.models import EncryptedJsonField, FlexibleForeignKey, Model
+from sentry.db.models import FlexibleForeignKey, Model, region_silo_only_model
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
+from sentry.db.models.fields.jsonfield import JSONField
 
 
+@region_silo_only_model
 class ProjectIntegration(Model):
     """
     TODO(epurkhiser): This is deprecated and will be removed soon. Do not use
@@ -10,10 +13,10 @@ class ProjectIntegration(Model):
     __include_in_export__ = False
 
     project = FlexibleForeignKey("sentry.Project")
-    integration = FlexibleForeignKey("sentry.Integration")
-    config = EncryptedJsonField(default=dict)
+    integration_id = HybridCloudForeignKey("sentry.Integration", on_delete="CASCADE")
+    config = JSONField(default=dict)
 
     class Meta:
         app_label = "sentry"
         db_table = "sentry_projectintegration"
-        unique_together = (("project", "integration"),)
+        unique_together = (("project", "integration_id"),)

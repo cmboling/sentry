@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.urls import reverse
 
 from sentry.testutils.helpers.datetime import iso_format
+from sentry.testutils.silo import region_silo_test
 from sentry.utils.cursors import Cursor
 from sentry.utils.samples import load_data
 from tests.snuba.api.endpoints.test_organization_events_facets_performance import (
@@ -10,6 +11,7 @@ from tests.snuba.api.endpoints.test_organization_events_facets_performance impor
 )
 
 
+@region_silo_test
 class OrganizationEventsFacetsPerformanceHistogramEndpointTest(
     BaseOrganizationEventsFacetsPerformanceEndpointTest
 ):
@@ -384,14 +386,3 @@ class OrganizationEventsFacetsPerformanceHistogramEndpointTest(
         assert tag_data[1]["tags_value"] == "orange"
         assert tag_data[1]["count"] == 10
         assert tag_data[1]["aggregate"] == 1500000.0
-
-
-class OrganizationEventsFacetsPerformanceHistogramEndpointTestWithSnql(
-    OrganizationEventsFacetsPerformanceHistogramEndpointTest
-):
-    feature_list = (
-        "organizations:discover-basic",
-        "organizations:global-views",
-        "organizations:performance-view",
-        "organizations:performance-use-snql",
-    )

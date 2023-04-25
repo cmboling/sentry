@@ -6,19 +6,19 @@ from freezegun import freeze_time
 from sentry.models import GroupAssignee, GroupEnvironment, GroupHistoryStatus
 from sentry.testutils import APITestCase
 from sentry.testutils.helpers.datetime import before_now
+from sentry.testutils.silo import region_silo_test
 
 
 @freeze_time()
+@region_silo_test
 class TeamTimeToResolutionTest(APITestCase):
     endpoint = "sentry-api-0-team-time-to-resolution"
 
     def test_simple(self):
         project1 = self.create_project(teams=[self.team], slug="foo")
         project2 = self.create_project(teams=[self.team], slug="bar")
-        group1 = self.create_group(checksum="a" * 32, project=project1, times_seen=10)
-        group2 = self.create_group(
-            checksum="b" * 32, project=project2, times_seen=5, first_seen=before_now(days=20)
-        )
+        group1 = self.create_group(project=project1, times_seen=10)
+        group2 = self.create_group(project=project2, times_seen=5, first_seen=before_now(days=20))
         GroupAssignee.objects.assign(group1, self.user)
         GroupAssignee.objects.assign(group2, self.user)
 
@@ -98,7 +98,7 @@ class TeamTimeToResolutionTest(APITestCase):
 
     def test_filter_by_environment(self):
         project1 = self.create_project(teams=[self.team], slug="foo")
-        group1 = self.create_group(checksum="a" * 32, project=project1, times_seen=10)
+        group1 = self.create_group(project=project1, times_seen=10)
         env1 = self.create_environment(project=project1, name="prod")
         self.create_environment(project=project1, name="dev")
         GroupAssignee.objects.assign(group1, self.user)

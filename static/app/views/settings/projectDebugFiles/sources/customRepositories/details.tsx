@@ -3,7 +3,7 @@ import styled from '@emotion/styled';
 import DateTime from 'sentry/components/dateTime';
 import NotAvailable from 'sentry/components/notAvailable';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {AppStoreConnectStatusData} from 'sentry/types/debugFiles';
 
 type Props = {
@@ -50,7 +50,7 @@ const Wrapper = styled('div')`
 
   grid-column: 2/-1;
 
-  @media (min-width: ${p => p.theme.breakpoints[0]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     margin-top: ${space(1)};
     grid-template-columns: max-content 1fr;
     gap: ${space(1)};
@@ -66,7 +66,7 @@ const Value = styled('div')`
   font-family: ${p => p.theme.text.familyMono};
   background-color: ${p => p.theme.backgroundSecondary};
 
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
     :not(:last-child) {
       margin-bottom: ${space(1)};
     }

@@ -38,6 +38,7 @@ from sentry.utils.cache import cache_key_for_event
 from sentry.utils.dates import to_datetime
 from sentry.utils.kafka import create_batching_kafka_consumer
 from sentry.utils.sdk import mark_scope_as_unsafe
+from sentry.utils.snuba import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +301,7 @@ def _load_event(
                     start_time=start_time,
                     event_id=event_id,
                     project=project,
+                    has_attachments=bool(attachments),
                 )
 
         # remember for an 1 hour that we saved this event (deduplication protection)
@@ -312,7 +314,8 @@ def _load_event(
 
 
 def _store_event(data) -> str:
-    return event_processing_store.store(data)
+    with metrics.timer("ingest_consumer._store_event"):
+        return event_processing_store.store(data)
 
 
 @trace_func(name="ingest_consumer.process_event")
@@ -365,10 +368,22 @@ def process_individual_attachment(message, projects) -> None:
         logger.info("Organization has no event attachments: %s", project_id)
         return
 
-    # Attachments may be uploaded for events that already exist. Fetch the
-    # existing group_id, so that the attachment can be fetched by group-level
-    # APIs. This is inherently racy.
-    event = eventstore.get_event_by_id(project.id, event_id)
+    try:
+        # Attachments may be uploaded for events that already exist. Fetch the
+        # existing group_id, so that the attachment can be fetched by group-level
+        # APIs. This is inherently racy.
+        #
+        # This is not guaranteed to provide correct results. Eventstore runs queries
+        # against Snuba. This is problematic on the critical path on the ingestion
+        # pipeline as Snuba can rate limit queries for specific projects when they
+        # are above their quota. There is no guarantee that, when a project is within
+        # their ingestion quota, they are also within the snuba queries quota.
+        # Since there is no dead letter queue on this consumer, the only way to
+        # prevent the consumer to crash as of now is to ignore the error and proceed.
+        event = eventstore.get_event_by_id(project.id, event_id)
+    except RateLimitExceeded as e:
+        event = None
+        logger.exception(e)
 
     group_id = None
     if event is not None:
@@ -378,7 +393,7 @@ def process_individual_attachment(message, projects) -> None:
     attachment = attachment_cache.get_from_chunks(
         key=cache_key, type=attachment.pop("attachment_type"), **attachment
     )
-    if attachment.type != "event.attachment":
+    if attachment.type not in ("event.attachment", "event.view_hierarchy"):
         logger.exception("invalid individual attachment type: %s", attachment.type)
         return
 

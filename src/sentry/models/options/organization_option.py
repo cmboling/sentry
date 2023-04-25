@@ -4,10 +4,10 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from django.db import models
 
-from sentry.db.models import FlexibleForeignKey, Model, sane_repr
-from sentry.db.models.fields import EncryptedPickledObjectField
+from sentry.db.models import FlexibleForeignKey, Model, region_silo_only_model, sane_repr
+from sentry.db.models.fields.picklefield import PickledObjectField
 from sentry.db.models.manager import OptionManager, Value
-from sentry.tasks.relay import schedule_update_config_cache
+from sentry.tasks.relay import schedule_invalidate_project_config
 from sentry.utils.cache import cache
 
 if TYPE_CHECKING:
@@ -63,8 +63,8 @@ class OrganizationOptionManager(OptionManager["Organization"]):
 
     def reload_cache(self, organization_id: int, update_reason: str) -> Mapping[str, Value]:
         if update_reason != "organizationoption.get_all_values":
-            schedule_update_config_cache(
-                organization_id=organization_id, generate=False, update_reason=update_reason
+            schedule_invalidate_project_config(
+                organization_id=organization_id, trigger=update_reason
             )
 
         cache_key = self._make_key(organization_id)
@@ -80,6 +80,7 @@ class OrganizationOptionManager(OptionManager["Organization"]):
         self.reload_cache(instance.organization_id, "organizationoption.post_delete")
 
 
+@region_silo_only_model
 class OrganizationOption(Model):  # type: ignore
     """
     Organization options apply only to an instance of a organization.
@@ -95,7 +96,7 @@ class OrganizationOption(Model):  # type: ignore
 
     organization = FlexibleForeignKey("sentry.Organization")
     key = models.CharField(max_length=64)
-    value = EncryptedPickledObjectField()
+    value = PickledObjectField()
 
     objects = OrganizationOptionManager()
 

@@ -20,7 +20,7 @@ SUCCESS_UNLINKED_MESSAGE = "Your Slack identity has been unlinked from your Sent
 
 
 def build_unlinking_url(
-    integration_id: str, slack_id: str, channel_id: str, response_url: str
+    integration_id: int, slack_id: str, channel_id: str, response_url: str
 ) -> str:
     return base_build_linking_url(
         "sentry-integration-slack-unlink-identity",
@@ -31,7 +31,11 @@ def build_unlinking_url(
     )
 
 
-class SlackUnlinkIdentityView(BaseView):  # type: ignore
+class SlackUnlinkIdentityView(BaseView):
+    """
+    Django view for unlinking user from slack account. Deletes from Identity table.
+    """
+
     @transaction_start("SlackUnlinkIdentityView")
     @never_cache
     def handle(self, request: Request, signed_params: str) -> Response:
@@ -57,9 +61,9 @@ class SlackUnlinkIdentityView(BaseView):  # type: ignore
             )
 
         try:
-            Identity.objects.filter(idp=idp, external_id=params["slack_id"]).delete()
-        except IntegrityError as e:
-            logger.error("slack.unlink.integrity-error", extra=e)
+            Identity.objects.filter(idp_id=idp.id, external_id=params["slack_id"]).delete()
+        except IntegrityError:
+            logger.exception("slack.unlink.integrity-error")
             raise Http404
 
         send_slack_response(integration, SUCCESS_UNLINKED_MESSAGE, params, command="unlink")

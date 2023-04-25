@@ -1,7 +1,9 @@
 import {mat3} from 'gl-matrix';
 
+import {Rect} from 'sentry/utils/profiling/speedscope';
+
 import {FlamegraphTheme} from '../flamegraph/flamegraphTheme';
-import {getContext, Rect} from '../gl/utils';
+import {getContext} from '../gl/utils';
 
 class PositionIndicatorRenderer {
   canvas: HTMLCanvasElement;
@@ -15,18 +17,20 @@ class PositionIndicatorRenderer {
     this.context = getContext(this.canvas, '2d');
   }
 
-  draw(configView: Rect, configSpace: Rect, configViewToPhysicalSpace: mat3): void {
+  draw(configView: Rect, configSpace: Rect, configSpaceToPhysicalSpace: mat3): void {
     if (configView.equals(configSpace)) {
-      // User is not zoomed in, so we dont need to draw anything.
+      // User is not zoomed in or entire chart fits in view,
+      // then we dont need to draw anything.
       return;
     }
 
     // Transform both views to their respective physical spaces
     const physicalConfigViewRect = Rect.From(configView).transformRect(
-      configViewToPhysicalSpace
+      configSpaceToPhysicalSpace
     );
+
     const physicalConfigRect = Rect.From(configSpace).transformRect(
-      configViewToPhysicalSpace
+      configSpaceToPhysicalSpace
     );
 
     const offsetRectForBorderWidth: [number, number, number, number] = [

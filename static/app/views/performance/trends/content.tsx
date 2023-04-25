@@ -1,19 +1,24 @@
-import * as React from 'react';
+import {Component, Fragment} from 'react';
 import {browserHistory} from 'react-router';
 import styled from '@emotion/styled';
 import {Location} from 'history';
 
-import Alert from 'sentry/components/alert';
+import Feature from 'sentry/components/acl/feature';
+import {Alert} from 'sentry/components/alert';
 import Breadcrumbs from 'sentry/components/breadcrumbs';
-import DropdownControl, {DropdownItem} from 'sentry/components/dropdownControl';
+import {CompactSelect} from 'sentry/components/compactSelect';
+import DatePageFilter from 'sentry/components/datePageFilter';
+import EnvironmentPageFilter from 'sentry/components/environmentPageFilter';
 import SearchBar from 'sentry/components/events/searchBar';
 import * as Layout from 'sentry/components/layouts/thirds';
+import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
 import PageFiltersContainer from 'sentry/components/organizations/pageFilters/container';
+import ProjectPageFilter from 'sentry/components/projectPageFilter';
 import {MAX_QUERY_LENGTH} from 'sentry/constants';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, PageFilters, Project} from 'sentry/types';
-import {trackAnalyticsEvent} from 'sentry/utils/analytics';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import EventView from 'sentry/utils/discover/eventView';
 import {generateAggregateFields} from 'sentry/utils/discover/fields';
 import {decodeScalar} from 'sentry/utils/queryString';
@@ -56,7 +61,7 @@ export const defaultTrendsSelectionDate = {
   period: DEFAULT_TRENDS_STATS_PERIOD,
 };
 
-class TrendsContent extends React.Component<Props, State> {
+class TrendsContent extends Component<Props, State> {
   state: State = {};
 
   handleSearch = (searchQuery: string) => {
@@ -88,10 +93,8 @@ class TrendsContent extends React.Component<Props, State> {
       offsets[queryKey] = undefined;
     });
 
-    trackAnalyticsEvent({
-      eventKey: 'performance_views.trends.change_function',
-      eventName: 'Performance Views: Change Function',
-      organization_id: parseInt(organization.id, 10),
+    trackAnalytics('performance_views.trends.change_function', {
+      organization,
       function_name: field,
     });
 
@@ -130,10 +133,8 @@ class TrendsContent extends React.Component<Props, State> {
     const {organization, location} = this.props;
     const cursors = resetCursors();
 
-    trackAnalyticsEvent({
-      eventKey: 'performance_views.trends.change_parameter',
-      eventName: 'Performance Views: Change Parameter',
-      organization_id: parseInt(organization.id, 10),
+    trackAnalytics('performance_views.trends.change_parameter', {
+      organization,
       parameter_name: label,
     });
 
@@ -231,7 +232,12 @@ class TrendsContent extends React.Component<Props, State> {
         <Layout.Body>
           <Layout.Main fullWidth>
             <DefaultTrends location={location} eventView={eventView} projects={projects}>
-              <StyledSearchContainer>
+              <FilterActions>
+                <PageFilterBar condensed>
+                  <ProjectPageFilter />
+                  <EnvironmentPageFilter />
+                  <DatePageFilter alignDropdown="left" />
+                </PageFilterBar>
                 <StyledSearchBar
                   searchSource="trends"
                   organization={organization}
@@ -241,44 +247,26 @@ class TrendsContent extends React.Component<Props, State> {
                   onSearch={this.handleSearch}
                   maxQueryLength={MAX_QUERY_LENGTH}
                 />
-                <TrendsDropdown data-test-id="trends-dropdown">
-                  <DropdownControl
-                    buttonProps={{prefix: t('Percentile')}}
-                    label={currentTrendFunction.label}
-                  >
-                    {TRENDS_FUNCTIONS.map(({label, field}) => (
-                      <DropdownItem
-                        key={field}
-                        onSelect={this.handleTrendFunctionChange}
-                        eventKey={field}
-                        data-test-id={field}
-                        isActive={field === currentTrendFunction.field}
-                      >
-                        {label}
-                      </DropdownItem>
-                    ))}
-                  </DropdownControl>
-                </TrendsDropdown>
-                <TrendsDropdown>
-                  <DropdownControl
-                    buttonProps={{prefix: t('Parameter')}}
-                    label={currentTrendParameter.label}
-                  >
-                    {TRENDS_PARAMETERS.map(({label}) => (
-                      <DropdownItem
-                        key={label}
-                        onSelect={this.handleParameterChange}
-                        eventKey={label}
-                        data-test-id={label}
-                        isActive={label === currentTrendParameter.label}
-                      >
-                        {label}
-                      </DropdownItem>
-                    ))}
-                  </DropdownControl>
-                </TrendsDropdown>
-              </StyledSearchContainer>
-              <TrendsLayoutContainer>
+                <CompactSelect
+                  triggerProps={{prefix: t('Percentile')}}
+                  value={currentTrendFunction.field}
+                  options={TRENDS_FUNCTIONS.map(({label, field}) => ({
+                    value: field,
+                    label,
+                  }))}
+                  onChange={opt => this.handleTrendFunctionChange(opt.value)}
+                />
+                <CompactSelect
+                  triggerProps={{prefix: t('Parameter')}}
+                  value={currentTrendParameter.label}
+                  options={TRENDS_PARAMETERS.map(({label}) => ({
+                    value: label,
+                    label,
+                  }))}
+                  onChange={opt => this.handleParameterChange(opt.value)}
+                />
+              </FilterActions>
+              <ListContainer>
                 <ChangedTransactions
                   trendChangeType={TrendChangeType.IMPROVED}
                   previousTrendFunction={previousTrendFunction}
@@ -293,7 +281,27 @@ class TrendsContent extends React.Component<Props, State> {
                   location={location}
                   setError={this.setError}
                 />
-              </TrendsLayoutContainer>
+              </ListContainer>
+              <Feature features={['organizations:performance-new-trends']}>
+                <ListContainer>
+                  <ChangedTransactions
+                    trendChangeType={TrendChangeType.IMPROVED}
+                    previousTrendFunction={previousTrendFunction}
+                    trendView={trendView}
+                    location={location}
+                    setError={this.setError}
+                    withBreakpoint
+                  />
+                  <ChangedTransactions
+                    trendChangeType={TrendChangeType.REGRESSION}
+                    previousTrendFunction={previousTrendFunction}
+                    trendView={trendView}
+                    location={location}
+                    setError={this.setError}
+                    withBreakpoint
+                  />
+                </ListContainer>
+              </Feature>
             </DefaultTrends>
           </Layout.Main>
         </Layout.Body>
@@ -309,7 +317,7 @@ type DefaultTrendsProps = {
   projects: Project[];
 };
 
-class DefaultTrends extends React.Component<DefaultTrendsProps> {
+class DefaultTrends extends Component<DefaultTrendsProps> {
   hasPushedDefaults = false;
 
   render() {
@@ -325,7 +333,7 @@ class DefaultTrends extends React.Component<DefaultTrendsProps> {
 
     if (queryString || this.hasPushedDefaults) {
       this.hasPushedDefaults = true;
-      return <React.Fragment>{children}</React.Fragment>;
+      return <Fragment>{children}</Fragment>;
     }
     this.hasPushedDefaults = true;
     conditions.setFilterValues('tpm()', ['>0.01']);
@@ -346,27 +354,39 @@ class DefaultTrends extends React.Component<DefaultTrendsProps> {
   }
 }
 
-const StyledSearchBar = styled(SearchBar)`
-  flex-grow: 1;
-  margin-bottom: ${space(2)};
-`;
-
-const TrendsDropdown = styled('div')`
-  margin-left: ${space(1)};
-  flex-grow: 0;
-`;
-
-const StyledSearchContainer = styled('div')`
-  display: flex;
-`;
-
-const TrendsLayoutContainer = styled('div')`
+const FilterActions = styled('div')`
   display: grid;
   gap: ${space(2)};
+  margin-bottom: ${space(2)};
 
-  @media (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    grid-template-columns: repeat(3, min-content);
+  }
+
+  @media (min-width: ${p => p.theme.breakpoints.xlarge}) {
+    grid-template-columns: auto 1fr auto auto;
+  }
+`;
+
+const StyledSearchBar = styled(SearchBar)`
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
+    order: 1;
+    grid-column: 1/5;
+  }
+
+  @media (min-width: ${p => p.theme.breakpoints.xlarge}) {
+    order: initial;
+    grid-column: auto;
+  }
+`;
+
+const ListContainer = styled('div')`
+  display: grid;
+  gap: ${space(2)};
+  margin-bottom: ${space(2)};
+
+  @media (min-width: ${p => p.theme.breakpoints.small}) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: stretch;
   }
 `;
 

@@ -2,18 +2,18 @@ import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
 import Access from 'sentry/components/acl/access';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import ButtonBar from 'sentry/components/buttonBar';
 import Confirm from 'sentry/components/confirm';
 import Count from 'sentry/components/count';
 import DateTime from 'sentry/components/dateTime';
 import Link from 'sentry/components/links/link';
 import TextOverflow from 'sentry/components/textOverflow';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import Version from 'sentry/components/version';
 import {IconDelete} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {SourceMapsArchive} from 'sentry/types';
 
 type Props = {
@@ -23,7 +23,7 @@ type Props = {
   projectId: string;
 };
 
-const SourceMapsArchiveRow = ({archive, orgId, projectId, onDelete}: Props) => {
+function SourceMapsArchiveRow({archive, orgId, projectId, onDelete}: Props) {
   const {name, date, fileCount} = archive;
   const archiveLink = `/settings/${orgId}/projects/${projectId}/source-maps/${encodeURIComponent(
     name
@@ -60,7 +60,7 @@ const SourceMapsArchiveRow = ({archive, orgId, projectId, onDelete}: Props) => {
                   disabled={!hasAccess}
                 >
                   <Button
-                    size="small"
+                    size="sm"
                     icon={<IconDelete size="sm" />}
                     title={t('Remove All Artifacts')}
                     aria-label={t('Remove All Artifacts')}
@@ -74,7 +74,7 @@ const SourceMapsArchiveRow = ({archive, orgId, projectId, onDelete}: Props) => {
       </ActionsColumn>
     </Fragment>
   );
-};
+}
 
 const Column = styled('div')`
   display: flex;

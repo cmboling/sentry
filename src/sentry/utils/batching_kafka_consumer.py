@@ -17,7 +17,7 @@ from django.conf import settings
 
 from sentry.utils import kafka_config
 
-logger = logging.getLogger("batching-kafka-consumer")
+logger = logging.getLogger("sentry.batching-kafka-consumer")
 
 DEFAULT_QUEUED_MAX_MESSAGE_KBYTES = 50000
 DEFAULT_QUEUED_MIN_MESSAGES = 10000
@@ -57,19 +57,13 @@ def wait_for_topics(admin_client: AdminClient, topics: List[str], timeout: int =
                 )
 
 
-def create_topics(topics: List[str]):
+def create_topics(cluster_name: str, topics: List[str]):
     """If configured to do so, create topics and make sure that they exist
 
     topics must be from the same cluster.
     """
     if settings.KAFKA_CONSUMER_AUTO_CREATE_TOPICS:
-        cluster_names = {settings.KAFKA_TOPICS[topic]["cluster"] for topic in topics}
-        assert len(cluster_names) == 1
-        # This is required for confluent-kafka>=1.5.0, otherwise the topics will
-        # not be automatically created.
-        conf = kafka_config.get_kafka_admin_cluster_options(
-            cluster_names.pop(), override_params={"allow.auto.create.topics": "true"}
-        )
+        conf = kafka_config.get_kafka_admin_cluster_options(cluster_name)
         admin_client = AdminClient(conf)
         wait_for_topics(admin_client, topics)
 
@@ -148,7 +142,11 @@ class AbstractBatchWorker(metaclass=abc.ABCMeta):
 
 
 class BatchingKafkaConsumer:
-    """The `BatchingKafkaConsumer` is an abstraction over most Kafka consumer's main event
+    """
+    This consumer is deprecated and will eventually be removed. If you are writing a new
+    consumer, use Arroyo.
+
+    The `BatchingKafkaConsumer` is an abstraction over most Kafka consumer's main event
     loops. For this reason it uses inversion of control: the user provides an implementation
     for the `AbstractBatchWorker` and then the `BatchingKafkaConsumer` handles the rest.
 
@@ -309,7 +307,7 @@ class BatchingKafkaConsumer:
             },
         )
 
-        create_topics(topics)
+        create_topics(cluster_name, topics)
 
         consumer = Consumer(consumer_config)
 

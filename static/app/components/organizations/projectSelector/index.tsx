@@ -1,279 +1,342 @@
-import {Fragment, useRef} from 'react';
+import {Fragment, useMemo, useRef, useState} from 'react';
+import {ClassNames} from '@emotion/react';
 import styled from '@emotion/styled';
 import sortBy from 'lodash/sortBy';
 
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
-import Button from 'sentry/components/button';
+import {MenuActions} from 'sentry/components/deprecatedDropdownMenu';
 import DropdownAutoComplete from 'sentry/components/dropdownAutoComplete';
 import PageFilterPinButton from 'sentry/components/organizations/pageFilters/pageFilterPinButton';
-import {IconAdd} from 'sentry/icons';
+import {ALL_ACCESS_PROJECTS} from 'sentry/constants/pageFilters';
 import {t} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Project} from 'sentry/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import getRouteStringFromRoutes from 'sentry/utils/getRouteStringFromRoutes';
 import theme from 'sentry/utils/theme';
+import {useRoutes} from 'sentry/utils/useRoutes';
 
+import ProjectSelectorFooter from './footer';
 import SelectorItem from './selectorItem';
 
-type DropdownAutoCompleteProps = React.ComponentProps<typeof DropdownAutoComplete>;
-
 type Props = {
-  children: (
-    args: Parameters<DropdownAutoCompleteProps['children']>[0] & {
-      selectedProjects: Project[];
-    }
-  ) => React.ReactElement;
   /**
-   * Used by multiProjectSelector
+   * Used to render a custom dropdown button for the DropdownAutoComplete
    */
-  multiProjects: Array<Project>;
-  nonMemberProjects: Array<Project>;
+  customDropdownButton: (config: {
+    actions: MenuActions;
+    isOpen: boolean;
+    selectedProjects: Project[];
+  }) => React.ReactElement;
   /**
-   * Callback when a project is selected
+   * The loading indicator to render when global selection is not yet ready.
    */
-  onSelect: (project: Project) => void;
+  customLoadingIndicator: React.ReactNode;
+  /**
+   * Projects the member is a part of
+   */
+  memberProjects: Project[];
+  /**
+   * Projects the member is _not_ part of
+   */
+  nonMemberProjects: Project[];
+  /**
+   * Triggered when the selection changes are applied
+   */
+  onApplyChange: (newProjects: number[]) => void;
+  /**
+   * Triggers any time a selection is changed, but the menu has not yet been closed or "applied"
+   */
+  onChange: (selected: number[]) => void;
   organization: Organization;
   /**
-   * Use this if the component should be a controlled component
+   * The selected projects
    */
-  selectedProjects: Array<Project>;
+  value: number[];
   /**
-   * Whether the menu should be detached from the actor
+   * Only allow a single project to be selected at once
    */
-  detached?: boolean;
+  disableMultipleProjectSelection?: boolean;
   /**
-   * Allow selecting multiple projects
+   * Disable the dropdown
    */
-  multi?: boolean;
+  disabled?: boolean;
   /**
-   * Callback when the input filter changes
+   * Message to show in the footer
    */
-  onFilterChange?: () => void;
-  /**
-   * Callback when projects are selected via the multiple project selector
-   * Calls back with (projects[], event)
-   */
-  onMultiSelect?: (projects: Array<Project>, event: React.MouseEvent) => void;
-  /**
-   * Represents if the current project selector is paginated or fully loaded.
-   * Currently only used to ensure that in an empty state the input is not
-   * hidden. This is for the case in which a user searches for a project which
-   * does not exist. If we hide the input due to no results, the user cannot
-   * recover
-   */
-  paginated?: boolean;
-  /**
-   * Represents if a search is taking place
-   */
-  searching?: boolean;
-  /**
-   * Show the pin button in the dropdown's header actions
-   */
-  showPin?: boolean;
-} & Pick<
-  DropdownAutoCompleteProps,
-  'menuFooter' | 'onScroll' | 'onClose' | 'rootClassName' | 'className'
->;
+  footerMessage?: React.ReactNode;
+  isGlobalSelectionReady?: boolean;
+};
 
-const ProjectSelector = ({
-  children,
+function ProjectSelector({
+  customDropdownButton,
+  customLoadingIndicator,
+  disableMultipleProjectSelection,
+  footerMessage,
+  isGlobalSelectionReady,
+  memberProjects,
+  nonMemberProjects = [],
+  onApplyChange,
+  onChange,
   organization,
-  menuFooter,
-  className,
-  rootClassName,
-  detached,
-  onClose,
-  onFilterChange,
-  onScroll,
-  searching,
-  paginated,
-  multiProjects,
-  onSelect,
-  onMultiSelect,
-  multi = false,
-  selectedProjects = [],
-  showPin,
-  ...props
-}: Props) => {
-  // We'll only update the selected project list every time we open the menu,
-  // this helps avoid re-sorting as we select projects.
-  const lastSelected = useRef<Project[]>(selectedProjects);
+  value,
+  disabled,
+}: Props) {
+  const routes = useRoutes();
+  // Used to determine if we should show the 'apply' changes button
+  const [hasChanges, setHasChanges] = useState(false);
 
+  // Used to keep selected projects sorted in the same order when opening /
+  // closing the project selector
+  const lastSelected = useRef(value);
+
+  const isMulti =
+    !disableMultipleProjectSelection && organization.features.includes('global-views');
+
+  /**
+   * Reset "hasChanges" state and call `onApplyChange` callback
+   *
+   * @param value optional parameter that will be passed to onApplyChange callback
+   */
+  const doApplyChange = (newValue: number[]) => {
+    setHasChanges(false);
+    onApplyChange(newValue);
+  };
+
+  /**
+   * Handler for when an explicit update call should be made.
+   * e.g. an "Update" button
+   *
+   * Should perform an "update" callback
+   */
+  const handleUpdate = (actions: {close: () => void}) => {
+    actions.close();
+    doApplyChange(value);
+  };
+
+  /**
+   * Handler for when a dropdown item was selected directly (and not via multi select)
+   *
+   * Should perform an "update" callback
+   */
+  const handleQuickSelect = (selected: Pick<Project, 'id'>) => {
+    trackAnalytics('projectselector.direct_selection', {
+      path: getRouteStringFromRoutes(routes),
+      organization,
+    });
+
+    const newValue = selected.id === null ? [] : [parseInt(selected.id, 10)];
+    onChange(newValue);
+    doApplyChange(newValue);
+  };
+
+  /**
+   * Handler for when dropdown menu closes
+   *
+   * Should perform an "update" callback
+   */
   const handleClose = () => {
-    lastSelected.current = selectedProjects;
-    onClose?.();
-  };
-
-  const getProjects = () => {
-    const {nonMemberProjects = []} = props;
-    return [
-      sortBy(multiProjects, project => [
-        !lastSelected.current.find(p => p.slug === project.slug),
-        !project.isBookmarked,
-        project.slug,
-      ]),
-      sortBy(nonMemberProjects, project => [project.slug]),
-    ];
-  };
-
-  const [projects, nonMemberProjects] = getProjects();
-
-  const handleSelect = ({value: project}: {value: Project}) => {
-    onSelect(project);
-  };
-
-  const handleMultiSelect = (project: Project, event: React.MouseEvent) => {
-    if (!onMultiSelect) {
-      // eslint-disable-next-line no-console
-      console.error(
-        'ProjectSelector is a controlled component but `onMultiSelect` callback is not defined'
-      );
+    // Only update if there are changes
+    if (!hasChanges) {
       return;
     }
 
-    const selectedProjectsMap = new Map(selectedProjects.map(p => [p.slug, p]));
+    trackAnalytics('projectselector.update', {
+      count: value.length,
+      path: getRouteStringFromRoutes(routes),
+      organization,
+      multi: isMulti,
+    });
+
+    doApplyChange(value);
+    lastSelected.current = value;
+  };
+
+  /**
+   * Handler for clearing the current value
+   *
+   * Should perform an "update" callback
+   */
+  const handleClear = () => {
+    trackAnalytics('projectselector.clear', {
+      path: getRouteStringFromRoutes(routes),
+      organization,
+    });
+
+    onChange([]);
+    doApplyChange([]);
+  };
+
+  const allProjects = [...memberProjects, ...nonMemberProjects];
+  const selectedProjectIds = useMemo(() => new Set(value), [value]);
+
+  const selected = allProjects.filter(project =>
+    selectedProjectIds.has(parseInt(project.id, 10))
+  );
+
+  if (!isGlobalSelectionReady) {
+    return <Fragment>{customLoadingIndicator}</Fragment>;
+  }
+
+  const listSort = (project: Project) => [
+    !lastSelected.current.includes(parseInt(project.id, 10)),
+    !project.isBookmarked,
+    project.slug,
+  ];
+
+  const projects = sortBy(memberProjects, listSort);
+  const otherProjects = sortBy(nonMemberProjects, listSort);
+
+  const handleMultiSelect = (project: Project) => {
+    const selectedProjectsMap = new Map(selected.map(p => [p.slug, p]));
 
     if (selectedProjectsMap.has(project.slug)) {
       // unselected a project
       selectedProjectsMap.delete(project.slug);
-      onMultiSelect(Array.from(selectedProjectsMap.values()), event);
-      return;
+    } else {
+      selectedProjectsMap.set(project.slug, project);
     }
 
-    selectedProjectsMap.set(project.slug, project);
-    onMultiSelect(Array.from(selectedProjectsMap.values()), event);
+    trackAnalytics('projectselector.toggle', {
+      action: selected.length > value.length ? 'added' : 'removed',
+      path: getRouteStringFromRoutes(routes),
+      organization,
+    });
+
+    const selectedList = [...selectedProjectsMap.values()]
+      .map(({id}) => parseInt(id, 10))
+      .filter(i => i);
+
+    onChange(selectedList);
+    setHasChanges(true);
   };
 
   const getProjectItem = (project: Project) => ({
-    value: project,
+    item: project,
     searchKey: project.slug,
     label: ({inputValue}: {inputValue: typeof project.slug}) => (
       <SelectorItem
+        key={project.slug}
         project={project}
         organization={organization}
-        multi={multi}
+        multi={isMulti}
         inputValue={inputValue}
-        isChecked={!!selectedProjects.find(({slug}) => slug === project.slug)}
+        isChecked={!!selected.find(({slug}) => slug === project.slug)}
         onMultiSelect={handleMultiSelect}
       />
     ),
   });
 
-  const getItems = (hasProjects: boolean) => {
-    if (!hasProjects) {
-      return [];
-    }
+  const hasProjects = !!projects?.length || !!otherProjects?.length;
 
-    return [
-      {
-        hideGroupLabel: true,
-        items: projects.map(getProjectItem),
-      },
-      {
-        hideGroupLabel: nonMemberProjects.length === 0,
-        itemSize: 'small',
-        id: 'no-membership-header', // needed for tests for non-virtualized lists
-        label: <Label>{t("Projects I don't belong to")}</Label>,
-        items: nonMemberProjects.map(getProjectItem),
-      },
-    ];
-  };
-
-  const hasProjects = !!projects?.length || !!nonMemberProjects?.length;
-  const newProjectUrl = `/organizations/${organization.slug}/projects/new/`;
-  const hasProjectWrite = organization.access.includes('project:write');
+  const items = !hasProjects
+    ? []
+    : [
+        {
+          hideGroupLabel: true,
+          items: projects.map(getProjectItem),
+        },
+        {
+          hideGroupLabel: otherProjects.length === 0,
+          itemSize: 'small',
+          id: 'no-membership-header', // needed for tests for non-virtualized lists
+          label: <Label>{t("Projects I don't belong to")}</Label>,
+          items: otherProjects.map(getProjectItem),
+        },
+      ];
 
   return (
-    <DropdownAutoComplete
-      blendCorner={false}
-      detached={detached}
-      searchPlaceholder={t('Filter projects')}
-      onSelect={handleSelect}
-      onClose={handleClose}
-      onChange={onFilterChange}
-      busyItemsStillVisible={searching}
-      onScroll={onScroll}
-      maxHeight={500}
-      minWidth={350}
-      inputProps={{style: {padding: 8, paddingLeft: 10}}}
-      rootClassName={rootClassName}
-      className={className}
-      emptyMessage={t('You have no projects')}
-      noResultsMessage={t('No projects found')}
-      virtualizedHeight={theme.headerSelectorRowHeight}
-      virtualizedLabelHeight={theme.headerSelectorLabelHeight}
-      emptyHidesInput={!paginated}
-      inputActions={
-        <InputActions>
-          <AddButton
-            aria-label={t('Add Project')}
-            disabled={!hasProjectWrite}
-            to={newProjectUrl}
-            size="xsmall"
-            icon={<IconAdd size="xs" isCircled />}
-            title={
-              !hasProjectWrite
-                ? t("You don't have permission to add a project")
-                : undefined
-            }
-          >
-            {showPin ? '' : t('Project')}
-          </AddButton>
-          {showPin && (
-            <GuideAnchor target="new_page_filter_pin" position="bottom">
-              <PageFilterPinButton size="xsmall" filter="projects" />
-            </GuideAnchor>
+    <ClassNames>
+      {({css}) => (
+        <StyledDropdownAutocomplete
+          detached
+          blendCorner={false}
+          disabled={disabled}
+          searchPlaceholder={t('Filter projects')}
+          onSelect={i => handleQuickSelect(i.item)}
+          onClose={handleClose}
+          maxHeight={500}
+          minWidth={350}
+          inputProps={{style: {padding: 8, paddingLeft: 10}}}
+          rootClassName={css`
+            display: flex;
+          `}
+          emptyMessage={t('You have no projects')}
+          noResultsMessage={t('No projects found')}
+          virtualizedHeight={theme.headerSelectorRowHeight}
+          virtualizedLabelHeight={theme.headerSelectorLabelHeight}
+          inputActions={
+            <InputActions>
+              <GuideAnchor target="new_page_filter_pin" position="bottom">
+                <PageFilterPinButton
+                  organization={organization}
+                  filter="projects"
+                  size="xs"
+                />
+              </GuideAnchor>
+            </InputActions>
+          }
+          menuFooter={({actions}) => (
+            <ProjectSelectorFooter
+              selected={selectedProjectIds}
+              disableMultipleProjectSelection={disableMultipleProjectSelection}
+              organization={organization}
+              hasChanges={hasChanges}
+              onApply={() => handleUpdate(actions)}
+              onShowAllProjects={() => {
+                handleQuickSelect({id: ALL_ACCESS_PROJECTS.toString()});
+                trackAnalytics('projectselector.multi_button_clicked', {
+                  button_type: 'all',
+                  path: getRouteStringFromRoutes(routes),
+                  organization,
+                });
+
+                // The close action here triggers the onClose() handler which we
+                // use to apply the current selection. We need that to happen on the
+                // next render so that the state will reflect All Projects instead of
+                // the outdated selection that exists when this callback is triggered.
+                setTimeout(actions.close);
+              }}
+              onShowMyProjects={() => {
+                handleClear();
+                trackAnalytics('projectselector.multi_button_clicked', {
+                  button_type: 'my',
+                  path: getRouteStringFromRoutes(routes),
+                  organization,
+                });
+
+                // The close action here triggers the onClose() handler which we
+                // use to apply the current selection. We need that to happen on the
+                // next render so that the state will reflect My Projects instead of
+                // the outdated selection that exists when this callback is triggered.
+                setTimeout(actions.close);
+              }}
+              message={footerMessage}
+            />
           )}
-        </InputActions>
-      }
-      menuFooter={renderProps => {
-        const renderedFooter =
-          typeof menuFooter === 'function' ? menuFooter(renderProps) : menuFooter;
-
-        const showCreateProjectButton = !hasProjects && hasProjectWrite;
-
-        if (!renderedFooter && !showCreateProjectButton) {
-          return null;
-        }
-
-        return (
-          <Fragment>
-            {showCreateProjectButton && (
-              <CreateProjectButton priority="primary" size="small" to={newProjectUrl}>
-                {t('Create project')}
-              </CreateProjectButton>
-            )}
-            {renderedFooter}
-          </Fragment>
-        );
-      }}
-      items={getItems(hasProjects)}
-      allowActorToggle
-      closeOnSelect
-    >
-      {renderProps => children({...renderProps, selectedProjects})}
-    </DropdownAutoComplete>
+          items={items}
+          allowActorToggle
+          closeOnSelect
+        >
+          {({actions, isOpen}) =>
+            customDropdownButton({actions, selectedProjects: selected, isOpen})
+          }
+        </StyledDropdownAutocomplete>
+      )}
+    </ClassNames>
   );
-};
+}
 
 export default ProjectSelector;
+
+const StyledDropdownAutocomplete = styled(DropdownAutoComplete)`
+  background-color: ${p => p.theme.background};
+  color: ${p => p.theme.textColor};
+`;
 
 const Label = styled('div')`
   font-size: ${p => p.theme.fontSizeSmall};
   color: ${p => p.theme.gray300};
-`;
-
-const AddButton = styled(Button)`
-  display: block;
-  color: ${p => p.theme.gray300};
-  :hover {
-    color: ${p => p.theme.subText};
-  }
-`;
-
-const CreateProjectButton = styled(Button)`
-  display: block;
-  text-align: center;
-  margin: ${space(0.5)} 0;
 `;
 
 const InputActions = styled('div')`

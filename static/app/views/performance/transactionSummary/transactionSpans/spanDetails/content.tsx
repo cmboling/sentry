@@ -2,6 +2,7 @@ import {Fragment} from 'react';
 import {Location} from 'history';
 
 import Feature from 'sentry/components/acl/feature';
+import IdBadge from 'sentry/components/idBadge';
 import * as Layout from 'sentry/components/layouts/thirds';
 import {Organization, Project} from 'sentry/types';
 import DiscoverQuery from 'sentry/utils/discover/discoverQuery';
@@ -13,7 +14,12 @@ import SuspectSpansQuery, {
   ChildrenProps as SuspectSpansProps,
 } from 'sentry/utils/performance/suspectSpans/suspectSpansQuery';
 import {SpanSlug} from 'sentry/utils/performance/suspectSpans/types';
+import {setGroupedEntityTag} from 'sentry/utils/performanceForSentry';
+import {decodeScalar} from 'sentry/utils/queryString';
+import useRouteAnalyticsEventNames from 'sentry/utils/routeAnalytics/useRouteAnalyticsEventNames';
+import useRouteAnalyticsParams from 'sentry/utils/routeAnalytics/useRouteAnalyticsParams';
 import Breadcrumb from 'sentry/views/performance/breadcrumb';
+import {getSelectedProjectPlatforms} from 'sentry/views/performance/utils';
 
 import Tab from '../../tabs';
 import {SpanSortOthers} from '../types';
@@ -23,6 +29,7 @@ import SpanChart from './chart';
 import SpanDetailsControls from './spanDetailsControls';
 import SpanDetailsHeader from './spanDetailsHeader';
 import SpanTable from './spanDetailsTable';
+import {ZoomKeys} from './utils';
 
 type Props = {
   eventView: EventView;
@@ -35,6 +42,17 @@ type Props = {
 
 export default function SpanDetailsContentWrapper(props: Props) {
   const {location, organization, eventView, project, transactionName, spanSlug} = props;
+  const minExclusiveTime = decodeScalar(location.query[ZoomKeys.MIN]);
+  const maxExclusiveTime = decodeScalar(location.query[ZoomKeys.MAX]);
+
+  // customize the route analytics event we send
+  useRouteAnalyticsEventNames(
+    'performance_views.span_summary.view',
+    'Performance Views: Span Summary page viewed'
+  );
+  useRouteAnalyticsParams({
+    project_platforms: project ? getSelectedProjectPlatforms(location, [project]) : '',
+  });
 
   return (
     <Fragment>
@@ -50,7 +68,17 @@ export default function SpanDetailsContentWrapper(props: Props) {
             tab={Tab.Spans}
             spanSlug={spanSlug}
           />
-          <Layout.Title>{transactionName}</Layout.Title>
+          <Layout.Title>
+            {project && (
+              <IdBadge
+                project={project}
+                avatarSize={28}
+                hideName
+                avatarProps={{hasTooltip: true, tooltip: project.slug}}
+              />
+            )}
+            {transactionName}
+          </Layout.Title>
         </Layout.HeaderContent>
       </Layout.Header>
       <Layout.Body>
@@ -65,7 +93,11 @@ export default function SpanDetailsContentWrapper(props: Props) {
           >
             {({tableData}) => {
               const totalCount: number | null =
-                (tableData?.data?.[0]?.count as number) ?? null;
+                (tableData?.data?.[0]?.['count()'] as number) ?? null;
+
+              if (totalCount) {
+                setGroupedEntityTag('spans.totalCount', 1000, totalCount);
+              }
 
               return (
                 <SuspectSpansQuery
@@ -76,6 +108,8 @@ export default function SpanDetailsContentWrapper(props: Props) {
                   spanOps={[spanSlug.op]}
                   spanGroups={[spanSlug.group]}
                   cursor="0:0:1"
+                  minExclusiveTime={minExclusiveTime}
+                  maxExclusiveTime={maxExclusiveTime}
                 >
                   {suspectSpansResults => (
                     <SpanExamplesQuery
@@ -85,6 +119,8 @@ export default function SpanDetailsContentWrapper(props: Props) {
                       spanOp={spanSlug.op}
                       spanGroup={spanSlug.group}
                       limit={10}
+                      minExclusiveTime={minExclusiveTime}
+                      maxExclusiveTime={maxExclusiveTime}
                     >
                       {spanExamplesResults => (
                         <SpanDetailsContent
@@ -143,11 +179,6 @@ function SpanDetailsContent(props: ContentProps) {
 
   return (
     <Fragment>
-      <SpanDetailsHeader
-        spanSlug={spanSlug}
-        totalCount={totalCount}
-        suspectSpan={suspectSpan}
-      />
       <Feature features={['performance-span-histogram-view']}>
         <SpanDetailsControls
           organization={organization}
@@ -155,6 +186,11 @@ function SpanDetailsContent(props: ContentProps) {
           eventView={eventView}
         />
       </Feature>
+      <SpanDetailsHeader
+        spanSlug={spanSlug}
+        totalCount={totalCount}
+        suspectSpan={suspectSpan}
+      />
       <SpanChart
         totalCount={transactionCountContainingSpan}
         organization={organization}
@@ -184,6 +220,7 @@ function getSpansEventView(eventView: EventView): EventView {
     {field: 'count_unique(id)'},
     {field: 'equation|count() / count_unique(id)'},
     {field: 'sumArray(spans_exclusive_time)'},
+    {field: 'percentileArray(spans_exclusive_time, 0.50)'},
     {field: 'percentileArray(spans_exclusive_time, 0.75)'},
     {field: 'percentileArray(spans_exclusive_time, 0.95)'},
     {field: 'percentileArray(spans_exclusive_time, 0.99)'},

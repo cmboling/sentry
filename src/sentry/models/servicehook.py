@@ -1,4 +1,5 @@
 import hmac
+from functools import cached_property
 from hashlib import sha256
 from uuid import uuid4
 
@@ -10,12 +11,14 @@ from sentry.db.models import (
     ArrayField,
     BaseManager,
     BoundedPositiveIntegerField,
-    EncryptedTextField,
     FlexibleForeignKey,
     Model,
+    region_silo_only_model,
     sane_repr,
 )
-from sentry.models import SentryApp
+from sentry.db.models.fields.bounded import BoundedBigIntegerField
+from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
+from sentry.services.hybrid_cloud.app import app_service
 
 SERVICE_HOOK_EVENTS = [
     "event.alert",
@@ -25,11 +28,12 @@ SERVICE_HOOK_EVENTS = [
 ]
 
 
+@region_silo_only_model
 class ServiceHookProject(Model):
     __include_in_export__ = False
 
     service_hook = FlexibleForeignKey("sentry.ServiceHook")
-    project_id = BoundedPositiveIntegerField(db_index=True)
+    project_id = BoundedBigIntegerField(db_index=True)
 
     class Meta:
         app_label = "sentry"
@@ -41,17 +45,21 @@ def generate_secret():
     return uuid4().hex + uuid4().hex
 
 
+@region_silo_only_model
 class ServiceHook(Model):
     __include_in_export__ = True
 
     guid = models.CharField(max_length=32, unique=True, null=True)
     # hooks may be bound to an api application, or simply registered by a user
-    application = FlexibleForeignKey("sentry.ApiApplication", null=True)
-    actor_id = BoundedPositiveIntegerField(db_index=True)
-    project_id = BoundedPositiveIntegerField(db_index=True, null=True)
-    organization_id = BoundedPositiveIntegerField(db_index=True, null=True)
+    application_id = HybridCloudForeignKey("sentry.ApiApplication", null=True, on_delete="CASCADE")
+    actor_id = BoundedBigIntegerField(db_index=True)
+    installation_id = HybridCloudForeignKey(
+        "sentry.SentryAppInstallation", null=True, on_delete="CASCADE"
+    )
+    project_id = BoundedBigIntegerField(db_index=True, null=True)
+    organization_id = BoundedBigIntegerField(db_index=True, null=True)
     url = models.URLField(max_length=512)
-    secret = EncryptedTextField(default=generate_secret)
+    secret = models.TextField(default=generate_secret)
     events = ArrayField(of=models.TextField)
     status = BoundedPositiveIntegerField(
         default=0, choices=ObjectStatus.as_choices(), db_index=True
@@ -69,14 +77,11 @@ class ServiceHook(Model):
 
     @property
     def created_by_sentry_app(self):
-        return self.application_id and self.sentry_app
+        return self.application_id and bool(self.sentry_app)
 
-    @property
+    @cached_property
     def sentry_app(self):
-        try:
-            return SentryApp.objects.get(application_id=self.application_id)
-        except SentryApp.DoesNotExist:
-            return
+        return app_service.find_service_hook_sentry_app(api_application_id=self.application_id)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -94,9 +99,15 @@ class ServiceHook(Model):
     def get_audit_log_data(self):
         return {"url": self.url}
 
-    def add_project(self, project):
+    def add_project(self, project_or_project_id):
         """
         Add a project to the service hook.
-
         """
-        ServiceHookProject.objects.create(project_id=project.id, service_hook_id=self.id)
+        from sentry.models import Project
+
+        ServiceHookProject.objects.create(
+            project_id=project_or_project_id.id
+            if isinstance(project_or_project_id, Project)
+            else project_or_project_id,
+            service_hook_id=self.id,
+        )

@@ -1,5 +1,6 @@
-import * as React from 'react';
-import {withTheme} from '@emotion/react';
+import {Component} from 'react';
+import {Theme, withTheme} from '@emotion/react';
+import {LineSeriesOption} from 'echarts';
 import isEqual from 'lodash/isEqual';
 import omit from 'lodash/omit';
 
@@ -12,7 +13,7 @@ import {
   Organization,
   PageFilters,
   SessionApiResponse,
-  SessionField,
+  SessionFieldWithOperation,
   SessionStatus,
 } from 'sentry/types';
 import {Series} from 'sentry/types/echarts';
@@ -25,12 +26,11 @@ import {
   getSessionsInterval,
   initSessionsChart,
 } from 'sentry/utils/sessions';
-import {Theme} from 'sentry/utils/theme';
 import {getCrashFreePercent} from 'sentry/views/releases/utils';
 
 import {DisplayModes} from '../projectCharts';
 
-const omitIgnoredProps = (props: Props) =>
+const omitIgnoredProps = (props: ProjectSessionsChartRequestProps) =>
   omit(props, ['api', 'organization', 'children', 'selection.datetime.utc']);
 
 type ProjectSessionsChartRequestRenderProps = {
@@ -40,15 +40,18 @@ type ProjectSessionsChartRequestRenderProps = {
   reloading: boolean;
   timeseriesData: Series[];
   totalSessions: number | null;
+  additionalSeries?: LineSeriesOption[];
 };
 
-type Props = {
+export type ProjectSessionsChartRequestProps = {
   api: Client;
   children: (renderProps: ProjectSessionsChartRequestRenderProps) => React.ReactNode;
   displayMode:
     | DisplayModes.SESSIONS
     | DisplayModes.STABILITY
-    | DisplayModes.STABILITY_USERS;
+    | DisplayModes.STABILITY_USERS
+    | DisplayModes.ANR_RATE
+    | DisplayModes.FOREGROUND_ANR_RATE;
   onTotalValuesChange: (value: number | null) => void;
   organization: Organization;
   selection: PageFilters;
@@ -65,7 +68,10 @@ type State = {
   totalSessions: number | null;
 };
 
-class ProjectSessionsChartRequest extends React.Component<Props, State> {
+class ProjectSessionsChartRequest extends Component<
+  ProjectSessionsChartRequestProps,
+  State
+> {
   state: State = {
     reloading: false,
     errored: false,
@@ -78,7 +84,7 @@ class ProjectSessionsChartRequest extends React.Component<Props, State> {
     this.fetchData();
   }
 
-  componentDidUpdate(prevProps: Props) {
+  componentDidUpdate(prevProps: ProjectSessionsChartRequestProps) {
     if (!isEqual(omitIgnoredProps(this.props), omitIgnoredProps(prevProps))) {
       this.fetchData();
     }
@@ -162,8 +168,8 @@ class ProjectSessionsChartRequest extends React.Component<Props, State> {
   get field() {
     const {displayMode} = this.props;
     return displayMode === DisplayModes.STABILITY_USERS
-      ? SessionField.USERS
-      : SessionField.SESSIONS;
+      ? SessionFieldWithOperation.USERS
+      : SessionFieldWithOperation.SESSIONS;
   }
 
   queryParams({shouldFetchWithPrevious = false}): Record<string, any> {
@@ -310,13 +316,16 @@ class ProjectSessionsChartRequest extends React.Component<Props, State> {
     const sessionsChart = initSessionsChart(theme);
     const {intervals, groups} = responseData;
 
-    const totalSessions = getCount(responseData.groups, SessionField.SESSIONS);
+    const totalSessions = getCount(
+      responseData.groups,
+      SessionFieldWithOperation.SESSIONS
+    );
 
     const chartData = [
       {
         ...sessionsChart[SessionStatus.HEALTHY],
         data: getCountSeries(
-          SessionField.SESSIONS,
+          SessionFieldWithOperation.SESSIONS,
           groups.find(g => g.by['session.status'] === SessionStatus.HEALTHY),
           intervals
         ),
@@ -324,7 +333,7 @@ class ProjectSessionsChartRequest extends React.Component<Props, State> {
       {
         ...sessionsChart[SessionStatus.ERRORED],
         data: getCountSeries(
-          SessionField.SESSIONS,
+          SessionFieldWithOperation.SESSIONS,
           groups.find(g => g.by['session.status'] === SessionStatus.ERRORED),
           intervals
         ),
@@ -332,7 +341,7 @@ class ProjectSessionsChartRequest extends React.Component<Props, State> {
       {
         ...sessionsChart[SessionStatus.ABNORMAL],
         data: getCountSeries(
-          SessionField.SESSIONS,
+          SessionFieldWithOperation.SESSIONS,
           groups.find(g => g.by['session.status'] === SessionStatus.ABNORMAL),
           intervals
         ),
@@ -340,7 +349,7 @@ class ProjectSessionsChartRequest extends React.Component<Props, State> {
       {
         ...sessionsChart[SessionStatus.CRASHED],
         data: getCountSeries(
-          SessionField.SESSIONS,
+          SessionFieldWithOperation.SESSIONS,
           groups.find(g => g.by['session.status'] === SessionStatus.CRASHED),
           intervals
         ),

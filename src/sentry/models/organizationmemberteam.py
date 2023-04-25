@@ -3,11 +3,18 @@ from typing import FrozenSet
 from django.db import models
 
 from sentry import features, roles
-from sentry.db.models import BaseModel, BoundedAutoField, FlexibleForeignKey, sane_repr
+from sentry.db.models import (
+    BaseModel,
+    BoundedAutoField,
+    FlexibleForeignKey,
+    region_silo_only_model,
+    sane_repr,
+)
 from sentry.roles import team_roles
 from sentry.roles.manager import TeamRole
 
 
+@region_silo_only_model
 class OrganizationMemberTeam(BaseModel):
     """
     Identifies relationships between organization members and the teams they are on.
@@ -44,7 +51,9 @@ class OrganizationMemberTeam(BaseModel):
         If the role field is null, resolve to the minimum team role given by this
         member's organization role.
         """
-        minimum_role = roles.get_minimum_team_role(self.organizationmember.role)
+        highest_org_role = self.organizationmember.get_all_org_roles_sorted()[0].id
+        minimum_role = roles.get_minimum_team_role(highest_org_role)
+
         if self.role and features.has(
             "organizations:team-roles", self.organizationmember.organization
         ):

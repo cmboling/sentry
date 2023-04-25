@@ -9,6 +9,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from typing_extensions import TypedDict
 
+from sentry.api.base import region_silo_endpoint
 from sentry.api.bases import NoProjects, OrganizationEventsEndpointBase
 from sentry.api.utils import InvalidParams as InvalidParamsApi
 from sentry.apidocs.constants import RESPONSE_NOTFOUND, RESPONSE_UNAUTHORIZED
@@ -97,7 +98,7 @@ class OrgStatsQueryParamsSerializer(serializers.Serializer):
         ("error", "transaction", "attachment"),
         required=False,
         help_text=(
-            "If filtering by attachments, you cannot filter by any other category due to quantity values becoming non-sensical (combining bytes and event counts).\n\n"
+            "If filtering by attachments, you cannot filter by any other category due to quantity values becoming nonsensical (combining bytes and event counts).\n\n"
             "If filtering by `error`, it will automatically add `default` and `security` as we currently roll those two categories into `error` for displaying."
         ),
     )
@@ -126,6 +127,7 @@ class StatsApiResponse(TypedDict):
 
 
 @extend_schema(tags=["Organizations"])
+@region_silo_endpoint
 class OrganizationStatsEndpointV2(OrganizationEventsEndpointBase):
     enforce_rate_limit = True
     rate_limits = {
@@ -142,7 +144,7 @@ class OrganizationStatsEndpointV2(OrganizationEventsEndpointBase):
         parameters=[GLOBAL_PARAMS.ORG_SLUG, OrgStatsQueryParamsSerializer],
         request=None,
         responses={
-            200: inline_sentry_response_serializer("Outcomes Response", StatsApiResponse),
+            200: inline_sentry_response_serializer("OutcomesResponse", StatsApiResponse),
             401: RESPONSE_UNAUTHORIZED,
             404: RESPONSE_NOTFOUND,
         },
@@ -171,17 +173,18 @@ class OrganizationStatsEndpointV2(OrganizationEventsEndpointBase):
         Select a field, define a date range, and group or filter by columns.
         """
         with self.handle_query_errors():
+            tenant_ids = {"organization_id": organization.id}
             with sentry_sdk.start_span(op="outcomes.endpoint", description="build_outcomes_query"):
                 query = self.build_outcomes_query(
                     request,
                     organization,
                 )
             with sentry_sdk.start_span(op="outcomes.endpoint", description="run_outcomes_query"):
-                result_totals = run_outcomes_query_totals(query)
+                result_totals = run_outcomes_query_totals(query, tenant_ids=tenant_ids)
                 result_timeseries = (
                     None
                     if "project_id" in query.query_groupby
-                    else run_outcomes_query_timeseries(query)
+                    else run_outcomes_query_timeseries(query, tenant_ids=tenant_ids)
                 )
             with sentry_sdk.start_span(
                 op="outcomes.endpoint", description="massage_outcomes_result"
@@ -196,7 +199,7 @@ class OrganizationStatsEndpointV2(OrganizationEventsEndpointBase):
         if project_ids:
             params["project_id"] = project_ids
 
-        return QueryDefinition(request.GET, params)
+        return QueryDefinition.from_query_dict(request.GET, params)
 
     def _get_projects_for_orgstats_query(self, request: Request, organization):
         # look at the raw project_id filter passed in, if its empty

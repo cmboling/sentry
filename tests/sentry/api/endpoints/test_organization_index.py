@@ -1,6 +1,12 @@
+import re
+from unittest.mock import patch
+
 from sentry.auth.authenticators import TotpInterface
 from sentry.models import Authenticator, Organization, OrganizationMember, OrganizationStatus
+from sentry.models.organizationmapping import OrganizationMapping
 from sentry.testutils import APITestCase, TwoFactorAPITestCase
+from sentry.testutils.hybrid_cloud import HybridCloudTestMixin
+from sentry.testutils.silo import exempt_from_silo_limits, region_silo_test
 
 
 class OrganizationIndexTest(APITestCase):
@@ -11,6 +17,7 @@ class OrganizationIndexTest(APITestCase):
         self.login_as(self.user)
 
 
+@region_silo_test(stable=True)
 class OrganizationsListTest(OrganizationIndexTest):
     def test_membership(self):
         org = self.organization  # force creation
@@ -37,19 +44,27 @@ class OrganizationsListTest(OrganizationIndexTest):
 
         user2 = self.create_user(email="user2@example.com")
         org3 = self.create_organization(name="C", owner=user2)
-        self.create_organization(name="D", owner=user2)
+        org4 = self.create_organization(name="D", owner=user2)
+        org5 = self.create_organization(name="E", owner=user2)
 
         self.create_member(user=user2, organization=org2, role="owner")
         self.create_member(user=self.user, organization=org3, role="owner")
 
+        owner_team = self.create_team(organization=org4, org_role="owner")
+        # org4 has 2 owners
+        self.create_member(user=self.user, organization=org4, role="member", teams=[owner_team])
+        self.create_member(user=self.user, organization=org5, role="member")
+
         response = self.get_success_response(qs_params={"owner": 1})
-        assert len(response.data) == 3
+        assert len(response.data) == 4
         assert response.data[0]["organization"]["id"] == str(org.id)
         assert response.data[0]["singleOwner"] is True
         assert response.data[1]["organization"]["id"] == str(org2.id)
         assert response.data[1]["singleOwner"] is False
         assert response.data[2]["organization"]["id"] == str(org3.id)
         assert response.data[2]["singleOwner"] is False
+        assert response.data[3]["organization"]["id"] == str(org4.id)
+        assert response.data[3]["singleOwner"] is False
 
     def test_status_query(self):
         org = self.create_organization(owner=self.user, status=OrganizationStatus.PENDING_DELETION)
@@ -80,7 +95,8 @@ class OrganizationsListTest(OrganizationIndexTest):
         assert len(response.data) == 0
 
 
-class OrganizationsCreateTest(OrganizationIndexTest):
+@region_silo_test
+class OrganizationsCreateTest(OrganizationIndexTest, HybridCloudTestMixin):
     method = "post"
 
     def test_missing_params(self):
@@ -95,7 +111,25 @@ class OrganizationsCreateTest(OrganizationIndexTest):
         assert org.name == "hello world"
         assert org.slug == "foobar"
 
-        self.get_error_response(status_code=409, **data)
+        self.get_error_response(status_code=400, **data)
+
+    def test_slugs(self):
+        valid_slugs = ["santry", "downtown-canada", "1234", "CaNaDa"]
+        for input_slug in valid_slugs:
+            self.organization.refresh_from_db()
+            response = self.get_success_response(name=input_slug, slug=input_slug)
+            org = Organization.objects.get(id=response.data["id"])
+            assert org.slug == input_slug.lower()
+
+    def test_invalid_slugs(self):
+        with self.options({"api.rate-limit.org-create": 9001}):
+            self.get_error_response(name="name", slug=" i have whitespace ", status_code=400)
+            self.get_error_response(name="name", slug="foo-bar ", status_code=400)
+            self.get_error_response(name="name", slug="bird-company!", status_code=400)
+            self.get_error_response(name="name", slug="downtown_canada", status_code=400)
+            self.get_error_response(name="name", slug="canada-", status_code=400)
+            self.get_error_response(name="name", slug="-canada", status_code=400)
+            self.get_error_response(name="name", slug="----", status_code=400)
 
     def test_without_slug(self):
         data = {"name": "hello world"}
@@ -104,6 +138,43 @@ class OrganizationsCreateTest(OrganizationIndexTest):
         organization_id = response.data["id"]
         org = Organization.objects.get(id=organization_id)
         assert org.slug == "hello-world"
+
+    @patch(
+        "sentry.api.endpoints.organization_member.requests.join.ratelimiter.is_limited",
+        return_value=False,
+    )
+    def test_name_slugify(self, is_limited):
+        response = self.get_success_response(name="---foo")
+        org = Organization.objects.get(id=response.data["id"])
+        assert org.slug == "foo"
+
+        org_slug_pattern = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*(?<!-)$")
+
+        response = self.get_success_response(name="---foo---")
+        org = Organization.objects.get(id=response.data["id"])
+        assert org.slug != "foo-"
+        assert org.slug.startswith("foo-")
+        assert org_slug_pattern.match(org.slug)
+
+        response = self.get_success_response(name="___foo___")
+        org = Organization.objects.get(id=response.data["id"])
+        assert org.slug != "foo-"
+        assert org.slug.startswith("foo-")
+        assert org_slug_pattern.match(org.slug)
+
+        response = self.get_success_response(name="foo_bar")
+        org = Organization.objects.get(id=response.data["id"])
+        assert org.slug == "foo-bar"
+
+        response = self.get_success_response(name="----")
+        org = Organization.objects.get(id=response.data["id"])
+        assert len(org.slug) > 0
+        assert org_slug_pattern.match(org.slug)
+
+        response = self.get_success_response(name="CaNaDa")
+        org = Organization.objects.get(id=response.data["id"])
+        assert org.slug == "canada"
+        assert org_slug_pattern.match(org.slug)
 
     def test_required_terms_with_terms_url(self):
         data = {"name": "hello world"}
@@ -122,7 +193,39 @@ class OrganizationsCreateTest(OrganizationIndexTest):
             data = {"name": "hello world", "agreeTerms": True}
             self.get_success_response(**data)
 
+    def test_organization_mapping(self):
+        data = {"slug": "santry", "name": "SaNtRy", "idempotencyKey": "1234"}
+        response = self.get_success_response(**data)
 
+        organization_id = response.data["id"]
+        org = Organization.objects.get(id=organization_id)
+        assert org.slug == data["slug"]
+        assert org.name == data["name"]
+
+        with exempt_from_silo_limits():
+            assert OrganizationMapping.objects.filter(
+                organization_id=organization_id,
+                slug=data["slug"],
+                name=data["name"],
+                idempotency_key=data["idempotencyKey"],
+            ).exists()
+
+    def test_slug_already_taken(self):
+        OrganizationMapping.objects.create(organization_id=999, slug="taken", region_name="us")
+        self.get_error_response(slug="taken", name="TaKeN", status_code=409)
+
+    def test_add_organization_member(self):
+        self.login_as(user=self.user)
+
+        response = self.get_success_response(name="org name")
+
+        org_member = OrganizationMember.objects.get(
+            organization_id=response.data["id"], user=self.user
+        )
+        self.assert_org_member_mapping(org_member=org_member)
+
+
+@region_silo_test
 class OrganizationIndex2faTest(TwoFactorAPITestCase):
     endpoint = "sentry-organization-home"
 
@@ -167,6 +270,7 @@ class OrganizationIndex2faTest(TwoFactorAPITestCase):
         self.get_success_response(self.org_2fa.slug)
 
 
+@region_silo_test(stable=True)
 class OrganizationIndexMemberLimitTest(APITestCase):
     endpoint = "sentry-organization-index"
 

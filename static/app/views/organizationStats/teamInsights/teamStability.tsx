@@ -5,7 +5,7 @@ import isEqual from 'lodash/isEqual';
 import round from 'lodash/round';
 
 import AsyncComponent from 'sentry/components/asyncComponent';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import MiniBarChart from 'sentry/components/charts/miniBarChart';
 import SessionsRequest from 'sentry/components/charts/sessionsRequest';
 import {DateTimeObject} from 'sentry/components/charts/utils';
@@ -14,17 +14,17 @@ import PanelTable from 'sentry/components/panels/panelTable';
 import Placeholder from 'sentry/components/placeholder';
 import {IconArrow} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {
   Organization,
   Project,
   SessionApiResponse,
-  SessionField,
+  SessionFieldWithOperation,
   SessionStatus,
 } from 'sentry/types';
 import {formatFloat} from 'sentry/utils/formatters';
 import {getCountSeries, getCrashFreeRate, getSeriesSum} from 'sentry/utils/sessions';
-import {Color} from 'sentry/utils/theme';
+import {ColorOrAlias} from 'sentry/utils/theme';
 import {displayCrashFreePercent} from 'sentry/views/releases/utils';
 
 import {ProjectBadge, ProjectBadgeContainer} from './styles';
@@ -119,7 +119,7 @@ class TeamStability extends AsyncComponent<Props, State> {
       group => group.by.project === projectId
     );
 
-    return getCrashFreeRate(projectGroups, SessionField.SESSIONS);
+    return getCrashFreeRate(projectGroups, SessionFieldWithOperation.SESSIONS);
   }
 
   getTrend(projectId: number): number | null {
@@ -136,12 +136,12 @@ class TeamStability extends AsyncComponent<Props, State> {
   getMiniBarChartSeries(project: Project, response: SessionApiResponse) {
     const sumSessions = getSeriesSum(
       response.groups.filter(group => group.by.project === Number(project.id)),
-      SessionField.SESSIONS,
+      SessionFieldWithOperation.SESSIONS,
       response.intervals
     );
 
     const countSeries = getCountSeries(
-      SessionField.SESSIONS,
+      SessionFieldWithOperation.SESSIONS,
       response.groups.find(
         g =>
           g.by.project === Number(project.id) &&
@@ -210,7 +210,7 @@ class TeamStability extends AsyncComponent<Props, State> {
     }
 
     return (
-      <SubText color={trend >= 0 ? 'green300' : 'red300'}>
+      <SubText color={trend >= 0 ? 'successText' : 'errorText'}>
         {`${round(Math.abs(trend), 3)}\u0025`}
         <PaddedIconArrow direction={trend >= 0 ? 'up' : 'down'} size="xs" />
       </SubText>
@@ -233,7 +233,7 @@ class TeamStability extends AsyncComponent<Props, State> {
         organization={organization}
         interval="1d"
         groupBy={['session.status', 'project']}
-        field={[SessionField.SESSIONS]}
+        field={[SessionFieldWithOperation.SESSIONS]}
         statsPeriod={period}
       >
         {({response, loading}) => (
@@ -242,7 +242,7 @@ class TeamStability extends AsyncComponent<Props, State> {
             emptyMessage={t('No projects with release health enabled')}
             emptyAction={
               <Button
-                size="small"
+                size="sm"
                 external
                 href="https://docs.sentry.io/platforms/dotnet/guides/nlog/configuration/releases/#release-health"
               >
@@ -326,6 +326,6 @@ const PaddedIconArrow = styled(IconArrow)`
   margin: 0 ${space(0.5)};
 `;
 
-const SubText = styled('div')<{color: Color}>`
+const SubText = styled('div')<{color: ColorOrAlias}>`
   color: ${p => p.theme[p.color]};
 `;

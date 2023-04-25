@@ -1,17 +1,20 @@
-import type {DebugImage} from 'sentry/components/events/interfaces/debugMeta/types';
-import type {TraceContextType} from 'sentry/components/events/interfaces/spans/types';
+import type {
+  RawSpanType,
+  TraceContextType,
+} from 'sentry/components/events/interfaces/spans/types';
 import type {SymbolicatorStatus} from 'sentry/components/events/interfaces/types';
 import type {PlatformKey} from 'sentry/data/platformCategories';
+import type {IssueType} from 'sentry/types';
 
 import type {RawCrumb} from './breadcrumbs';
-import type {IssueAttachment} from './group';
+import type {Image} from './debugImage';
+import type {IssueAttachment, IssueCategory} from './group';
 import type {Release} from './release';
 import type {RawStacktrace, StackTraceMechanism, StacktraceType} from './stacktrace';
-
 // TODO(epurkhiser): objc and cocoa should almost definitely be moved into PlatformKey
 export type PlatformType = PlatformKey | 'objc' | 'cocoa';
 
-export type Level = 'error' | 'fatal' | 'info' | 'warning' | 'sample';
+export type Level = 'error' | 'fatal' | 'info' | 'warning' | 'sample' | 'unknown';
 
 /**
  * Grouping Configuration.
@@ -34,26 +37,77 @@ export type EventGroupingConfig = {
   strategies: string[];
 };
 
+export type VariantEvidence = {
+  desc: string;
+  fingerprint: string;
+  cause_span_hashes?: string[];
+  cause_span_ids?: string[];
+  offender_span_hashes?: string[];
+  offender_span_ids?: string[];
+  op?: string;
+  parent_span_hashes?: string[];
+  parent_span_ids?: string[];
+};
+
 type EventGroupVariantKey = 'custom-fingerprint' | 'app' | 'default' | 'system';
 
 export enum EventGroupVariantType {
+  CHECKSUM = 'checksum',
+  FALLBACK = 'fallback',
   CUSTOM_FINGERPRINT = 'custom-fingerprint',
   COMPONENT = 'component',
   SALTED_COMPONENT = 'salted-component',
+  PERFORMANCE_PROBLEM = 'performance-problem',
 }
 
-export type EventGroupVariant = {
+interface BaseVariant {
   description: string | null;
   hash: string | null;
   hashMismatch: boolean;
-  key: EventGroupVariantKey;
-  type: EventGroupVariantType;
+  key: string;
+  type: string;
+}
+
+interface FallbackVariant extends BaseVariant {
+  type: EventGroupVariantType.FALLBACK;
+}
+
+interface ChecksumVariant extends BaseVariant {
+  type: EventGroupVariantType.CHECKSUM;
+}
+
+interface HasComponentGrouping {
   client_values?: Array<string>;
   component?: EventGroupComponent;
   config?: EventGroupingConfig;
   matched_rule?: string;
   values?: Array<string>;
-};
+}
+
+interface ComponentVariant extends BaseVariant, HasComponentGrouping {
+  type: EventGroupVariantType.COMPONENT;
+}
+
+interface CustomFingerprintVariant extends BaseVariant, HasComponentGrouping {
+  type: EventGroupVariantType.CUSTOM_FINGERPRINT;
+}
+
+interface SaltedComponentVariant extends BaseVariant, HasComponentGrouping {
+  type: EventGroupVariantType.SALTED_COMPONENT;
+}
+
+interface PerformanceProblemVariant extends BaseVariant {
+  evidence: VariantEvidence;
+  type: EventGroupVariantType.PERFORMANCE_PROBLEM;
+}
+
+export type EventGroupVariant =
+  | FallbackVariant
+  | ChecksumVariant
+  | ComponentVariant
+  | SaltedComponentVariant
+  | CustomFingerprintVariant
+  | PerformanceProblemVariant;
 
 export type EventGroupInfo = Record<EventGroupVariantKey, EventGroupVariant>;
 
@@ -96,7 +150,9 @@ export interface Thread {
   id: number;
   rawStacktrace: RawStacktrace;
   stacktrace: StacktraceType | null;
+  lockReason?: string | null;
   name?: string | null;
+  state?: string | null;
 }
 
 export type Frame = {
@@ -191,6 +247,7 @@ export enum EventOrGroupType {
   EXPECTSTAPLE = 'expectstaple',
   DEFAULT = 'default',
   TRANSACTION = 'transaction',
+  GENERIC = 'generic',
 }
 
 /**
@@ -208,13 +265,16 @@ export enum EntryType {
   HPKP = 'hpkp',
   BREADCRUMBS = 'breadcrumbs',
   THREADS = 'threads',
+  THREAD_STATE = 'thread-state',
+  THREAD_TAGS = 'thread-tags',
   DEBUGMETA = 'debugmeta',
   SPANS = 'spans',
+  RESOURCES = 'resources',
 }
 
 type EntryDebugMeta = {
   data: {
-    images: Array<DebugImage>;
+    images: Array<Image | null>;
   };
   type: EntryType.DEBUGMETA;
 };
@@ -243,9 +303,9 @@ type EntryStacktrace = {
   type: EntryType.STACKTRACE;
 };
 
-type EntrySpans = {
-  data: any;
-  type: EntryType.SPANS; // data is not used
+export type EntrySpans = {
+  data: RawSpanType[];
+  type: EntryType.SPANS;
 };
 
 type EntryMessage = {
@@ -263,14 +323,14 @@ export type EntryRequest = {
     cookies?: [key: string, value: string][];
     data?: string | null | Record<string, any> | [key: string, value: any][];
     env?: Record<string, string>;
-    fragment?: string;
+    fragment?: string | null;
     headers?: [key: string, value: string][];
     inferredContentType?:
       | null
       | 'application/json'
       | 'application/x-www-form-urlencoded'
       | 'multipart/form-data';
-    query?: [key: string, value: string][];
+    query?: [key: string, value: string][] | string;
   };
   type: EntryType.REQUEST;
 };
@@ -290,6 +350,11 @@ type EntryGeneric = {
   type: EntryType.EXPECTCT | EntryType.EXPECTSTAPLE | EntryType.HPKP;
 };
 
+type EntryResources = {
+  data: any; // Data is unused here
+  type: EntryType.RESOURCES;
+};
+
 export type Entry =
   | EntryDebugMeta
   | EntryBreadcrumbs
@@ -301,22 +366,122 @@ export type Entry =
   | EntryRequest
   | EntryTemplate
   | EntryCsp
-  | EntryGeneric;
+  | EntryGeneric
+  | EntryResources;
 
-// Contexts
-type RuntimeContext = {
-  type: 'runtime';
-  version: number;
-  build?: string;
-  name?: string;
-};
+// Contexts: https://develop.sentry.dev/sdk/event-payloads/contexts/
 
-type DeviceContext = {
-  arch: string;
-  family: string;
-  model: string;
+export interface BaseContext {
   type: string;
-};
+}
+
+export enum DeviceContextKey {
+  ARCH = 'arch',
+  BATTERY_LEVEL = 'battery_level',
+  BATTERY_STATUS = 'battery_status',
+  BOOT_TIME = 'boot_time',
+  BRAND = 'brand',
+  CHARGING = 'charging',
+  CPU_DESCRIPTION = 'cpu_description',
+  DEVICE_TYPE = 'device_type',
+  DEVICE_UNIQUE_IDENTIFIER = 'device_unique_identifier',
+  EXTERNAL_FREE_STORAGE = 'external_free_storage',
+  EXTERNAL_STORAGE_SIZE = 'external_storage_size',
+  EXTERNAL_TOTAL_STORAGE = 'external_total_storage',
+  FAMILY = 'family',
+  FREE_MEMORY = 'free_memory',
+  FREE_STORAGE = 'free_storage',
+  LOW_MEMORY = 'low_memory',
+  MANUFACTURER = 'manufacturer',
+  MEMORY_SIZE = 'memory_size',
+  MODEL = 'model',
+  MODEL_ID = 'model_id',
+  NAME = 'name',
+  ONLINE = 'online',
+  ORIENTATION = 'orientation',
+  PROCESSOR_COUNT = 'processor_count',
+  PROCESSOR_FREQUENCY = 'processor_frequency',
+  SCREEN_DENSITY = 'screen_density',
+  SCREEN_DPI = 'screen_dpi',
+  SCREEN_HEIGHT_PIXELS = 'screen_height_pixels',
+  SCREEN_RESOLUTION = 'screen_resolution',
+  SCREEN_WIDTH_PIXELS = 'screen_width_pixels',
+  SIMULATOR = 'simulator',
+  STORAGE_SIZE = 'storage_size',
+  SUPPORTS_ACCELEROMETER = 'supports_accelerometer',
+  SUPPORTS_AUDIO = 'supports_audio',
+  SUPPORTS_GYROSCOPE = 'supports_gyroscope',
+  SUPPORTS_LOCATION_SERVICE = 'supports_location_service',
+  SUPPORTS_VIBRATION = 'supports_vibration',
+  USABLE_MEMORY = 'usable_memory',
+}
+
+// https://develop.sentry.dev/sdk/event-payloads/contexts/#device-context
+export interface DeviceContext
+  extends Partial<Record<DeviceContextKey, unknown>>,
+    BaseContext {
+  type: 'device';
+  [DeviceContextKey.NAME]: string;
+  [DeviceContextKey.ARCH]?: string;
+  [DeviceContextKey.BATTERY_LEVEL]?: number;
+  [DeviceContextKey.BATTERY_STATUS]?: string;
+  [DeviceContextKey.BOOT_TIME]?: string;
+  [DeviceContextKey.BRAND]?: string;
+  [DeviceContextKey.CHARGING]?: boolean;
+  [DeviceContextKey.CPU_DESCRIPTION]?: string;
+  [DeviceContextKey.DEVICE_TYPE]?: string;
+  [DeviceContextKey.DEVICE_UNIQUE_IDENTIFIER]?: string;
+  [DeviceContextKey.EXTERNAL_FREE_STORAGE]?: number;
+  [DeviceContextKey.EXTERNAL_STORAGE_SIZE]?: number;
+  [DeviceContextKey.EXTERNAL_TOTAL_STORAGE]?: number;
+  [DeviceContextKey.FAMILY]?: string;
+  [DeviceContextKey.FREE_MEMORY]?: number;
+  [DeviceContextKey.FREE_STORAGE]?: number;
+  [DeviceContextKey.LOW_MEMORY]?: boolean;
+  [DeviceContextKey.MANUFACTURER]?: string;
+  [DeviceContextKey.MEMORY_SIZE]?: number;
+  [DeviceContextKey.MODEL]?: string;
+  [DeviceContextKey.MODEL_ID]?: string;
+  [DeviceContextKey.ONLINE]?: boolean;
+  [DeviceContextKey.ORIENTATION]?: 'portrait' | 'landscape';
+  [DeviceContextKey.PROCESSOR_COUNT]?: number;
+  [DeviceContextKey.PROCESSOR_FREQUENCY]?: number;
+  [DeviceContextKey.SCREEN_DENSITY]?: number;
+  [DeviceContextKey.SCREEN_DPI]?: number;
+  [DeviceContextKey.SCREEN_HEIGHT_PIXELS]?: number;
+  [DeviceContextKey.SCREEN_RESOLUTION]?: string;
+  [DeviceContextKey.SCREEN_WIDTH_PIXELS]?: number;
+  [DeviceContextKey.SIMULATOR]?: boolean;
+  [DeviceContextKey.STORAGE_SIZE]?: number;
+  [DeviceContextKey.SUPPORTS_ACCELEROMETER]?: boolean;
+  [DeviceContextKey.SUPPORTS_AUDIO]?: boolean;
+  [DeviceContextKey.SUPPORTS_GYROSCOPE]?: boolean;
+  [DeviceContextKey.SUPPORTS_LOCATION_SERVICE]?: boolean;
+  [DeviceContextKey.SUPPORTS_VIBRATION]?: boolean;
+  [DeviceContextKey.USABLE_MEMORY]?: number;
+  // This field is deprecated in favour of locale field in culture context
+  language?: string;
+  // This field is deprecated in favour of timezone field in culture context
+  timezone?: string;
+}
+
+enum RuntimeContextKey {
+  BUILD = 'build',
+  NAME = 'name',
+  RAW_DESCRIPTION = 'raw_description',
+  VERSION = 'version',
+}
+
+// https://develop.sentry.dev/sdk/event-payloads/contexts/#runtime-context
+interface RuntimeContext
+  extends Partial<Record<RuntimeContextKey, unknown>>,
+    BaseContext {
+  type: 'runtime';
+  [RuntimeContextKey.BUILD]?: string;
+  [RuntimeContextKey.NAME]?: string;
+  [RuntimeContextKey.RAW_DESCRIPTION]?: string;
+  [RuntimeContextKey.VERSION]?: number;
+}
 
 type OSContext = {
   build: string;
@@ -326,15 +491,131 @@ type OSContext = {
   version: string;
 };
 
+export enum OtelContextKey {
+  ATTRIBUTES = 'attributes',
+  RESOURCE = 'resource',
+}
+
+// OpenTelemetry Context
+// https://develop.sentry.dev/sdk/performance/opentelemetry/#opentelemetry-context
+interface OtelContext extends Partial<Record<OtelContextKey, unknown>>, BaseContext {
+  type: 'otel';
+  [OtelContextKey.ATTRIBUTES]?: Record<string, unknown>;
+  [OtelContextKey.RESOURCE]?: Record<string, unknown>;
+}
+
+export enum UnityContextKey {
+  COPY_TEXTURE_SUPPORT = 'copy_texture_support',
+  EDITOR_VERSION = 'editor_version',
+  INSTALL_MODE = 'install_mode',
+  RENDERING_THREADING_MODE = 'rendering_threading_mode',
+  TARGET_FRAME_RATE = 'target_frame_rate',
+}
+
+// Unity Context
+// TODO(Priscila): Add this context to the docs
+export interface UnityContext {
+  [UnityContextKey.COPY_TEXTURE_SUPPORT]: string;
+  [UnityContextKey.EDITOR_VERSION]: string;
+  [UnityContextKey.INSTALL_MODE]: string;
+  [UnityContextKey.RENDERING_THREADING_MODE]: string;
+  [UnityContextKey.TARGET_FRAME_RATE]: string;
+  type: 'unity';
+}
+
+export enum MemoryInfoContextKey {
+  ALLOCATED_BYTES = 'allocated_bytes',
+  FRAGMENTED_BYTES = 'fragmented_bytes',
+  HEAP_SIZE_BYTES = 'heap_size_bytes',
+  HIGH_MEMORY_LOAD_THRESHOLD_BYTES = 'high_memory_load_threshold_bytes',
+  TOTAL_AVAILABLE_MEMORY_BYTES = 'total_available_memory_bytes',
+  MEMORY_LOAD_BYTES = 'memory_load_bytes',
+  TOTAL_COMMITTED_BYTES = 'total_committed_bytes',
+  PROMOTED_BYTES = 'promoted_bytes',
+  PINNED_OBJECTS_COUNT = 'pinned_objects_count',
+  PAUSE_TIME_PERCENTAGE = 'pause_time_percentage',
+  INDEX = 'index',
+  FINALIZATION_PENDING_COUNT = 'finalization_pending_count',
+  COMPACTED = 'compacted',
+  CONCURRENT = 'concurrent',
+  PAUSE_DURATIONS = 'pause_durations',
+}
+
+// MemoryInfo Context
+// TODO(Priscila): Add this context to the docs
+export interface MemoryInfoContext {
+  type: 'Memory Info' | 'memory_info';
+  [MemoryInfoContextKey.FINALIZATION_PENDING_COUNT]: number;
+  [MemoryInfoContextKey.COMPACTED]: boolean;
+  [MemoryInfoContextKey.CONCURRENT]: boolean;
+  [MemoryInfoContextKey.PAUSE_DURATIONS]: number[];
+  [MemoryInfoContextKey.TOTAL_AVAILABLE_MEMORY_BYTES]?: number;
+  [MemoryInfoContextKey.MEMORY_LOAD_BYTES]?: number;
+  [MemoryInfoContextKey.TOTAL_COMMITTED_BYTES]?: number;
+  [MemoryInfoContextKey.PROMOTED_BYTES]?: number;
+  [MemoryInfoContextKey.PINNED_OBJECTS_COUNT]?: number;
+  [MemoryInfoContextKey.PAUSE_TIME_PERCENTAGE]?: number;
+  [MemoryInfoContextKey.INDEX]?: number;
+  [MemoryInfoContextKey.ALLOCATED_BYTES]?: number;
+  [MemoryInfoContextKey.FRAGMENTED_BYTES]?: number;
+  [MemoryInfoContextKey.HEAP_SIZE_BYTES]?: number;
+  [MemoryInfoContextKey.HIGH_MEMORY_LOAD_THRESHOLD_BYTES]?: number;
+}
+
+export enum ThreadPoolInfoContextKey {
+  MIN_WORKER_THREADS = 'min_worker_threads',
+  MIN_COMPLETION_PORT_THREADS = 'min_completion_port_threads',
+  MAX_WORKER_THREADS = 'max_worker_threads',
+  MAX_COMPLETION_PORT_THREADS = 'max_completion_port_threads',
+  AVAILABLE_WORKER_THREADS = 'available_worker_threads',
+  AVAILABLE_COMPLETION_PORT_THREADS = 'available_completion_port_threads',
+}
+
+// ThreadPoolInfo Context
+// TODO(Priscila): Add this context to the docs
+export interface ThreadPoolInfoContext {
+  type: 'ThreadPool Info' | 'threadpool_info';
+  [ThreadPoolInfoContextKey.MIN_WORKER_THREADS]: number;
+  [ThreadPoolInfoContextKey.MIN_COMPLETION_PORT_THREADS]: number;
+  [ThreadPoolInfoContextKey.MAX_WORKER_THREADS]: number;
+  [ThreadPoolInfoContextKey.MAX_COMPLETION_PORT_THREADS]: number;
+  [ThreadPoolInfoContextKey.AVAILABLE_WORKER_THREADS]: number;
+  [ThreadPoolInfoContextKey.AVAILABLE_COMPLETION_PORT_THREADS]: number;
+}
+
+export enum ProfileContextKey {
+  PROFILE_ID = 'profile_id',
+}
+
+export interface ProfileContext {
+  [ProfileContextKey.PROFILE_ID]?: string;
+}
+
+export interface BrowserContext {
+  name: string;
+  version: string;
+}
+
 type EventContexts = {
+  'Memory Info'?: MemoryInfoContext;
+  'ThreadPool Info'?: ThreadPoolInfoContext;
+  browser?: BrowserContext;
   client_os?: OSContext;
   device?: DeviceContext;
+  feedback?: Record<string, any>;
+  memory_info?: MemoryInfoContext;
   os?: OSContext;
+  otel?: OtelContext;
+  // TODO (udameli): add better types here
+  // once perf issue data shape is more clear
+  performance_issue?: any;
   runtime?: RuntimeContext;
+  threadpool_info?: ThreadPoolInfoContext;
   trace?: TraceContextType;
+  unity?: UnityContext;
 };
 
-export type Measurement = {value: number};
+export type Measurement = {value: number; unit?: string};
 
 export type EventTag = {key: string; value: string};
 
@@ -347,7 +628,43 @@ export type EventUser = {
   username?: string | null;
 };
 
-type EventBase = {
+export type PerformanceDetectorData = {
+  causeSpanIds: string[];
+  offenderSpanIds: string[];
+  parentSpanIds: string[];
+  issueType?: IssueType;
+};
+
+type EventEvidenceDisplay = {
+  /**
+   * Used for alerting, probably not useful for the UI
+   */
+  important: boolean;
+  name: string;
+  value: string;
+};
+
+type EventOccurrence = {
+  detectionTime: string;
+  eventId: string;
+  /**
+   * Arbitrary data that vertical teams can pass to assist with rendering the page.
+   * This is intended mostly for use with customizing the UI, not in the generic UI.
+   */
+  evidenceData: Record<string, any>;
+  /**
+   * Data displayed in the evidence table. Used in all issue types besides errors.
+   */
+  evidenceDisplay: EventEvidenceDisplay[];
+  fingerprint: string[];
+  id: string;
+  issueTitle: string;
+  resourceId: string;
+  subtitle: string;
+  type: number;
+};
+
+interface EventBase {
   contexts: EventContexts;
   crashFile: IssueAttachment | null;
   culprit: string;
@@ -357,14 +674,11 @@ type EventBase = {
   errors: any[];
   eventID: string;
   fingerprints: string[];
-  groupingConfig: {
-    enhancements: string;
-    id: string;
-  };
   id: string;
   location: string | null;
   message: string;
   metadata: EventMetadata;
+  occurrence: EventOccurrence | null;
   projectID: string;
   size: number;
   tags: EventTag[];
@@ -376,11 +690,17 @@ type EventBase = {
     | EventOrGroupType.EXPECTSTAPLE
     | EventOrGroupType.HPKP;
   user: EventUser | null;
+  _meta?: Record<string, any>;
   context?: Record<string, any>;
   dateCreated?: string;
   device?: Record<string, any>;
   endTimestamp?: number;
   groupID?: string;
+  groupingConfig?: {
+    enhancements: string;
+    id: string;
+  };
+  issueCategory?: IssueCategory;
   latestEventID?: string | null;
   measurements?: Record<string, Measurement>;
   nextEventID?: string | null;
@@ -396,20 +716,26 @@ type EventBase = {
   } | null;
   sdkUpdates?: Array<SDKUpdatesSuggestion>;
   userReport?: any;
-};
+}
 
-export type EventTransaction = Omit<EventBase, 'entries' | 'type'> & {
+interface TraceEventContexts extends EventContexts {
+  browser?: BrowserContext;
+  profile?: ProfileContext;
+}
+
+export interface EventTransaction
+  extends Omit<EventBase, 'entries' | 'type' | 'contexts'> {
+  contexts: TraceEventContexts;
   endTimestamp: number;
-  entries: (EntrySpans | EntryRequest)[];
+  // EntryDebugMeta is required for profiles to render in the span
+  // waterfall with the correct symbolication statuses
+  entries: (EntrySpans | EntryRequest | EntryDebugMeta)[];
   startTimestamp: number;
   type: EventOrGroupType.TRANSACTION;
-  contexts?: {
-    trace?: TraceContextType;
-  };
-  title?: string;
-};
+  perfProblem?: PerformanceDetectorData;
+}
 
-export type EventError = Omit<EventBase, 'entries' | 'type'> & {
+export interface EventError extends Omit<EventBase, 'entries' | 'type'> {
   entries: (
     | EntryException
     | EntryStacktrace
@@ -418,7 +744,7 @@ export type EventError = Omit<EventBase, 'entries' | 'type'> & {
     | EntryDebugMeta
   )[];
   type: EventOrGroupType.ERROR;
-};
+}
 
 export type Event = EventError | EventTransaction | EventBase;
 

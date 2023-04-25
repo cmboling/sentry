@@ -11,9 +11,11 @@ from sentry.models import (
     OrganizationIntegration,
 )
 from sentry.testutils import TestCase
+from sentry.testutils.silo import control_silo_test
 from sentry.utils.signing import unsign
 
 
+@control_silo_test
 class MsTeamsIntegrationUnlinkIdentityTest(TestCase):
     def setUp(self):
         super(TestCase, self).setUp()
@@ -34,7 +36,9 @@ class MsTeamsIntegrationUnlinkIdentityTest(TestCase):
                 "expires_at": int(time.time()) + 86400,
             },
         )
-        OrganizationIntegration.objects.create(organization=self.org, integration=self.integration)
+        OrganizationIntegration.objects.create(
+            organization_id=self.org.id, integration=self.integration
+        )
 
         self.idp = IdentityProvider.objects.create(
             type="msteams", external_id="1_50l3mnly_5w34r", config={}

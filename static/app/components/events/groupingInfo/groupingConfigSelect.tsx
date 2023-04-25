@@ -3,7 +3,7 @@ import styled from '@emotion/styled';
 import AsyncComponent from 'sentry/components/asyncComponent';
 import DropdownAutoComplete from 'sentry/components/dropdownAutoComplete';
 import DropdownButton from 'sentry/components/dropdownButton';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {t} from 'sentry/locale';
 import {EventGroupingConfig} from 'sentry/types';
 
@@ -52,7 +52,7 @@ class GroupingConfigSelect extends AsyncComponent<Props, State> {
       <DropdownAutoComplete onSelect={onSelect} items={options}>
         {({isOpen}) => (
           <Tooltip title={t('Click here to experiment with other grouping configs')}>
-            <StyledDropdownButton isOpen={isOpen} size="small">
+            <StyledDropdownButton isOpen={isOpen} size="sm">
               <GroupingConfigItem isActive={eventConfigId === configId}>
                 {configId}
               </GroupingConfigItem>

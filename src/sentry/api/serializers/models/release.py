@@ -1,11 +1,12 @@
 from collections import defaultdict
+from typing import Mapping, Sequence, TypedDict, Union
 
 from django.core.cache import cache
 from django.db.models import Sum
 
 from sentry import release_health, tagstore
 from sentry.api.serializers import Serializer, register, serialize
-from sentry.db.models.query import in_iexact
+from sentry.api.serializers.models.user import UserSerializerResponse
 from sentry.models import (
     Commit,
     CommitAuthor,
@@ -16,10 +17,9 @@ from sentry.models import (
     ReleaseProjectEnvironment,
     ReleaseStatus,
     User,
-    UserEmail,
 )
+from sentry.services.hybrid_cloud.user import user_service
 from sentry.utils import metrics
-from sentry.utils.compat import zip
 from sentry.utils.hashlib import md5_text
 
 
@@ -51,7 +51,15 @@ def _user_to_author_cache_key(organization_id, author):
     return f"get_users_for_authors:{organization_id}:{author_hash}"
 
 
-def get_users_for_authors(organization_id, authors, user=None):
+class NonMappableUser(TypedDict):
+    name: str
+    email: str
+
+
+Author = Union[UserSerializerResponse, NonMappableUser]
+
+
+def get_users_for_authors(organization_id, authors, user=None) -> Mapping[str, User]:
     """
     Returns a dictionary of author_id => user, if a Sentry
     user object exists for that email. If there is no matching
@@ -59,8 +67,9 @@ def get_users_for_authors(organization_id, authors, user=None):
     author is returned.
     e.g.
     {
-        1: serialized(<User id=1>),
-        2: {email: 'not-a-user@example.com', name: 'dunno'},
+        '<author-id-1>': serialized(<User id=1, ...>),
+        '<author-id-2>': {'email': 'not-a-user@example.com', 'name': 'dunno'},
+        '<author-id-3>': serialized(<User id=3, ...>),
         ...
     }
     """
@@ -82,30 +91,29 @@ def get_users_for_authors(organization_id, authors, user=None):
 
     if missed:
         # Filter users based on the emails provided in the commits
-        user_emails = list(
-            UserEmail.objects.filter(in_iexact("email", [a.email for a in missed])).order_by("id")
+        # and that belong to the organization associated with the release
+        users: Sequence[UserSerializerResponse] = user_service.serialize_many(
+            filter={
+                "emails": [a.email for a in missed],
+                "organization_id": organization_id,
+                "is_active": True,
+            },
+            as_user=user,
         )
-
-        # Filter users belonging to the organization associated with
-        # the release
-        users = User.objects.filter(
-            id__in={ue.user_id for ue in user_emails},
-            is_active=True,
-            sentry_orgmember_set__organization_id=organization_id,
-        )
-        users = serialize(list(users), user)
-        users_by_id = {user["id"]: user for user in users}
         # Figure out which email address matches to a user
         users_by_email = {}
-        for email in user_emails:
+        for email in [a.email for a in missed]:
             # force emails to lower case so we can do case insensitive matching
-            lower_email = email.email.lower()
+            lower_email = email.lower()
             if lower_email not in users_by_email:
-                user = users_by_id.get(str(email.user_id), None)
-                # user can be None if there's a user associated
-                # with user_email in separate organization
-                if user:
-                    users_by_email[lower_email] = user
+                for u in users:
+                    for match in u["emails"]:
+                        if (
+                            match["email"].lower() == lower_email
+                            and lower_email not in users_by_email
+                        ):
+                            users_by_email[lower_email] = u
+
         to_cache = {}
         for author in missed:
             results[str(author.id)] = users_by_email.get(
@@ -352,7 +360,12 @@ class ReleaseSerializer(Serializer):
                 issue_counts_by_release,
             ) = self.__get_release_data_with_environments(release_project_envs)
 
-        owners = {d["id"]: d for d in serialize({i.owner for i in item_list if i.owner_id}, user)}
+        owners = {
+            d["id"]: d
+            for d in user_service.serialize_many(
+                filter={"user_ids": [i.owner_id for i in item_list if i.owner_id]}, as_user=user
+            )
+        }
 
         release_metadata_attrs = self._get_commit_metadata(item_list, user)
         deploy_metadata_attrs = self._get_deploy_metadata(item_list, user)
@@ -501,6 +514,7 @@ class ReleaseSerializer(Serializer):
             return rv
 
         d = {
+            "id": obj.id,
             "version": obj.version,
             "status": ReleaseStatus.to_string(obj.status),
             "shortVersion": obj.version,
@@ -523,6 +537,7 @@ class ReleaseSerializer(Serializer):
             "currentProjectMeta": expose_current_project_meta(
                 kwargs.get("current_project_meta", {})
             ),
+            "userAgent": obj.user_agent,
         }
         if self.with_adoption_stages:
             d.update(

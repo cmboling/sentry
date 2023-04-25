@@ -3,22 +3,22 @@ import styled from '@emotion/styled';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
 import AsyncComponent from 'sentry/components/asyncComponent';
-import Button from 'sentry/components/button';
+import {Button} from 'sentry/components/button';
 import Confirm from 'sentry/components/confirm';
-import TextField from 'sentry/components/forms/textField';
+import EmptyMessage from 'sentry/components/emptyMessage';
+import TextField from 'sentry/components/forms/fields/textField';
 import ExternalLink from 'sentry/components/links/externalLink';
 import {Panel, PanelBody, PanelHeader} from 'sentry/components/panels';
-import Tooltip from 'sentry/components/tooltip';
+import {Tooltip} from 'sentry/components/tooltip';
 import {IconDelete} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {ExternalTeam, Integration, Organization, Team} from 'sentry/types';
 import {toTitleCase} from 'sentry/utils';
 import withOrganization from 'sentry/utils/withOrganization';
 import AsyncView from 'sentry/views/asyncView';
-import EmptyMessage from 'sentry/views/settings/components/emptyMessage';
 
-type Props = RouteComponentProps<{orgId: string; teamId: string}, {}> & {
+type Props = RouteComponentProps<{teamId: string}, {}> & {
   organization: Organization;
   team: Team;
 };
@@ -113,8 +113,7 @@ class TeamNotificationSettings extends AsyncView<Props, State> {
       notificationIntegrations.map(integration => [integration.id, integration])
     );
 
-    const access = new Set(organization.access);
-    const hasAccess = access.has('team:write');
+    const hasAccess = organization.access.includes('team:write');
 
     return externalTeams.map(externalTeam => (
       <FormFieldWrapper key={externalTeam.id}>
@@ -134,6 +133,7 @@ class TeamNotificationSettings extends AsyncView<Props, State> {
               </NotDisabledSubText>
             </div>
           }
+          labelText={t('Unlink this channel in slack with `/slack unlink team`')}
           name="externalName"
           value={externalTeam.externalName}
         />
@@ -150,7 +150,7 @@ class TeamNotificationSettings extends AsyncView<Props, State> {
               message={t('Are you sure you want to remove this Slack team link?')}
             >
               <Button
-                size="small"
+                size="sm"
                 icon={<IconDelete size="md" />}
                 aria-label={t('delete')}
                 disabled={!hasAccess}

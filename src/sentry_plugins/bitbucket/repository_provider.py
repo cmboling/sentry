@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from sentry.app import locks
+from sentry.locks import locks
 from sentry.models import OrganizationOption
 from sentry.plugins.providers import RepositoryProvider
 from sentry.shared_integrations.exceptions import ApiError
@@ -45,7 +45,11 @@ class BitbucketRepositoryProvider(BitbucketMixin, RepositoryProvider):
         return config
 
     def get_webhook_secret(self, organization):
-        lock = locks.get(f"bitbucket:webhook-secret:{organization.id}", duration=60)
+        lock = locks.get(
+            f"bitbucket:webhook-secret:{organization.id}",
+            duration=60,
+            name="bitbucket_webhook_secret",
+        )
         with lock.acquire():
             secret = OrganizationOption.objects.get_value(
                 organization=organization, key="bitbucket:webhook_secret"

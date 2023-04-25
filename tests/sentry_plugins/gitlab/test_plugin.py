@@ -1,7 +1,8 @@
+from functools import cached_property
+
 import responses
 from django.test import RequestFactory
 from django.urls import reverse
-from exam import fixture
 
 from sentry.testutils import PluginTestCase
 from sentry.utils import json
@@ -9,11 +10,11 @@ from sentry_plugins.gitlab.plugin import GitLabPlugin
 
 
 class GitLabPluginTest(PluginTestCase):
-    @fixture
+    @cached_property
     def plugin(self):
         return GitLabPlugin()
 
-    @fixture
+    @cached_property
     def request(self):
         return RequestFactory()
 
@@ -80,7 +81,6 @@ class GitLabPluginTest(PluginTestCase):
             responses.GET,
             "https://gitlab.com/api/v4/projects/getsentry%2Fsentry/issues/1",
             body='{"iid": 1, "id": "10", "title": "Hello world"}',
-            match_querystring=True,
         )
         responses.add(
             responses.POST,

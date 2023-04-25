@@ -12,7 +12,7 @@ import Placeholder from 'sentry/components/placeholder';
 import {IconArrow} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import ProjectsStore from 'sentry/stores/projectsStore';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization, Project} from 'sentry/types';
 
 import {ProjectBadge, ProjectBadgeContainer} from './styles';
@@ -177,11 +177,10 @@ class TeamIssuesBreakdown extends AsyncComponent<Props, State> {
                 headers={[
                   t('Project'),
                   ...statuses.map(action => (
-                    <AlignRight key={action}>{t(action)}</AlignRight>
+                    <AlignRight key={action}>{action}</AlignRight>
                   )),
                   <AlignRight key="total">
-                    {t('total')}{' '}
-                    <IconArrow direction="down" size="12px" color="gray300" />
+                    {t('total')} <IconArrow direction="down" size="xs" color="gray300" />
                   </AlignRight>,
                 ]}
                 isLoading={loading}

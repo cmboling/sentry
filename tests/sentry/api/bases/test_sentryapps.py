@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
 from django.http import Http404
 
 from sentry.api.bases.sentryapps import (
@@ -12,6 +13,7 @@ from sentry.api.bases.sentryapps import (
 )
 from sentry.testutils import TestCase
 from sentry.testutils.helpers.faux import Mock
+from sentry.testutils.silo import control_silo_test
 
 
 class SentryAppPermissionTest(TestCase):
@@ -30,7 +32,7 @@ class SentryAppPermissionTest(TestCase):
     def test_request_user_is_not_app_owner_fails(self):
         self.request.user = self.create_user()
 
-        with self.assertRaises(Http404):
+        with pytest.raises(Http404):
             self.permission.has_object_permission(self.request, None, self.sentry_app)
 
     def test_has_permission(self):
@@ -41,6 +43,7 @@ class SentryAppPermissionTest(TestCase):
         assert self.permission.has_permission(self.request, None)
 
 
+@control_silo_test(stable=True)
 class SentryAppBaseEndpointTest(TestCase):
     def setUp(self):
         self.endpoint = SentryAppBaseEndpoint()
@@ -54,13 +57,14 @@ class SentryAppBaseEndpointTest(TestCase):
 
     def test_retrieves_sentry_app(self):
         args, kwargs = self.endpoint.convert_args(self.request, self.sentry_app.slug)
-        assert kwargs["sentry_app"] == self.sentry_app
+        assert kwargs["sentry_app"].id == self.sentry_app.id
 
     def test_raises_when_sentry_app_not_found(self):
-        with self.assertRaises(Http404):
+        with pytest.raises(Http404):
             self.endpoint.convert_args(self.request, "notanapp")
 
 
+@control_silo_test(stable=True)
 class SentryAppInstallationPermissionTest(TestCase):
     def setUp(self):
         self.permission = SentryAppInstallationPermission()
@@ -88,10 +92,11 @@ class SentryAppInstallationPermissionTest(TestCase):
         assert self.permission.has_object_permission(self.request, None, self.installation)
 
     def test_request_user_not_in_organization(self):
-        with self.assertRaises(Http404):
+        with pytest.raises(Http404):
             self.permission.has_object_permission(self.request, None, self.installation)
 
 
+@control_silo_test(stable=True)
 class SentryAppInstallationBaseEndpointTest(TestCase):
     def setUp(self):
         self.endpoint = SentryAppInstallationBaseEndpoint()
@@ -112,10 +117,11 @@ class SentryAppInstallationBaseEndpointTest(TestCase):
         assert kwargs["installation"] == self.installation
 
     def test_raises_when_sentry_app_not_found(self):
-        with self.assertRaises(Http404):
+        with pytest.raises(Http404):
             self.endpoint.convert_args(self.request, "1234")
 
 
+@control_silo_test(stable=True)
 class AddIntegrationPlatformMetricTagTest(unittest.TestCase):
     @patch("sentry.api.bases.sentryapps.add_request_metric_tags")
     def test_record_platform_integration_metric(self, add_request_metric_tags):

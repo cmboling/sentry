@@ -1,63 +1,109 @@
 import {Fragment, useEffect} from 'react';
-import {browserHistory} from 'react-router';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 import {Location} from 'history';
-import * as qs from 'query-string';
 
 import {hideSidebar, showSidebar} from 'sentry/actionCreators/preferences';
 import Feature from 'sentry/components/acl/feature';
 import GuideAnchor from 'sentry/components/assistant/guideAnchor';
-import HookOrDefault from 'sentry/components/hookOrDefault';
-import {
-  doesPathHaveNewFilters,
-  extractSelectionParameters,
-} from 'sentry/components/organizations/pageFilters/utils';
+import {getMergedTasks} from 'sentry/components/onboardingWizard/taskConfig';
+import PerformanceOnboardingSidebar from 'sentry/components/performanceOnboarding/sidebar';
+import ReplaysOnboardingSidebar from 'sentry/components/replaysOnboarding/sidebar';
+import {isDone} from 'sentry/components/sidebar/utils';
 import {
   IconChevron,
   IconDashboard,
   IconIssues,
-  IconLab,
   IconLightning,
-  IconList,
+  IconPlay,
+  IconProfiling,
   IconProject,
   IconReleases,
   IconSettings,
   IconSiren,
-  IconSpan,
+  IconStar,
   IconStats,
   IconSupport,
   IconTelescope,
+  IconTimer,
 } from 'sentry/icons';
 import {t} from 'sentry/locale';
 import ConfigStore from 'sentry/stores/configStore';
+import DemoWalkthroughStore from 'sentry/stores/demoWalkthroughStore';
 import HookStore from 'sentry/stores/hookStore';
 import PreferencesStore from 'sentry/stores/preferencesStore';
 import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-import space from 'sentry/styles/space';
+import {space} from 'sentry/styles/space';
 import {Organization} from 'sentry/types';
+import {isDemoWalkthrough} from 'sentry/utils/demoMode';
 import {getDiscoverLandingUrl} from 'sentry/utils/discover/urls';
 import theme from 'sentry/utils/theme';
+import {useLocation} from 'sentry/utils/useLocation';
 import useMedia from 'sentry/utils/useMedia';
+import useProjects from 'sentry/utils/useProjects';
+import {usePersistedOnboardingState} from 'sentry/views/onboarding/utils';
+
+import {ProfilingOnboardingSidebar} from '../profiling/ProfilingOnboarding/profilingOnboardingSidebar';
 
 import Broadcasts from './broadcasts';
 import SidebarHelp from './help';
 import OnboardingStatus from './onboardingStatus';
 import ServiceIncidents from './serviceIncidents';
+import {SidebarAccordion} from './sidebarAccordion';
 import SidebarDropdown from './sidebarDropdown';
 import SidebarItem from './sidebarItem';
 import {SidebarOrientation, SidebarPanelKey} from './types';
-
-const SidebarOverride = HookOrDefault({
-  hookName: 'sidebar:item-override',
-  defaultComponent: ({children}) => <Fragment>{children({})}</Fragment>,
-});
 
 type Props = {
   location?: Location;
   organization?: Organization;
 };
+
+function activatePanel(panel: SidebarPanelKey) {
+  SidebarPanelStore.activatePanel(panel);
+}
+
+function togglePanel(panel: SidebarPanelKey) {
+  SidebarPanelStore.togglePanel(panel);
+}
+
+function hidePanel() {
+  SidebarPanelStore.hidePanel();
+}
+
+function useOpenOnboardingSidebar(organization?: Organization) {
+  const [onboardingState] = usePersistedOnboardingState();
+  const {projects: project} = useProjects();
+  const location = useLocation();
+
+  const openOnboardingSidebar = (() => {
+    if (location?.hash === '#welcome') {
+      if (organization && !ConfigStore.get('demoMode')) {
+        const tasks = getMergedTasks({
+          organization,
+          projects: project,
+          onboardingState: onboardingState || undefined,
+        });
+
+        const allDisplayedTasks = tasks
+          .filter(task => task.display)
+          .filter(task => !task.renderCard);
+        const doneTasks = allDisplayedTasks.filter(isDone);
+
+        return !(doneTasks.length >= allDisplayedTasks.length);
+      }
+      return true;
+    }
+    return false;
+  })();
+
+  useEffect(() => {
+    if (openOnboardingSidebar) {
+      activatePanel(SidebarPanelKey.OnboardingWizard);
+    }
+  }, [openOnboardingSidebar]);
+}
 
 function Sidebar({location, organization}: Props) {
   const config = useLegacyStore(ConfigStore);
@@ -65,15 +111,14 @@ function Sidebar({location, organization}: Props) {
   const activePanel = useLegacyStore(SidebarPanelStore);
 
   const collapsed = !!preferences.collapsed;
-  const horizontal = useMedia(`(max-width: ${theme.breakpoints[1]})`);
+  const horizontal = useMedia(`(max-width: ${theme.breakpoints.medium})`);
+
+  useOpenOnboardingSidebar();
 
   const toggleCollapse = () => {
     const action = collapsed ? showSidebar : hideSidebar;
     action();
   };
-
-  const togglePanel = (panel: SidebarPanelKey) => SidebarPanelStore.togglePanel(panel);
-  const hidePanel = () => SidebarPanelStore.hidePanel();
 
   const bcl = document.body.classList;
 
@@ -84,7 +129,15 @@ function Sidebar({location, organization}: Props) {
   useEffect(() => {
     bcl.add('body-sidebar');
     return () => bcl.remove('body-sidebar');
-  }, []);
+  }, [bcl]);
+
+  useEffect(() => {
+    Object.values(SidebarPanelKey).forEach(key => {
+      if (location?.hash === `#sidebar-${key}`) {
+        togglePanel(key);
+      }
+    });
+  }, [location?.hash]);
 
   // Add sidebar collapse classname to body
   useEffect(() => {
@@ -95,58 +148,7 @@ function Sidebar({location, organization}: Props) {
     }
 
     return () => bcl.remove('collapsed');
-  }, [collapsed]);
-
-  // Trigger panels depending on the location hash
-  useEffect(() => {
-    if (location?.hash === '#welcome') {
-      togglePanel(SidebarPanelKey.OnboardingWizard);
-    }
-  }, [location?.hash]);
-
-  /**
-   * Navigate to a path, but keep the page filter query strings.
-   */
-  const navigateWithPageFilters = (
-    pathname: string,
-    evt: React.MouseEvent<HTMLAnchorElement>
-  ) => {
-    // XXX(epurkhiser): No need to navigate w/ the page filters in the world
-    // of new page filter selection. You must pin your filters in which case
-    // they will persist anyway.
-    if (organization) {
-      if (doesPathHaveNewFilters(pathname, organization)) {
-        return;
-      }
-    }
-
-    const globalSelectionRoutes = [
-      'alerts',
-      'alerts/rules',
-      'dashboards',
-      'issues',
-      'releases',
-      'user-feedback',
-      'discover',
-      'discover/results', // Team plans do not have query landing page
-      'performance',
-    ].map(route => `/organizations/${organization?.slug}/${route}/`);
-
-    // Only keep the querystring if the current route matches one of the above
-    if (globalSelectionRoutes.includes(pathname)) {
-      const query = extractSelectionParameters(location?.query ?? {});
-
-      // Handle cmd-click (mac) and meta-click (linux)
-      if (evt.metaKey) {
-        const q = qs.stringify(query);
-        evt.currentTarget.href = `${evt.currentTarget.href}?${q}`;
-        return;
-      }
-
-      evt.preventDefault();
-      browserHistory.push({pathname, query});
-    }
-  };
+  }, [collapsed, bcl]);
 
   const hasPanel = !!activePanel;
   const hasOrganization = !!organization;
@@ -156,14 +158,23 @@ function Sidebar({location, organization}: Props) {
     orientation,
     collapsed,
     hasPanel,
+    organization,
   };
+
+  const sidebarAnchor = isDemoWalkthrough() ? (
+    <GuideAnchor target="projects" disabled={!DemoWalkthroughStore.get('sidebar')}>
+      {t('Projects')}
+    </GuideAnchor>
+  ) : (
+    <GuideAnchor target="projects">{t('Projects')}</GuideAnchor>
+  );
 
   const projects = hasOrganization && (
     <SidebarItem
       {...sidebarItemProps}
       index
-      icon={<IconProject size="md" />}
-      label={<GuideAnchor target="projects">{t('Projects')}</GuideAnchor>}
+      icon={<IconProject />}
+      label={sidebarAnchor}
       to={`/organizations/${organization.slug}/projects/`}
       id="projects"
     />
@@ -172,12 +183,9 @@ function Sidebar({location, organization}: Props) {
   const issues = hasOrganization && (
     <SidebarItem
       {...sidebarItemProps}
-      onClick={(_id, evt) =>
-        navigateWithPageFilters(`/organizations/${organization.slug}/issues/`, evt)
-      }
-      icon={<IconIssues size="md" />}
+      icon={<IconIssues />}
       label={<GuideAnchor target="issues">{t('Issues')}</GuideAnchor>}
-      to={`/organizations/${organization.slug}/issues/`}
+      to={`/organizations/${organization.slug}/issues/?referrer=sidebar`}
       id="issues"
     />
   );
@@ -190,10 +198,7 @@ function Sidebar({location, organization}: Props) {
     >
       <SidebarItem
         {...sidebarItemProps}
-        onClick={(_id, evt) =>
-          navigateWithPageFilters(getDiscoverLandingUrl(organization), evt)
-        }
-        icon={<IconTelescope size="md" />}
+        icon={<IconTelescope />}
         label={<GuideAnchor target="discover">{t('Discover')}</GuideAnchor>}
         to={getDiscoverLandingUrl(organization)}
         id="discover-v2"
@@ -207,34 +212,60 @@ function Sidebar({location, organization}: Props) {
       features={['performance-view']}
       organization={organization}
     >
-      <SidebarOverride id="performance-override">
-        {(overideProps: Partial<React.ComponentProps<typeof SidebarItem>>) => (
-          <SidebarItem
-            {...sidebarItemProps}
-            onClick={(_id, evt) =>
-              navigateWithPageFilters(
-                `/organizations/${organization.slug}/performance/`,
-                evt
-              )
-            }
-            icon={<IconLightning size="md" />}
-            label={<GuideAnchor target="performance">{t('Performance')}</GuideAnchor>}
-            to={`/organizations/${organization.slug}/performance/`}
-            id="performance"
-            {...overideProps}
-          />
-        )}
-      </SidebarOverride>
+      <SidebarItem
+        {...sidebarItemProps}
+        icon={<IconLightning />}
+        label={<GuideAnchor target="performance">{t('Performance')}</GuideAnchor>}
+        to={`/organizations/${organization.slug}/performance/`}
+        id="performance"
+      />
+    </Feature>
+  );
+
+  const starfish = hasOrganization && (
+    <Feature
+      hookName="feature-disabled:starfish-view"
+      features={['starfish-view']}
+      organization={organization}
+    >
+      <SidebarAccordion
+        {...sidebarItemProps}
+        icon={<IconStar />}
+        aria-label={t('Starfish')}
+        label={<GuideAnchor target="starfish">{t('Starfish')}</GuideAnchor>}
+        to={`/organizations/${organization.slug}/starfish/`}
+        id="starfish"
+        exact
+      >
+        <SidebarItem
+          {...sidebarItemProps}
+          label={<GuideAnchor target="starfish">{t('API')}</GuideAnchor>}
+          to={`/organizations/${organization.slug}/starfish/api/`}
+          id="starfish"
+          icon={<SubitemDot collapsed={collapsed} />}
+        />
+        <SidebarItem
+          {...sidebarItemProps}
+          label={<GuideAnchor target="starfish">{t('Cache')}</GuideAnchor>}
+          to={`/organizations/${organization.slug}/starfish/cache/`}
+          id="starfish"
+          icon={<SubitemDot collapsed={collapsed} />}
+        />
+        <SidebarItem
+          {...sidebarItemProps}
+          label={<GuideAnchor target="starfish">{t('Database')}</GuideAnchor>}
+          to={`/organizations/${organization.slug}/starfish/database/`}
+          id="starfish"
+          icon={<SubitemDot collapsed={collapsed} />}
+        />
+      </SidebarAccordion>
     </Feature>
   );
 
   const releases = hasOrganization && (
     <SidebarItem
       {...sidebarItemProps}
-      onClick={(_id, evt) =>
-        navigateWithPageFilters(`/organizations/${organization.slug}/releases/`, evt)
-      }
-      icon={<IconReleases size="md" />}
+      icon={<IconReleases />}
       label={<GuideAnchor target="releases">{t('Releases')}</GuideAnchor>}
       to={`/organizations/${organization.slug}/releases/`}
       id="releases"
@@ -244,10 +275,7 @@ function Sidebar({location, organization}: Props) {
   const userFeedback = hasOrganization && (
     <SidebarItem
       {...sidebarItemProps}
-      onClick={(_id, evt) =>
-        navigateWithPageFilters(`/organizations/${organization.slug}/user-feedback/`, evt)
-      }
-      icon={<IconSupport size="md" />}
+      icon={<IconSupport />}
       label={t('User Feedback')}
       to={`/organizations/${organization.slug}/user-feedback/`}
       id="user-feedback"
@@ -257,42 +285,40 @@ function Sidebar({location, organization}: Props) {
   const alerts = hasOrganization && (
     <SidebarItem
       {...sidebarItemProps}
-      onClick={(_id, evt) =>
-        navigateWithPageFilters(`/organizations/${organization.slug}/alerts/rules/`, evt)
-      }
-      icon={<IconSiren size="md" />}
+      icon={<IconSiren />}
       label={t('Alerts')}
       to={`/organizations/${organization.slug}/alerts/rules/`}
       id="alerts"
     />
   );
-
+  1;
   const monitors = hasOrganization && (
     <Feature features={['monitors']} organization={organization}>
       <SidebarItem
         {...sidebarItemProps}
-        onClick={(_id, evt) =>
-          navigateWithPageFilters(`/organizations/${organization.slug}/monitors/`, evt)
-        }
-        icon={<IconLab size="md" />}
-        label={t('Monitors')}
-        to={`/organizations/${organization.slug}/monitors/`}
-        id="monitors"
+        icon={<IconTimer />}
+        label={t('Crons')}
+        to={`/organizations/${organization.slug}/crons/`}
+        id="crons"
+        isBeta
       />
     </Feature>
   );
 
   const replays = hasOrganization && (
-    <Feature features={['session-replay']} organization={organization}>
+    <Feature
+      hookName="feature-disabled:replay-sidebar-item"
+      features={['session-replay-ui']}
+      organization={organization}
+      requireAll={false}
+    >
       <SidebarItem
         {...sidebarItemProps}
-        onClick={(_id, evt) =>
-          navigateWithPageFilters(`/organizations/${organization.slug}/replays/`, evt)
-        }
-        icon={<IconLab size="md" />}
+        icon={<IconPlay />}
         label={t('Replays')}
         to={`/organizations/${organization.slug}/replays/`}
         id="replays"
+        isNew
       />
     </Feature>
   );
@@ -307,10 +333,7 @@ function Sidebar({location, organization}: Props) {
       <SidebarItem
         {...sidebarItemProps}
         index
-        onClick={(_id, evt) =>
-          navigateWithPageFilters(`/organizations/${organization.slug}/dashboards/`, evt)
-        }
-        icon={<IconDashboard size="md" />}
+        icon={<IconDashboard />}
         label={t('Dashboards')}
         to={`/organizations/${organization.slug}/dashboards/`}
         id="customizable-dashboards"
@@ -328,31 +351,20 @@ function Sidebar({location, organization}: Props) {
       <SidebarItem
         {...sidebarItemProps}
         index
-        onClick={(_id, evt) =>
-          navigateWithPageFilters(`/organizations/${organization.slug}/profiling/`, evt)
-        }
-        icon={<IconSpan size="md" />}
+        icon={<IconProfiling />}
         label={t('Profiling')}
         to={`/organizations/${organization.slug}/profiling/`}
         id="profiling"
+        isBeta={!organization.features.includes('profiling-ga')}
+        isNew={organization.features.includes('profiling-ga')}
       />
     </Feature>
-  );
-
-  const activity = hasOrganization && (
-    <SidebarItem
-      {...sidebarItemProps}
-      icon={<IconList size="md" />}
-      label={t('Activity')}
-      to={`/organizations/${organization.slug}/activity/`}
-      id="activity"
-    />
   );
 
   const stats = hasOrganization && (
     <SidebarItem
       {...sidebarItemProps}
-      icon={<IconStats size="md" />}
+      icon={<IconStats />}
       label={t('Stats')}
       to={`/organizations/${organization.slug}/stats/`}
       id="stats"
@@ -362,7 +374,7 @@ function Sidebar({location, organization}: Props) {
   const settings = hasOrganization && (
     <SidebarItem
       {...sidebarItemProps}
-      icon={<IconSettings size="md" />}
+      icon={<IconSettings />}
       label={t('Settings')}
       to={`/settings/${organization.slug}/`}
       id="settings"
@@ -370,7 +382,7 @@ function Sidebar({location, organization}: Props) {
   );
 
   return (
-    <SidebarWrapper collapsed={collapsed}>
+    <SidebarWrapper aria-label={t('Primary Navigation')} collapsed={collapsed}>
       <SidebarSectionGroupPrimary>
         <SidebarSection>
           <SidebarDropdown
@@ -386,26 +398,30 @@ function Sidebar({location, organization}: Props) {
           {hasOrganization && (
             <Fragment>
               <SidebarSection>
-                {projects}
                 {issues}
-                {performance}
-                {releases}
-                {userFeedback}
-                {alerts}
-                {discover2}
-                {dashboards}
-                {profiling}
+                {projects}
               </SidebarSection>
-
-              <SidebarSection>{monitors}</SidebarSection>
-              <SidebarSection>{replays}</SidebarSection>
 
               <SidebarSection>
-                {activity}
-                {stats}
+                {performance}
+                {starfish}
+                {profiling}
+                {replays}
+                {monitors}
+                {alerts}
               </SidebarSection>
 
-              <SidebarSection>{settings}</SidebarSection>
+              <SidebarSection>
+                {discover2}
+                {dashboards}
+                {releases}
+                {userFeedback}
+              </SidebarSection>
+
+              <SidebarSection>
+                {stats}
+                {settings}
+              </SidebarSection>
             </Fragment>
           )}
         </PrimaryItems>
@@ -413,6 +429,24 @@ function Sidebar({location, organization}: Props) {
 
       {hasOrganization && (
         <SidebarSectionGroup>
+          <PerformanceOnboardingSidebar
+            currentPanel={activePanel}
+            onShowPanel={() => togglePanel(SidebarPanelKey.PerformanceOnboarding)}
+            hidePanel={hidePanel}
+            {...sidebarItemProps}
+          />
+          <ReplaysOnboardingSidebar
+            currentPanel={activePanel}
+            onShowPanel={() => togglePanel(SidebarPanelKey.ReplaysOnboarding)}
+            hidePanel={hidePanel}
+            {...sidebarItemProps}
+          />
+          <ProfilingOnboardingSidebar
+            currentPanel={activePanel}
+            onShowPanel={() => togglePanel(SidebarPanelKey.ReplaysOnboarding)}
+            hidePanel={hidePanel}
+            {...sidebarItemProps}
+          />
           <SidebarSection noMargin noPadding>
             <OnboardingStatus
               org={organization}
@@ -426,8 +460,10 @@ function Sidebar({location, organization}: Props) {
           <SidebarSection>
             {HookStore.get('sidebar:bottom-items').length > 0 &&
               HookStore.get('sidebar:bottom-items')[0]({
+                orientation,
+                collapsed,
+                hasPanel,
                 organization,
-                ...sidebarItemProps,
               })}
             <SidebarHelp
               orientation={orientation}
@@ -447,7 +483,7 @@ function Sidebar({location, organization}: Props) {
               orientation={orientation}
               collapsed={collapsed}
               currentPanel={activePanel}
-              onShowPanel={() => togglePanel(SidebarPanelKey.StatusUpdate)}
+              onShowPanel={() => togglePanel(SidebarPanelKey.ServiceIncidents)}
               hidePanel={hidePanel}
             />
           </SidebarSection>
@@ -458,7 +494,7 @@ function Sidebar({location, organization}: Props) {
                 id="collapse"
                 data-test-id="sidebar-collapse"
                 {...sidebarItemProps}
-                icon={<StyledIconChevron collapsed={collapsed} />}
+                icon={<IconChevron direction={collapsed ? 'right' : 'left'} size="sm" />}
                 label={collapsed ? t('Expand') : t('Collapse')}
                 onClick={toggleCollapse}
               />
@@ -476,7 +512,7 @@ const responsiveFlex = css`
   display: flex;
   flex-direction: column;
 
-  @media (max-width: ${theme.breakpoints[1]}) {
+  @media (max-width: ${theme.breakpoints.medium}) {
     flex-direction: row;
   }
 `;
@@ -496,7 +532,7 @@ export const SidebarWrapper = styled('nav')<{collapsed: boolean}>`
   border-right: solid 1px ${p => p.theme.sidebarBorder};
   ${responsiveFlex};
 
-  @media (max-width: ${p => p.theme.breakpoints[1]}) {
+  @media (max-width: ${p => p.theme.breakpoints.medium}) {
     top: 0;
     left: 0;
     right: 0;
@@ -513,6 +549,7 @@ export const SidebarWrapper = styled('nav')<{collapsed: boolean}>`
 const SidebarSectionGroup = styled('div')`
   ${responsiveFlex};
   flex-shrink: 0; /* prevents shrinking on Safari */
+  gap: 1px;
 `;
 
 const SidebarSectionGroupPrimary = styled('div')`
@@ -522,7 +559,7 @@ const SidebarSectionGroupPrimary = styled('div')`
   min-width: 0;
   flex: 1;
   /* expand to fill the entire height on mobile */
-  @media (max-width: ${p => p.theme.breakpoints[1]}) {
+  @media (max-width: ${p => p.theme.breakpoints.medium}) {
     height: 100%;
     align-items: center;
   }
@@ -533,8 +570,9 @@ const PrimaryItems = styled('div')`
   flex: 1;
   display: flex;
   flex-direction: column;
+  gap: 1px;
   -ms-overflow-style: -ms-autohiding-scrollbar;
-  @media (max-height: 675px) and (min-width: ${p => p.theme.breakpoints[1]}) {
+  @media (max-height: 675px) and (min-width: ${p => p.theme.breakpoints.medium}) {
     border-bottom: 1px solid ${p => p.theme.gray400};
     padding-bottom: ${space(1)};
     box-shadow: rgba(0, 0, 0, 0.15) 0px -10px 10px inset;
@@ -547,7 +585,7 @@ const PrimaryItems = styled('div')`
       border-radius: 8px;
     }
   }
-  @media (max-width: ${p => p.theme.breakpoints[1]}) {
+  @media (max-width: ${p => p.theme.breakpoints.medium}) {
     overflow-y: visible;
     flex-direction: row;
     height: 100%;
@@ -562,14 +600,26 @@ const PrimaryItems = styled('div')`
   }
 `;
 
+const SubitemDot = styled('div')<{collapsed: boolean}>`
+  width: 3px;
+  height: 3px;
+  background: currentcolor;
+  border-radius: 50%;
+
+  opacity: ${p => (p.collapsed ? 1 : 0)};
+  @media (max-width: ${p => p.theme.breakpoints.medium}) {
+    opacity: 1;
+  }
+`;
+
 const SidebarSection = styled(SidebarSectionGroup)<{
   noMargin?: boolean;
   noPadding?: boolean;
 }>`
   ${p => !p.noMargin && `margin: ${space(1)} 0`};
-  ${p => !p.noPadding && 'padding: 0 19px'};
+  ${p => !p.noPadding && `padding: 0 ${space(2)}`};
 
-  @media (max-width: ${p => p.theme.breakpoints[0]}) {
+  @media (max-width: ${p => p.theme.breakpoints.small}) {
     margin: 0;
     padding: 0;
   }
@@ -579,25 +629,8 @@ const SidebarSection = styled(SidebarSectionGroup)<{
   }
 `;
 
-const ExpandedIcon = css`
-  transition: 0.3s transform ease;
-  transform: rotate(270deg);
-`;
-const CollapsedIcon = css`
-  transform: rotate(90deg);
-`;
-const StyledIconChevron = styled(({collapsed, ...props}) => (
-  <IconChevron
-    direction="left"
-    size="md"
-    isCircled
-    css={[ExpandedIcon, collapsed && CollapsedIcon]}
-    {...props}
-  />
-))``;
-
 const SidebarCollapseItem = styled(SidebarItem)`
-  @media (max-width: ${p => p.theme.breakpoints[1]}) {
+  @media (max-width: ${p => p.theme.breakpoints.medium}) {
     display: none;
   }
 `;

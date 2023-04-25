@@ -1,4 +1,4 @@
-import * as React from 'react';
+import {Component} from 'react';
 import {browserHistory} from 'react-router';
 import * as Sentry from '@sentry/react';
 
@@ -8,18 +8,19 @@ import {
   clearIndicators,
 } from 'sentry/actionCreators/indicator';
 import {Client} from 'sentry/api';
-import Button, {ButtonProps} from 'sentry/components/button';
+import {Button, ButtonProps} from 'sentry/components/button';
 import {t} from 'sentry/locale';
 import {Organization, Project} from 'sentry/types';
-import {trackAdhocEvent, trackAnalyticsEvent} from 'sentry/utils/analytics';
-import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import withApi from 'sentry/utils/withApi';
+import {normalizeUrl} from 'sentry/utils/withDomainRequired';
 import withOrganization from 'sentry/utils/withOrganization';
 
 type CreateSampleEventButtonProps = {
   api: Client;
   organization: Organization;
   source: string;
+  onCreateSampleGroup?: () => void;
   project?: Project;
 } & ButtonProps;
 
@@ -27,7 +28,7 @@ type State = {
   creating: boolean;
 };
 
-const EVENT_POLL_RETRIES = 15;
+const EVENT_POLL_RETRIES = 30;
 const EVENT_POLL_INTERVAL = 1000;
 
 async function latestEventAvailable(
@@ -53,10 +54,7 @@ async function latestEventAvailable(
   }
 }
 
-class CreateSampleEventButton extends React.Component<
-  CreateSampleEventButtonProps,
-  State
-> {
+class CreateSampleEventButton extends Component<CreateSampleEventButtonProps, State> {
   state: State = {
     creating: false,
   };
@@ -68,13 +66,18 @@ class CreateSampleEventButton extends React.Component<
       return;
     }
 
-    trackAdhocEvent({
-      eventKey: 'sample_event.button_viewed',
-      org_id: organization.id,
+    trackAnalytics('sample_event.button_viewed', {
+      organization,
       project_id: project.id,
       source,
     });
   }
+
+  componentWillUnmount() {
+    this._isMounted = false;
+  }
+
+  private _isMounted = true;
 
   recordAnalytics({eventCreated, retries, duration}) {
     const {organization, project, source} = this.props;
@@ -83,13 +86,10 @@ class CreateSampleEventButton extends React.Component<
       return;
     }
 
-    const eventKey = `sample_event.${eventCreated ? 'created' : 'failed'}`;
-    const eventName = `Sample Event ${eventCreated ? 'Created' : 'Failed'}`;
+    const eventKey = `sample_event.${eventCreated ? 'created' : 'failed'}` as const;
 
-    trackAnalyticsEvent({
-      eventKey,
-      eventName,
-      organization_id: organization.id,
+    trackAnalytics(eventKey, {
+      organization,
       project_id: project.id,
       platform: project.platform || '',
       interval: EVENT_POLL_INTERVAL,
@@ -101,17 +101,21 @@ class CreateSampleEventButton extends React.Component<
 
   createSampleGroup = async () => {
     // TODO(dena): swap out for action creator
-    const {api, organization, project} = this.props;
+    const {api, organization, project, onCreateSampleGroup} = this.props;
     let eventData;
 
     if (!project) {
       return;
     }
 
-    trackAdvancedAnalyticsEvent('growth.onboarding_view_sample_event', {
-      platform: project.platform,
-      organization,
-    });
+    if (onCreateSampleGroup) {
+      onCreateSampleGroup();
+    } else {
+      trackAnalytics('growth.onboarding_view_sample_event', {
+        platform: project.platform,
+        organization,
+      });
+    }
 
     addLoadingMessage(t('Processing sample event...'), {
       duration: EVENT_POLL_RETRIES * EVENT_POLL_INTERVAL,
@@ -136,6 +140,13 @@ class CreateSampleEventButton extends React.Component<
     // before redirecting.
     const t0 = performance.now();
     const {eventCreated, retries} = await latestEventAvailable(api, eventData.groupID);
+
+    // Navigated away before event was created - skip analytics and error messages
+    // latestEventAvailable will succeed even if the request was cancelled
+    if (!this._isMounted) {
+      return;
+    }
+
     const t1 = performance.now();
 
     clearIndicators();
@@ -154,14 +165,16 @@ class CreateSampleEventButton extends React.Component<
         scope.setTag('retries', retries.toString());
         scope.setTag('duration', duration.toString());
 
-        scope.setLevel(Sentry.Severity.Warning);
+        scope.setLevel('warning');
         Sentry.captureMessage('Failed to load sample event');
       });
       return;
     }
 
     browserHistory.push(
-      `/organizations/${organization.slug}/issues/${eventData.groupID}/?project=${project.id}`
+      normalizeUrl(
+        `/organizations/${organization.slug}/issues/${eventData.groupID}/?project=${project.id}&referrer=sample-error`
+      )
     );
   };
 
@@ -173,12 +186,12 @@ class CreateSampleEventButton extends React.Component<
       source: _source,
       ...props
     } = this.props;
+
     const {creating} = this.state;
 
     return (
       <Button
         {...props}
-        data-test-id="create-sample-event"
         disabled={props.disabled || creating}
         onClick={this.createSampleGroup}
       />

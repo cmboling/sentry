@@ -10,12 +10,19 @@ from sentry import eventstore
 from sentry.lang.native.utils import STORE_CRASH_REPORTS_ALL
 from sentry.models import EventAttachment, File
 from sentry.testutils import RelayStoreHelper, TransactionTestCase
+from sentry.testutils.factories import get_fixture_path
 from sentry.testutils.helpers.task_runner import BurstTaskRunner
-from tests.symbolicator import get_fixture_path, insta_snapshot_stacktrace_data
+from sentry.utils.safe import get_path
+from tests.symbolicator import insta_snapshot_native_stacktrace_data, redact_location
 
 # IMPORTANT:
-# For these tests to run, write `symbolicator.enabled: true` into your
-# `~/.sentry/config.yml` and run `sentry devservices up`
+#
+# This test suite requires Symbolicator in order to run correctly.
+# Set `symbolicator.enabled: true` in your `~/.sentry/config.yml` and run `sentry devservices up`
+#
+# If you are using a local instance of Symbolicator, you need to
+# either change `system.url-prefix` option override inside `initialize` fixture to `system.internal-url-prefix`,
+# or add `127.0.0.1 host.docker.internal` entry to your `/etc/hosts`
 
 
 @pytest.mark.snuba
@@ -23,13 +30,11 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
     @pytest.fixture(autouse=True)
     def initialize(self, live_server, reset_snuba):
         self.project.update_option("sentry:builtin_symbol_sources", [])
-        new_prefix = live_server.url
 
         with patch("sentry.auth.system.is_internal_ip", return_value=True), self.options(
-            {"system.url-prefix": new_prefix}
+            {"system.url-prefix": live_server.url}
         ):
-
-            # Run test case:
+            # Run test case
             yield
 
     def upload_symbols(self):
@@ -45,7 +50,7 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
 
         out = BytesIO()
         f = zipfile.ZipFile(out, "w")
-        f.write(get_fixture_path("windows.sym"), "crash.sym")
+        f.write(get_fixture_path("native", "windows.sym"), "crash.sym")
         f.close()
 
         response = self.client.post(
@@ -64,7 +69,6 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
         "organizations:event-attachments": True,
         "organizations:symbol-sources": False,
         "organizations:custom-symbol-sources": False,
-        "organizations:images-loaded-v2": False,
     }
 
     def test_full_minidump(self):
@@ -72,7 +76,7 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
         self.upload_symbols()
 
         with self.feature(self._FEATURES):
-            with open(get_fixture_path("windows.dmp"), "rb") as f:
+            with open(get_fixture_path("native", "windows.dmp"), "rb") as f:
                 event = self.post_and_retrieve_minidump(
                     {
                         "upload_file_minidump": f,
@@ -81,7 +85,11 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
                     {"sentry[logger]": "test-logger"},
                 )
 
-        insta_snapshot_stacktrace_data(self, event.data)
+        candidates = event.data["debug_meta"]["images"][0]["candidates"]
+        redact_location(candidates)
+        event.data["debug_meta"]["images"][0]["candidates"] = candidates
+
+        insta_snapshot_native_stacktrace_data(self, event.data)
         assert event.data.get("logger") == "test-logger"
         # assert event.data.get("extra") == {"foo": "bar"}
 
@@ -105,7 +113,7 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
         self.upload_symbols()
 
         with self.feature("organizations:event-attachments"):
-            with open(get_fixture_path("windows.dmp"), "rb") as f:
+            with open(get_fixture_path("native", "windows.dmp"), "rb") as f:
                 event = self.post_and_retrieve_minidump(
                     {"upload_file_minidump": f},
                     {"sentry": '{"logger":"test-logger"}', "foo": "bar"},
@@ -120,7 +128,7 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
         self.upload_symbols()
 
         with self.feature("organizations:event-attachments"):
-            with open(get_fixture_path("windows.dmp"), "rb") as f:
+            with open(get_fixture_path("native", "windows.dmp"), "rb") as f:
                 event = self.post_and_retrieve_minidump(
                     {"upload_file_minidump": f},
                     {"sentry": "{{{{", "foo": "bar"},  # invalid sentry JSON
@@ -132,12 +140,12 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
 
     def test_missing_dsym(self):
         with self.feature(self._FEATURES):
-            with open(get_fixture_path("windows.dmp"), "rb") as f:
+            with open(get_fixture_path("native", "windows.dmp"), "rb") as f:
                 event = self.post_and_retrieve_minidump(
                     {"upload_file_minidump": f}, {"sentry[logger]": "test-logger"}
                 )
 
-        insta_snapshot_stacktrace_data(self, event.data)
+        insta_snapshot_native_stacktrace_data(self, event.data)
         assert not EventAttachment.objects.filter(event_id=event.event_id)
 
     def test_reprocessing(self):
@@ -152,12 +160,12 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
         features = dict(self._FEATURES)
         features["organizations:reprocessing-v2"] = True
         with self.feature(features):
-            with open(get_fixture_path("windows.dmp"), "rb") as f:
+            with open(get_fixture_path("native", "windows.dmp"), "rb") as f:
                 event = self.post_and_retrieve_minidump(
                     {"upload_file_minidump": f}, {"sentry[logger]": "test-logger"}
                 )
 
-            insta_snapshot_stacktrace_data(self, event.data, subname="initial")
+            insta_snapshot_native_stacktrace_data(self, event.data, subname="initial")
 
             self.upload_symbols()
 
@@ -172,7 +180,11 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
             assert new_event is not None
             assert new_event.event_id == event.event_id
 
-        insta_snapshot_stacktrace_data(self, new_event.data, subname="reprocessed")
+        candidates = new_event.data["debug_meta"]["images"][0]["candidates"]
+        redact_location(candidates)
+        new_event.data["debug_meta"]["images"][0]["candidates"] = candidates
+
+        insta_snapshot_native_stacktrace_data(self, new_event.data, subname="reprocessed")
 
         for event_id in (event.event_id, new_event.event_id):
             (minidump,) = sorted(
@@ -183,3 +195,13 @@ class SymbolicatorMinidumpIntegrationTest(RelayStoreHelper, TransactionTestCase)
             minidump_file = File.objects.get(id=minidump.file_id)
             assert minidump_file.type == "event.minidump"
             assert minidump_file.checksum == "74bb01c850e8d65d3ffbc5bad5cabc4668fce247"
+
+    def test_minidump_threadnames(self):
+        self.project.update_option("sentry:store_crash_reports", STORE_CRASH_REPORTS_ALL)
+
+        with self.feature(self._FEATURES):
+            with open(get_fixture_path("native", "threadnames.dmp"), "rb") as f:
+                event = self.post_and_retrieve_minidump({"upload_file_minidump": f}, {})
+
+        thread_name = get_path(event.data, "threads", "values", 1, "name")
+        assert thread_name == "sentry-http"

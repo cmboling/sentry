@@ -1,11 +1,11 @@
-import {lazy, Profiler, Suspense, useEffect, useRef} from 'react';
-import {useHotkeys} from 'react-hotkeys-hook';
+import {lazy, Profiler, Suspense, useCallback, useEffect, useRef} from 'react';
+import {RouteComponentProps} from 'react-router';
 import styled from '@emotion/styled';
 
 import {
   displayDeployPreviewAlert,
   displayExperimentalSpaAlert,
-} from 'sentry/actionCreators/deployPreview';
+} from 'sentry/actionCreators/developmentAlerts';
 import {fetchGuides} from 'sentry/actionCreators/guides';
 import {openCommandPalette} from 'sentry/actionCreators/modal';
 import {initApiClientErrorHandling} from 'sentry/api';
@@ -18,14 +18,17 @@ import ConfigStore from 'sentry/stores/configStore';
 import HookStore from 'sentry/stores/hookStore';
 import OrganizationsStore from 'sentry/stores/organizationsStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
+import isValidOrgSlug from 'sentry/utils/isValidOrgSlug';
 import {onRenderCallback} from 'sentry/utils/performanceForSentry';
 import useApi from 'sentry/utils/useApi';
+import {useColorscheme} from 'sentry/utils/useColorscheme';
+import {useHotkeys} from 'sentry/utils/useHotkeys';
 
 import SystemAlerts from './systemAlerts';
 
 type Props = {
   children: React.ReactNode;
-};
+} & RouteComponentProps<{orgId?: string}, {}>;
 
 const InstallWizard = lazy(() => import('sentry/views/admin/installWizard'));
 const NewsletterConsent = lazy(() => import('sentry/views/newsletterConsent'));
@@ -33,42 +36,53 @@ const NewsletterConsent = lazy(() => import('sentry/views/newsletterConsent'));
 /**
  * App is the root level container for all uathenticated routes.
  */
-function App({children}: Props) {
+function App({children, params}: Props) {
+  useColorscheme();
+
   const api = useApi();
   const config = useLegacyStore(ConfigStore);
 
   // Command palette global-shortcut
-  useHotkeys('command+shift+p, command+k, ctrl+shift+p, ctrl+k', e => {
-    openCommandPalette();
-    e.preventDefault();
-  });
+  useHotkeys(
+    [
+      {
+        match: ['command+shift+p', 'command+k', 'ctrl+shift+p', 'ctrl+k'],
+        includeInputs: true,
+        callback: () => openCommandPalette(),
+      },
+    ],
+    []
+  );
 
   // Theme toggle global shortcut
   useHotkeys(
-    'command+shift+l, ctrl+shift+l',
-    e => {
-      ConfigStore.set('theme', config.theme === 'light' ? 'dark' : 'light');
-      e.preventDefault();
-    },
+    [
+      {
+        match: ['command+shift+l', 'ctrl+shift+l'],
+        includeInputs: true,
+        callback: () =>
+          ConfigStore.set('theme', config.theme === 'light' ? 'dark' : 'light'),
+      },
+    ],
     [config.theme]
   );
 
   /**
    * Loads the users organization list into the OrganizationsStore
    */
-  async function loadOrganizations() {
+  const loadOrganizations = useCallback(async () => {
     try {
       const data = await api.requestPromise('/organizations/', {query: {member: '1'}});
       OrganizationsStore.load(data);
     } catch {
       // TODO: do something?
     }
-  }
+  }, [api]);
 
   /**
    * Creates Alerts for any internal health problems
    */
-  async function checkInternalHealth() {
+  const checkInternalHealth = useCallback(async () => {
     let data: any = null;
 
     try {
@@ -77,13 +91,28 @@ function App({children}: Props) {
       // TODO: do something?
     }
 
-    data?.problems?.forEach?.(problem => {
+    data?.problems?.forEach?.((problem: any) => {
       const {id, message, url} = problem;
       const type = problem.severity === 'critical' ? 'error' : 'warning';
 
       AlertStore.addAlert({id, message, type, url, opaque: true});
     });
-  }
+  }, [api]);
+
+  const {sentryUrl} = ConfigStore.get('links');
+  const {orgId} = params;
+  const isOrgSlugValid = orgId ? isValidOrgSlug(orgId) : true;
+
+  useEffect(() => {
+    if (orgId === undefined) {
+      return;
+    }
+
+    if (!isOrgSlugValid) {
+      window.location.replace(sentryUrl);
+      return;
+    }
+  }, [orgId, sentryUrl, isOrgSlugValid]);
 
   useEffect(() => {
     loadOrganizations();
@@ -114,7 +143,7 @@ function App({children}: Props) {
 
     // When the app is unloaded clear the organizationst list
     return () => OrganizationsStore.load([]);
-  }, []);
+  }, [loadOrganizations, checkInternalHealth, config.messages, config.user]);
 
   function clearUpgrade() {
     ConfigStore.set('needsUpgrade', false);
@@ -145,16 +174,21 @@ function App({children}: Props) {
       );
     }
 
+    if (!isOrgSlugValid) {
+      return null;
+    }
+
     return children;
   }
 
   // Used to restore focus to the container after closing the modal
   const mainContainerRef = useRef<HTMLDivElement>(null);
+  const handleModalClose = useCallback(() => mainContainerRef.current?.focus?.(), []);
 
   return (
     <Profiler id="App" onRender={onRenderCallback}>
       <MainContainer tabIndex={-1} ref={mainContainerRef}>
-        <GlobalModal onClose={() => mainContainerRef.current?.focus?.()} />
+        <GlobalModal onClose={handleModalClose} />
         <SystemAlerts className="messages-container" />
         <Indicators className="indicators-container" />
         <ErrorBoundary>{renderBody()}</ErrorBoundary>

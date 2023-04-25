@@ -1,4 +1,5 @@
 import {browserHistory} from 'react-router';
+import styled from '@emotion/styled';
 import {Location} from 'history';
 
 import OptionSelector from 'sentry/components/charts/optionSelector';
@@ -6,16 +7,17 @@ import {
   ChartContainer,
   ChartControls,
   InlineContainer,
-  SectionHeading,
-  SectionValue,
 } from 'sentry/components/charts/styles';
 import {Panel} from 'sentry/components/panels';
-import Placeholder from 'sentry/components/placeholder';
 import {t} from 'sentry/locale';
-import {OrganizationSummary, SelectValue} from 'sentry/types';
+import {Organization, SelectValue} from 'sentry/types';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import EventView from 'sentry/utils/discover/eventView';
+import {useMEPSettingContext} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {removeHistogramQueryStrings} from 'sentry/utils/performance/histogram';
 import {decodeScalar} from 'sentry/utils/queryString';
+import {getTransactionMEPParamsIfApplicable} from 'sentry/views/performance/transactionSummary/transactionOverview/utils';
+import {DisplayModes} from 'sentry/views/performance/transactionSummary/utils';
 import {TransactionsListOption} from 'sentry/views/releases/detail/overview';
 
 import {TrendColumnField, TrendFunctionField} from '../../trends/types';
@@ -28,15 +30,8 @@ import DurationChart from './durationChart';
 import DurationPercentileChart from './durationPercentileChart';
 import LatencyChart from './latencyChart';
 import TrendChart from './trendChart';
+import UserMiseryChart from './userMiseryChart';
 import VitalsChart from './vitalsChart';
-
-export enum DisplayModes {
-  DURATION_PERCENTILE = 'durationpercentile',
-  DURATION = 'duration',
-  LATENCY = 'latency',
-  TREND = 'trend',
-  VITALS = 'vitals',
-}
 
 function generateDisplayOptions(
   currentFilter: SpanOperationBreakdownFilter
@@ -48,6 +43,7 @@ function generateDisplayOptions(
       {value: DisplayModes.LATENCY, label: t('Duration Distribution')},
       {value: DisplayModes.TREND, label: t('Trends')},
       {value: DisplayModes.VITALS, label: t('Web Vitals')},
+      {value: DisplayModes.USER_MISERY, label: t('User Misery')},
     ];
   }
 
@@ -73,13 +69,13 @@ type Props = {
   currentFilter: SpanOperationBreakdownFilter;
   eventView: EventView;
   location: Location;
-  organization: OrganizationSummary;
-  totalValues: number | null;
+  organization: Organization;
+  totalValue: number | null;
   withoutZerofill: boolean;
 };
 
 function TransactionSummaryCharts({
-  totalValues,
+  totalValue,
   eventView,
   organization,
   location,
@@ -87,6 +83,13 @@ function TransactionSummaryCharts({
   withoutZerofill,
 }: Props) {
   function handleDisplayChange(value: string) {
+    const display = decodeScalar(location.query.display, DisplayModes.DURATION);
+    trackAnalytics('performance_views.transaction_summary.change_chart_display', {
+      organization,
+      from_chart: display,
+      to_chart: value,
+    });
+
     browserHistory.push({
       pathname: location.pathname,
       query: {
@@ -147,9 +150,16 @@ function TransactionSummaryCharts({
         : undefined,
   };
 
+  const mepSetting = useMEPSettingContext();
+  const queryExtras = getTransactionMEPParamsIfApplicable(
+    mepSetting,
+    organization,
+    location
+  );
+
   return (
     <Panel>
-      <ChartContainer>
+      <ChartContainer data-test-id="transaction-summary-charts">
         {display === DisplayModes.LATENCY && (
           <LatencyChart
             organization={organization}
@@ -161,6 +171,7 @@ function TransactionSummaryCharts({
             end={eventView.end}
             statsPeriod={eventView.statsPeriod}
             currentFilter={currentFilter}
+            totalCount={totalValue}
           />
         )}
         {display === DisplayModes.DURATION && (
@@ -175,6 +186,7 @@ function TransactionSummaryCharts({
             statsPeriod={eventView.statsPeriod}
             currentFilter={currentFilter}
             withoutZerofill={withoutZerofill}
+            queryExtras={queryExtras}
           />
         )}
         {display === DisplayModes.DURATION_PERCENTILE && (
@@ -188,6 +200,7 @@ function TransactionSummaryCharts({
             end={eventView.end}
             statsPeriod={eventView.statsPeriod}
             currentFilter={currentFilter}
+            queryExtras={queryExtras}
           />
         )}
         {display === DisplayModes.TREND && (
@@ -216,21 +229,25 @@ function TransactionSummaryCharts({
             end={eventView.end}
             statsPeriod={eventView.statsPeriod}
             withoutZerofill={withoutZerofill}
+            queryExtras={queryExtras}
+          />
+        )}
+        {display === DisplayModes.USER_MISERY && (
+          <UserMiseryChart
+            organization={organization}
+            query={eventView.query}
+            queryExtra={releaseQueryExtra}
+            project={eventView.project}
+            environment={eventView.environment}
+            start={eventView.start}
+            end={eventView.end}
+            statsPeriod={eventView.statsPeriod}
+            withoutZerofill={withoutZerofill}
           />
         )}
       </ChartContainer>
 
-      <ChartControls>
-        <InlineContainer>
-          <SectionHeading key="total-heading">{t('Total Transactions')}</SectionHeading>
-          <SectionValue key="total-value">
-            {totalValues === null ? (
-              <Placeholder height="24px" />
-            ) : (
-              totalValues.toLocaleString()
-            )}
-          </SectionValue>
-        </InlineContainer>
+      <ReversedChartControls>
         <InlineContainer>
           {display === DisplayModes.TREND && (
             <OptionSelector
@@ -258,9 +275,13 @@ function TransactionSummaryCharts({
             onChange={handleDisplayChange}
           />
         </InlineContainer>
-      </ChartControls>
+      </ReversedChartControls>
     </Panel>
   );
 }
+
+const ReversedChartControls = styled(ChartControls)`
+  flex-direction: row-reverse;
+`;
 
 export default TransactionSummaryCharts;

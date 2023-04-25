@@ -2,13 +2,14 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import tagstore
-from sentry.api.base import EnvironmentMixin
+from sentry.api.base import EnvironmentMixin, region_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models.group import GroupSerializer
 from sentry.models import EventUser, Group, OrganizationMemberTeam, Project
 
 
+@region_silo_endpoint
 class OrganizationUserIssuesSearchEndpoint(OrganizationEndpoint, EnvironmentMixin):
     def get(self, request: Request, organization) -> Response:
         email = request.GET.get("email")
@@ -22,7 +23,7 @@ class OrganizationUserIssuesSearchEndpoint(OrganizationEndpoint, EnvironmentMixi
         project_ids = list(
             Project.objects.filter(
                 teams__in=OrganizationMemberTeam.objects.filter(
-                    organizationmember__user=request.user,
+                    organizationmember__user_id=request.user.id,
                     organizationmember__organization=organization,
                     is_active=True,
                 ).values("team")
@@ -37,6 +38,7 @@ class OrganizationUserIssuesSearchEndpoint(OrganizationEndpoint, EnvironmentMixi
                     project_ids=list({e.project_id for e in event_users}),
                     event_users=event_users,
                     limit=limit,
+                    tenant_ids={"organization_id": organization.id},
                 )
             ).order_by("-last_seen")[:limit]
         else:
