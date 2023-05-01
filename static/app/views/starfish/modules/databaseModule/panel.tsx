@@ -1,25 +1,42 @@
+import {useState} from 'react';
 import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 import {useQuery} from '@tanstack/react-query';
 import keyBy from 'lodash/keyBy';
-import merge from 'lodash/merge';
-import values from 'lodash/values';
+import moment from 'moment';
+import * as qs from 'query-string';
 
+import {Button} from 'sentry/components/button';
+import ButtonBar from 'sentry/components/buttonBar';
 import GridEditable, {GridColumnHeader} from 'sentry/components/gridEditable';
 import Link from 'sentry/components/links/link';
+import {IconArrow, IconChevron} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import {space} from 'sentry/styles/space';
 import {Series} from 'sentry/types/echarts';
 import {useLocation} from 'sentry/utils/useLocation';
+import usePageFilters from 'sentry/utils/usePageFilters';
 import Chart from 'sentry/views/starfish/components/chart';
 import Detail from 'sentry/views/starfish/components/detailPanel';
+import {
+  getPanelEventCount,
+  getPanelGraphQuery,
+  getPanelTableQuery,
+} from 'sentry/views/starfish/modules/databaseModule/queries';
+import {getDateFilters} from 'sentry/views/starfish/utils/dates';
+import {zeroFillSeries} from 'sentry/views/starfish/utils/zeroFillSeries';
 
 import {DataRow} from './databaseTableView';
 
+const INTERVAL = 12;
 const HOST = 'http://localhost:8080';
 
 type EndpointDetailBodyProps = {
+  isDataLoading: boolean;
+  onRowChange: (row: DataRow | undefined) => void;
   row: DataRow;
+  nextRow?: DataRow;
+  prevRow?: DataRow;
 };
 
 type TransactionListDataRow = {
@@ -30,7 +47,11 @@ type TransactionListDataRow = {
   uniqueEvents: number;
 };
 
-const COLUMN_ORDER = [
+type Keys = 'transaction' | 'p75' | 'count' | 'frequency' | 'uniqueEvents';
+
+type TableColumnHeader = GridColumnHeader<Keys>;
+
+const COLUMN_ORDER: TableColumnHeader[] = [
   {
     key: 'transaction',
     name: 'Transaction',
@@ -56,117 +77,176 @@ const COLUMN_ORDER = [
 
 export default function QueryDetail({
   row,
+  nextRow,
+  prevRow,
+  isDataLoading,
   onClose,
-}: Partial<EndpointDetailBodyProps> & {onClose: () => void}) {
+  onRowChange,
+}: Partial<EndpointDetailBodyProps> & {
+  isDataLoading: boolean;
+  onClose: () => void;
+  onRowChange: (row: DataRow) => void;
+}) {
   return (
     <Detail detailKey={row?.description} onClose={onClose}>
-      {row && <QueryDetailBody row={row} />}
+      {row && (
+        <QueryDetailBody
+          onRowChange={onRowChange}
+          isDataLoading={isDataLoading}
+          row={row}
+          nextRow={nextRow}
+          prevRow={prevRow}
+        />
+      )}
     </Detail>
   );
 }
 
-function QueryDetailBody({row}: EndpointDetailBodyProps) {
+function QueryDetailBody({
+  row,
+  nextRow,
+  prevRow,
+  onRowChange,
+  isDataLoading: isRowLoading,
+}: EndpointDetailBodyProps) {
   const theme = useTheme();
   const location = useLocation();
-
-  const TABLE_QUERY = `
-    SELECT transaction, count() AS count, quantile(0.75)(exclusive_time) as p75
-    FROM spans_experimental_starfish
-    WHERE module = 'db'
-    AND group_id = '${row.group_id}'
-    GROUP BY transaction
-    ORDER BY count DESC
-    LIMIT 10
+  const pageFilter = usePageFilters();
+  const {startTime, endTime} = getDateFilters(pageFilter);
+  const DATE_FILTERS = `
+    greater(start_timestamp, fromUnixTimestamp(${startTime.unix()})) and
+    less(start_timestamp, fromUnixTimestamp(${endTime.unix()}))
   `;
 
-  const GRAPH_QUERY = `SELECT
-      toStartOfInterval(start_timestamp, INTERVAL 12 HOUR) as interval,
-      quantile(0.75)(exclusive_time) as p75,
-      count() as count
-      FROM spans_experimental_starfish
-      WHERE module = 'db'
-      AND group_id = '${row.group_id}'
-      GROUP BY interval
-      ORDER BY interval asc
-   `;
-
-  const EVENT_COUNT_QUERY = `
-  SELECT transaction, count(DISTINCT transaction_id) as uniqueEvents
-    FROM spans_experimental_starfish
-    WHERE transaction
-      IN (SELECT transaction FROM spans_experimental_starfish WHERE module='db' AND description='${row.description}')
-    GROUP BY transaction
-   `;
-
-  // const INCLUDED_EVENT_COUNT_QUERY = `
-  // SELECT transaction, count(DISTINCT transaction_id) as included_event_count
-  //   FROM spans_experimental_starfish
-  //   WHERE module='db' AND description='${row.description}'
-  //   GROUP BY transaction
-  //  `;
+  const [sort, setSort] = useState<{
+    direction: 'desc' | 'asc' | undefined;
+    sortHeader: TableColumnHeader | undefined;
+  }>({direction: undefined, sortHeader: undefined});
 
   const {isLoading, data: graphData} = useQuery({
-    queryKey: ['dbQueryDetailsGraph', row.group_id],
+    queryKey: ['dbQueryDetailsGraph', row.group_id, pageFilter.selection.datetime],
     queryFn: () =>
-      fetch(`${HOST}/?query=${GRAPH_QUERY}&format=sql`).then(res => res.json()),
+      fetch(
+        `${HOST}/?query=${getPanelGraphQuery(DATE_FILTERS, row, INTERVAL)}&format=sql`
+      ).then(res => res.json()),
     retry: false,
     initialData: [],
   });
 
   const {isLoading: isTableLoading, data: tableData} = useQuery<TransactionListDataRow[]>(
     {
-      queryKey: ['dbQueryDetailsTable', row.description],
-      queryFn: () => fetch(`${HOST}/?query=${TABLE_QUERY}`).then(res => res.json()),
+      queryKey: [
+        'dbQueryDetailsTable',
+        row.group_id,
+        pageFilter.selection.datetime,
+        sort.sortHeader?.key,
+        sort.direction,
+      ],
+      queryFn: () =>
+        fetch(
+          `${HOST}/?query=${getPanelTableQuery(
+            DATE_FILTERS,
+            row,
+            sort.sortHeader?.key,
+            sort.direction
+          )}`
+        ).then(res => res.json()),
       retry: true,
       initialData: [],
     }
   );
 
-  const {isLoading: isEventCountLoading, data: eventCountData} = useQuery({
-    queryKey: ['dbQueryDetailsEventCount', row.description],
-    queryFn: () => fetch(`${HOST}/?query=${EVENT_COUNT_QUERY}`).then(res => res.json()),
+  const {isLoading: isEventCountLoading, data: eventCountData} = useQuery<
+    Partial<TransactionListDataRow>[]
+  >({
+    queryKey: ['dbQueryDetailsEventCount', row.group_id, pageFilter.selection.datetime],
+    queryFn: () =>
+      fetch(`${HOST}/?query=${getPanelEventCount(DATE_FILTERS, row)}`).then(res =>
+        res.json()
+      ),
     retry: true,
     initialData: [],
   });
 
-  const isDataLoading = isLoading || isTableLoading || isEventCountLoading;
+  const isDataLoading =
+    isLoading || isTableLoading || isEventCountLoading || isRowLoading;
+  let avgP75 = 0;
+  if (!isDataLoading) {
+    avgP75 =
+      tableData.reduce((acc, transaction) => acc + transaction.p75, 0) / tableData.length;
+  }
 
-  const mergedTableData = values(
-    merge(keyBy(eventCountData, 'transaction'), keyBy(tableData, 'transaction'))
-  ).filter((data: Partial<TransactionListDataRow>) => !!data.count && !!data.p75);
+  const eventCountMap = keyBy(eventCountData, 'transaction');
 
-  const [countSeries, p75Series] = throughputQueryToChartData(graphData);
-  const percentileSeries: Series = {
-    seriesName: 'p75()',
-    data: tableData.map(tableRow => ({name: tableRow.transaction, value: tableRow.p75})),
+  const mergedTableData: TransactionListDataRow[] = tableData.map(data => {
+    const {transaction} = data;
+    const eventData = eventCountMap[transaction];
+    if (eventData) {
+      return {...data, ...eventData};
+    }
+    return data;
+  });
+
+  const [countSeries, p75Series] = throughputQueryToChartData(
+    graphData,
+    startTime,
+    endTime
+  );
+
+  const onSortClick = (col: TableColumnHeader) => {
+    let direction: 'desc' | 'asc' | undefined = undefined;
+    if (sort.direction === 'desc') {
+      direction = 'asc';
+    } else if (!sort.direction) {
+      direction = 'desc';
+    }
+    setSort({direction, sortHeader: col});
   };
 
-  function renderHeadCell(column: GridColumnHeader): React.ReactNode {
-    return <span>{column.name}</span>;
+  function renderHeadCell(col: TableColumnHeader): React.ReactNode {
+    const {key, name} = col;
+    const sortableKeys: Keys[] = ['p75', 'count'];
+    if (sortableKeys.includes(key)) {
+      const isBeingSorted = col.key === sort.sortHeader?.key;
+      const direction = isBeingSorted ? sort.direction : undefined;
+      return (
+        <SortableHeader
+          onClick={() => onSortClick(col)}
+          direction={direction}
+          title={name}
+        />
+      );
+    }
+    return <span>{name}</span>;
   }
 
   const renderBodyCell = (
-    column: GridColumnHeader,
+    column: TableColumnHeader,
     dataRow: TransactionListDataRow
   ): React.ReactNode => {
-    if (column.key === 'frequency') {
-      return <span>{(dataRow.count / dataRow.uniqueEvents).toFixed(2)}</span>;
-    }
     const {key} = column;
     const value = dataRow[key];
+    if (key === 'frequency') {
+      return <span>{(dataRow.count / dataRow.uniqueEvents).toFixed(2)}</span>;
+    }
     if (key === 'transaction') {
       return (
         <Link
-          to={`/starfish/span/${encodeURIComponent(row.group_id)}:${encodeURIComponent(
-            dataRow.transaction
-          )}`}
+          to={`/starfish/span/${encodeURIComponent(row.group_id)}?${qs.stringify({
+            transaction: dataRow.transaction,
+          })}`}
         >
           {dataRow[column.key]}
         </Link>
       );
     }
     if (key === 'p75') {
-      return <span>{value?.toFixed(2)}ms</span>;
+      const p75threshold = 1.5 * avgP75;
+      return (
+        <span style={value > p75threshold ? {color: theme.red400} : {}}>
+          {value?.toFixed(2)}ms
+        </span>
+      );
     }
     return <span>{value}</span>;
   };
@@ -174,6 +254,12 @@ function QueryDetailBody({row}: EndpointDetailBodyProps) {
   return (
     <div>
       <h2>{t('Query Detail')}</h2>
+      <SimplePagination
+        disableLeft={!prevRow}
+        disableRight={!nextRow}
+        onLeftClick={() => onRowChange(prevRow)}
+        onRightClick={() => onRowChange(nextRow)}
+      />
       <p>
         {t(
           'Detailed summary of db query spans. Detailed summary of db query spans. Detailed summary of db query spans. Detailed summary of db query spans. Detailed summary of db query spans. Detailed summary of db query spans.'
@@ -220,24 +306,6 @@ function QueryDetailBody({row}: EndpointDetailBodyProps) {
           />
         </FlexRowItem>
       </FlexRowContainer>
-      <FlexRowContainer>
-        <FlexRowItem>
-          <SubHeader>{t('Percentiles')}</SubHeader>
-          <Chart
-            statsPeriod="24h"
-            height={140}
-            data={[percentileSeries]}
-            start=""
-            end=""
-            loading={isLoading}
-            utc={false}
-            disableMultiAxis
-            stacked
-            isBarChart
-            hideYAxisSplitLine
-          />
-        </FlexRowItem>
-      </FlexRowContainer>
       <GridEditable
         isLoading={isDataLoading}
         data={mergedTableData}
@@ -245,7 +313,7 @@ function QueryDetailBody({row}: EndpointDetailBodyProps) {
         columnSortBy={[]}
         grid={{
           renderHeadCell,
-          renderBodyCell: (column: GridColumnHeader, dataRow: TransactionListDataRow) =>
+          renderBodyCell: (column: TableColumnHeader, dataRow: TransactionListDataRow) =>
             renderBodyCell(column, dataRow),
         }}
         location={location}
@@ -254,15 +322,67 @@ function QueryDetailBody({row}: EndpointDetailBodyProps) {
   );
 }
 
-const throughputQueryToChartData = (data: any): Series[] => {
+type SimplePaginationProps = {
+  disableLeft?: boolean;
+  disableRight?: boolean;
+  onLeftClick?: () => void;
+  onRightClick?: () => void;
+};
+
+function SimplePagination(props: SimplePaginationProps) {
+  return (
+    <ButtonBar merged>
+      <Button
+        icon={<IconChevron direction="left" size="sm" />}
+        aria-label={t('Previous')}
+        disabled={props.disableLeft}
+        onClick={props.onLeftClick}
+      />
+      <Button
+        icon={<IconChevron direction="right" size="sm" />}
+        aria-label={t('Next')}
+        onClick={props.onRightClick}
+        disabled={props.disableRight}
+      />
+    </ButtonBar>
+  );
+}
+
+const HeaderWrapper = styled('div')`
+  cursor: pointer;
+`;
+
+function SortableHeader({title, direction, onClick}) {
+  const arrow = !direction ? null : (
+    <StyledIconArrow size="xs" direction={direction === 'desc' ? 'down' : 'up'} />
+  );
+  return (
+    <HeaderWrapper onClick={onClick}>
+      {title} {arrow}
+    </HeaderWrapper>
+  );
+}
+
+const throughputQueryToChartData = (
+  data: any,
+  startTime: moment.Moment,
+  endTime: moment.Moment
+): Series[] => {
   const countSeries: Series = {seriesName: 'count()', data: [] as any[]};
   const p75Series: Series = {seriesName: 'p75()', data: [] as any[]};
   data.forEach(({count, p75, interval}: any) => {
     countSeries.data.push({value: count, name: interval});
     p75Series.data.push({value: p75, name: interval});
   });
-  return [countSeries, p75Series];
+  return [
+    zeroFillSeries(countSeries, moment.duration(INTERVAL, 'hours'), startTime, endTime),
+    zeroFillSeries(p75Series, moment.duration(INTERVAL, 'hours'), startTime, endTime),
+  ];
 };
+
+const StyledIconArrow = styled(IconArrow)`
+  vertical-align: top;
+`;
 
 const SubHeader = styled('h3')`
   color: ${p => p.theme.gray300};
