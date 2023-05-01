@@ -22,7 +22,7 @@ Sentry is a developer-first error tracking and performance monitoring platform t
   <img src="https://github.com/getsentry/sentry/raw/master/.github/screenshots/releases.png" width="270">
 </p>
 
-## Official Sentry SDKs
+## Official Sentry SDKs test
 
   - [JavaScript](https://github.com/getsentry/sentry-javascript)
   - [Electron](https://github.com/getsentry/sentry-electron/)
